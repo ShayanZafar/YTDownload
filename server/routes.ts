@@ -70,6 +70,7 @@ export async function registerRoutes(
       ytdl(url, {
         filter: 'audioonly',
         quality: 'highestaudio',
+        highWaterMark: 1 << 25
       }).pipe(res);
 
     } catch (err) {
