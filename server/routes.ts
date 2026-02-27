@@ -65,6 +65,7 @@ export async function registerRoutes(
 
       res.header('Content-Disposition', `attachment; filename="${title}.mp3"`);
       res.header('Content-Type', 'audio/mpeg');
+      res.header('Accept-Ranges', 'bytes');
 
       ytdl(url, {
         filter: 'audioonly',
