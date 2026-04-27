@@ -174,7 +174,9 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 
 ---
 
-## Available npm Scripts
+## Commands
+
+### Wired-up npm scripts
 
 | Script            | What it does                                                                 |
 | ----------------- | ---------------------------------------------------------------------------- |
@@ -183,6 +185,22 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 | `npm start`       | Runs the production build from `dist/index.cjs` with `NODE_ENV=production`.  |
 | `npm run check`   | Type-checks the entire project with `tsc`.                                   |
 | `npm run db:push` | Syncs your Drizzle schema to the database (no migration files needed).       |
+
+### Tests, linting, and formatting
+
+These tools are installed and configured but have no shortcut script in `package.json` yet — invoke them directly. If you want the short forms (`npm test`, `npm run lint`, etc.) you can add them yourself; suggested entries are listed in the last column.
+
+| Long form                   | What it does                                                       | Suggested script entry                 |
+| --------------------------- | ------------------------------------------------------------------ | -------------------------------------- |
+| `npx vitest run`            | Runs the entire Vitest suite (unit + API) once.                    | `"test": "vitest run"`                 |
+| `npx vitest`                | Runs Vitest in watch mode for fast TDD.                            | `"test:watch": "vitest"`               |
+| `npx vitest run tests/unit` | Runs only the unit tests (pure helpers, no network, milliseconds). | `"test:unit": "vitest run tests/unit"` |
+| `npx vitest run tests/api`  | Runs only the API end-to-end tests (real HTTP, real YouTube).      | `"test:api": "vitest run tests/api"`   |
+| `npx playwright test`       | Runs the Playwright browser end-to-end tests.                      | `"test:e2e": "playwright test"`        |
+| `npx eslint .`              | Lints the codebase. Currently: 0 errors, 3 minor warnings.         | `"lint": "eslint ."`                   |
+| `npx eslint . --fix`        | Auto-fixes any lint issues that ESLint can fix safely.             | `"lint:fix": "eslint . --fix"`         |
+| `npx prettier --check .`    | Verifies all source files are formatted (use in CI).               | `"format:check": "prettier --check ."` |
+| `npx prettier --write .`    | Reformats all source files to the project Prettier style.          | `"format": "prettier --write ."`       |
 
 ---
 
