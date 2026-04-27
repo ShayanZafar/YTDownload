@@ -18,7 +18,7 @@ This document covers the project's architecture, local development setup, enviro
 ### Backend
 - **Node.js** with **Express 5**
 - **TypeScript** (executed via `tsx` in development, bundled with `esbuild` in production)
-- **@distube/ytdl-core** for YouTube video info & audio stream extraction
+- **youtubei.js** for YouTube video info & audio stream extraction
 - **Zod** for request validation
 
 ### Database
@@ -232,14 +232,15 @@ Open the HTML report after a run:
 npx playwright show-report
 ```
 
-### Known flakiness — YouTube + ytdl-core
+### Known flakiness — YouTube anti-scraping
 
-Both suites depend on `@distube/ytdl-core` being able to talk to YouTube's API. YouTube periodically changes its internals, which can cause ytdl-core to return errors like `Failed to find any playable formats` until a new version of the library is released. When that happens:
+Both suites depend on `youtubei.js` being able to talk to YouTube's API. YouTube actively pushes back on third-party clients with measures like signed/encrypted stream URLs and PoToken (proof-of-origin token) requirements, which can break pure-JavaScript scrapers between releases. When that happens:
 
-- The negative tests (invalid URLs, 400 errors) keep passing — they prove the wiring still works.
-- The fetch / download tests fail with HTTP 500.
+- The negative tests (invalid URLs → 400) keep passing — they prove the wiring still works.
+- Metadata tests (`/api/video/info`) usually keep passing — fetching title and thumbnail works under more conditions.
+- The download test (`/api/video/download`) is the most fragile. If YouTube has tightened things and the installed `youtubei.js` doesn't yet have a workaround, this test fails with HTTP 500 and a `PlayerError` like `No valid URL to decipher`.
 
-If you see this, first check `npm outdated @distube/ytdl-core` for an upstream fix before treating it as a regression in this project.
+If you see this, first check `npm outdated youtubei.js` for an upstream fix. The longer-term, more reliable option is to swap the backend over to `youtube-dl-exec` (which wraps the `yt-dlp` binary) — but that adds a system-level dependency.
 
 ### Test-only dependencies
 
