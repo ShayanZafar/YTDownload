@@ -174,6 +174,79 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 
 ---
 
+## Testing
+
+The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share a small helper (`tests/utils/mp3.ts`) that verifies a downloaded file is a real MP3 by inspecting its header bytes (ID3v2 tag or MPEG sync word).
+
+### Layout
+
+```
+tests/
+├── api/
+│   └── video.e2e.test.ts        # Vitest + Supertest, hits Express directly
+├── browser/
+│   └── download.spec.ts         # Playwright, drives the real UI in Chromium
+└── utils/
+    └── mp3.ts                    # Shared MP3-header validator
+```
+
+Configuration files: `vitest.config.ts` and `playwright.config.ts`.
+
+### API end-to-end (Vitest + Supertest)
+
+Boots the real Express app in-process (no Vite, no port binding) and exercises `/api/video/info`, `/api/video/download`, and `/api/downloads` against a stable test video — the very first YouTube upload, "Me at the zoo" (`jNQXAC9IVRw`).
+
+What it checks:
+1. An invalid URL returns HTTP 400 with a message.
+2. A real YouTube URL returns title + thumbnail metadata.
+3. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file's header is verified as a valid MP3.
+4. The completed download is recorded in the `downloads` table and surfaces through `/api/downloads`.
+
+Run it:
+```bash
+DATABASE_URL=... npx vitest run tests/api
+```
+`DATABASE_URL` is required because the test exercises the storage layer end-to-end. In Replit this is already exported.
+
+### Browser end-to-end (Playwright)
+
+Drives Chromium against the live app (using the `webServer` block in `playwright.config.ts`, which reuses your dev server if it's already running on port 5000, or starts `npm run dev` itself otherwise).
+
+What it checks:
+1. The hero loads, the URL input accepts the test video URL, and clicking **Extract** renders a preview card with the title, thumbnail, and a download link.
+2. Clicking **Download Audio** triggers a browser download whose suggested filename ends in `.mp3` and whose saved bytes pass the MP3-header check.
+3. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+
+One-time browser install (already done if you've run the suite before):
+```bash
+npx playwright install chromium
+```
+
+Run it:
+```bash
+npx playwright test
+```
+
+Open the HTML report after a run:
+```bash
+npx playwright show-report
+```
+
+### Known flakiness — YouTube + ytdl-core
+
+Both suites depend on `@distube/ytdl-core` being able to talk to YouTube's API. YouTube periodically changes its internals, which can cause ytdl-core to return errors like `Failed to find any playable formats` until a new version of the library is released. When that happens:
+
+- The negative tests (invalid URLs, 400 errors) keep passing — they prove the wiring still works.
+- The fetch / download tests fail with HTTP 500.
+
+If you see this, first check `npm outdated @distube/ytdl-core` for an upstream fix before treating it as a regression in this project.
+
+### Test-only dependencies
+
+The following packages were added solely to support the test suites: `vitest`, `supertest`, `@types/supertest`, `@playwright/test`. They are not loaded by the production build.
+
+---
+
 ## Production Build & Deployment
 
 ### Build artifacts
