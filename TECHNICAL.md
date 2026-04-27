@@ -18,7 +18,7 @@ This document covers the project's architecture, local development setup, enviro
 ### Backend
 - **Node.js** with **Express 5**
 - **TypeScript** (executed via `tsx` in development, bundled with `esbuild` in production)
-- **youtubei.js** for YouTube video info & audio stream extraction
+- **youtube-dl-exec** wrapping a bundled **yt-dlp** binary for YouTube video info & audio stream extraction (yt-dlp itself requires Python 3 to be installed on the host)
 - **Zod** for request validation
 
 ### Database
@@ -234,13 +234,19 @@ npx playwright show-report
 
 ### Known flakiness — YouTube anti-scraping
 
-Both suites depend on `youtubei.js` being able to talk to YouTube's API. YouTube actively pushes back on third-party clients with measures like signed/encrypted stream URLs and PoToken (proof-of-origin token) requirements, which can break pure-JavaScript scrapers between releases. When that happens:
+Both suites depend on `yt-dlp` (invoked via the `youtube-dl-exec` wrapper) being able to talk to YouTube's API. YouTube actively changes its internals — signed/encrypted stream URLs, PoToken (proof-of-origin token) requirements, format reshuffling — so any extractor can break between releases. yt-dlp is the most aggressively maintained option in this space, but you should still expect periodic breakage.
 
-- The negative tests (invalid URLs → 400) keep passing — they prove the wiring still works.
-- Metadata tests (`/api/video/info`) usually keep passing — fetching title and thumbnail works under more conditions.
-- The download test (`/api/video/download`) is the most fragile. If YouTube has tightened things and the installed `youtubei.js` doesn't yet have a workaround, this test fails with HTTP 500 and a `PlayerError` like `No valid URL to decipher`.
+- The negative tests (invalid URLs → 400) keep passing regardless — they prove the wiring still works.
+- The metadata test (`/api/video/info`) and the download test (`/api/video/download`) both depend on yt-dlp successfully reaching YouTube. If they start failing, first reinstall to get the latest bundled binary:
 
-If you see this, first check `npm outdated youtubei.js` for an upstream fix. The longer-term, more reliable option is to swap the backend over to `youtube-dl-exec` (which wraps the `yt-dlp` binary) — but that adds a system-level dependency.
+  ```bash
+  # via the package manager — do not edit package.json directly
+  # this re-runs youtube-dl-exec's postinstall, which downloads the
+  # current yt-dlp release from GitHub
+  npm rebuild youtube-dl-exec
+  ```
+
+- yt-dlp is a Python 3 script. The host (or container) must have `python3` available on `$PATH`. In the Replit environment Python 3.11 is provisioned as a module; in your own deployment make sure your image installs it.
 
 ### Test-only dependencies
 

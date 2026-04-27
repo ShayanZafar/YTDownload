@@ -1,20 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { Readable } from "stream";
-import { Innertube } from "youtubei.js";
+import youtubedl from "youtube-dl-exec";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
-
-// Lazy singleton — Innertube.create() does an HTTP handshake with YouTube,
-// so we only want to do it once per process and reuse the client thereafter.
-let innertubePromise: Promise<Innertube> | null = null;
-function getInnertube(): Promise<Innertube> {
-  if (!innertubePromise) {
-    innertubePromise = Innertube.create();
-  }
-  return innertubePromise;
-}
 
 const YOUTUBE_HOSTS = new Set([
   "youtube.com",
@@ -24,15 +13,6 @@ const YOUTUBE_HOSTS = new Set([
   "youtu.be",
 ]);
 
-/**
- * Extract a YouTube video ID from any common URL shape:
- *   - https://www.youtube.com/watch?v=ID
- *   - https://youtu.be/ID
- *   - https://www.youtube.com/shorts/ID
- *   - https://www.youtube.com/embed/ID
- *   - https://www.youtube.com/v/ID
- * Returns null if the URL isn't a YouTube link or has no parsable ID.
- */
 function extractVideoId(rawUrl: string): string | null {
   let parsed: URL;
   try {
@@ -51,16 +31,26 @@ function extractVideoId(rawUrl: string): string | null {
   const v = parsed.searchParams.get("v");
   if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
 
-  // /shorts/ID, /embed/ID, /v/ID
   const m = parsed.pathname.match(/\/(?:shorts|embed|v)\/([a-zA-Z0-9_-]{11})/);
   if (m) return m[1];
 
   return null;
 }
 
-function bestThumbnail(thumbs: Array<{ url: string; width?: number }> | undefined): string {
-  if (!thumbs || thumbs.length === 0) return "";
-  return [...thumbs].sort((a, b) => (b.width ?? 0) - (a.width ?? 0))[0].url;
+type YtDlpInfo = {
+  title?: string;
+  thumbnail?: string;
+  thumbnails?: Array<{ url: string; width?: number }>;
+};
+
+function pickThumbnail(info: YtDlpInfo): string {
+  if (info.thumbnails && info.thumbnails.length > 0) {
+    const sorted = [...info.thumbnails].sort(
+      (a, b) => (b.width ?? 0) - (a.width ?? 0)
+    );
+    return sorted[0].url;
+  }
+  return info.thumbnail ?? "";
 }
 
 export async function registerRoutes(
@@ -85,12 +75,18 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Invalid YouTube URL" });
       }
 
-      const yt = await getInnertube();
-      const info = await yt.getBasicInfo(videoId);
+      const canonical = `https://www.youtube.com/watch?v=${videoId}`;
+
+      const info = (await youtubedl(canonical, {
+        dumpSingleJson: true,
+        skipDownload: true,
+        noWarnings: true,
+        noPlaylist: true,
+      })) as YtDlpInfo;
 
       res.status(200).json({
-        title: info.basic_info.title ?? "Untitled",
-        thumbnail: bestThumbnail(info.basic_info.thumbnail),
+        title: info.title ?? "Untitled",
+        thumbnail: pickThumbnail(info),
         url: input.url,
       });
     } catch (err) {
@@ -119,13 +115,20 @@ export async function registerRoutes(
         return res.status(400).send("Invalid or missing YouTube URL");
       }
 
-      const yt = await getInnertube();
-      // getInfo() (not getBasicInfo) loads the player, which is required to
-      // decipher the signed audio URLs YouTube returns.
-      const info = await yt.getInfo(videoId);
-      const safeTitle = (info.basic_info.title ?? "audio").replace(/[^\w\s-]/g, "").trim() || "audio";
+      const canonical = `https://www.youtube.com/watch?v=${videoId}`;
 
-      // Log download to database (best-effort).
+      // Light metadata pass first so we have a filename and can fail early
+      // (with a clean 500) before opening a streaming response.
+      const info = (await youtubedl(canonical, {
+        dumpSingleJson: true,
+        skipDownload: true,
+        noWarnings: true,
+        noPlaylist: true,
+      })) as YtDlpInfo;
+
+      const safeTitle =
+        (info.title ?? "audio").replace(/[^\w\s-]/g, "").trim() || "audio";
+
       try {
         await storage.createDownload({ url, title: safeTitle });
       } catch (dbError) {
@@ -136,15 +139,44 @@ export async function registerRoutes(
       res.header("Content-Type", "audio/mpeg");
       res.header("Accept-Ranges", "bytes");
 
-      const webStream = await info.download({
-        type: "audio",
-        quality: "best",
-        format: "any",
+      // Spawn yt-dlp and stream stdout straight into the response.
+      // `output: "-"` tells yt-dlp to write the audio bytes to stdout.
+      const subprocess = youtubedl.exec(canonical, {
+        format: "bestaudio",
+        output: "-",
+        quiet: true,
+        noWarnings: true,
+        noPlaylist: true,
       });
 
-      // Convert the Web ReadableStream that youtubei.js returns into a
-      // Node Readable so we can pipe it through Express.
-      Readable.fromWeb(webStream as any).pipe(res);
+      if (!subprocess.stdout || !subprocess.stderr) {
+        throw new Error("Failed to spawn yt-dlp subprocess");
+      }
+
+      let stderrBuf = "";
+      subprocess.stderr.on("data", (chunk) => {
+        stderrBuf += chunk.toString();
+      });
+
+      subprocess.stdout.pipe(res);
+
+      subprocess.on("error", (e) => {
+        console.error("yt-dlp spawn error", e);
+        if (!res.headersSent) res.status(500).send(e.message);
+        else res.end();
+      });
+
+      subprocess.on("close", (code) => {
+        if (code !== 0 && !res.writableEnded) {
+          console.error(`yt-dlp exited with code ${code}: ${stderrBuf}`);
+          res.end();
+        }
+      });
+
+      // If the client aborts, kill the subprocess so we don't leak it.
+      req.on("close", () => {
+        if (subprocess.exitCode === null) subprocess.kill("SIGTERM");
+      });
     } catch (err) {
       console.error(err);
       if (!res.headersSent) {
