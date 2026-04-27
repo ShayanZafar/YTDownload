@@ -14,21 +14,21 @@ import {
   Download,
   AlertCircle,
   FileAudio,
-  History
+  History,
 } from "lucide-react";
 
 export default function Home() {
   const [url, setUrl] = useState("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  
+
   const { mutate: fetchInfo, isPending, data: videoInfo, error, reset } = useVideoInfo();
   const { data: recentDownloads, isLoading: isLoadingHistory } = useRecentDownloads();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!url.trim()) return;
-    
+
     // Basic optimistic validation
     try {
       new URL(url);
@@ -48,13 +48,13 @@ export default function Home() {
           description: err.message,
           variant: "destructive",
         });
-      }
+      },
     });
   };
 
   const handleDownload = () => {
     if (!videoInfo) return;
-    
+
     toast({
       title: "Download Started",
       description: "Your audio file is being prepared.",
@@ -74,13 +74,17 @@ export default function Home() {
           <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse" />
           High Quality Audio Extraction
         </div>
-        
+
         <h1 className="text-4xl md:text-6xl font-display font-extrabold tracking-tight text-foreground leading-[1.1]">
-          Convert any YouTube video to <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary/80 to-primary">pure audio.</span>
+          Convert any YouTube video to{" "}
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary/80 to-primary">
+            pure audio.
+          </span>
         </h1>
-        
+
         <p className="text-lg text-muted-foreground leading-relaxed max-w-xl">
-          Paste a link below to instantly extract crisp, high-quality audio tracks from your favorite videos, podcasts, and lectures.
+          Paste a link below to instantly extract crisp, high-quality audio tracks from your
+          favorite videos, podcasts, and lectures.
         </p>
 
         {/* Input Form */}
@@ -133,9 +137,9 @@ export default function Home() {
             <div className="glass-card rounded-[2rem] p-4 md:p-6 flex flex-col md:flex-row gap-6 items-center">
               {/* Thumbnail */}
               <div className="w-full md:w-1/2 aspect-video relative rounded-2xl overflow-hidden shadow-md group">
-                <img 
-                  src={videoInfo.thumbnail} 
-                  alt={videoInfo.title} 
+                <img
+                  src={videoInfo.thumbnail}
+                  alt={videoInfo.title}
                   className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
@@ -149,13 +153,13 @@ export default function Home() {
                 <h3 className="font-display font-bold text-xl md:text-2xl line-clamp-3 text-foreground">
                   {videoInfo.title}
                 </h3>
-                
+
                 <p className="text-sm text-muted-foreground line-clamp-1">
                   Ready to download. High quality MP3 format.
                 </p>
 
                 <div className="mt-2 w-full">
-                  <a 
+                  <a
                     href={`/api/video/download?url=${encodeURIComponent(videoInfo.url)}`}
                     download
                     onClick={handleDownload}
@@ -164,7 +168,7 @@ export default function Home() {
                     <Download className="w-5 h-5" />
                     Download Audio
                   </a>
-                  <button 
+                  <button
                     onClick={() => {
                       reset();
                       setUrl("");
@@ -203,15 +207,18 @@ export default function Home() {
 
         {isLoadingHistory ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="h-24 bg-secondary/50 rounded-2xl animate-pulse border border-border/50" />
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="h-24 bg-secondary/50 rounded-2xl animate-pulse border border-border/50"
+              />
             ))}
           </div>
         ) : recentDownloads && recentDownloads.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {recentDownloads.map((item) => (
-              <div 
-                key={item.id} 
+              <div
+                key={item.id}
                 className="group p-4 rounded-2xl border border-border bg-card hover:shadow-lg hover:shadow-black/5 transition-all duration-300 flex flex-col justify-between h-full hover:border-primary/20"
               >
                 <div className="space-y-3">
@@ -222,10 +229,14 @@ export default function Home() {
                     {item.title}
                   </h4>
                 </div>
-                
+
                 <div className="pt-4 mt-4 border-t border-border/50 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{item.downloadedAt ? formatDistanceToNow(new Date(item.downloadedAt), { addSuffix: true }) : 'Recently'}</span>
-                  <a 
+                  <span>
+                    {item.downloadedAt
+                      ? formatDistanceToNow(new Date(item.downloadedAt), { addSuffix: true })
+                      : "Recently"}
+                  </span>
+                  <a
                     href={`/api/video/download?url=${encodeURIComponent(item.url)}`}
                     download
                     className="text-primary font-medium hover:underline flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"

@@ -23,7 +23,12 @@ export interface AudioVerificationResult {
 export async function verifyAudioFile(filePath: string): Promise<AudioVerificationResult> {
   const stat = await fs.stat(filePath);
   if (stat.size < 1024) {
-    return { isValid: false, size: stat.size, format: "unknown", reason: "file too small to be audio" };
+    return {
+      isValid: false,
+      size: stat.size,
+      format: "unknown",
+      reason: "file too small to be audio",
+    };
   }
 
   const fh = await fs.open(filePath, "r");
@@ -38,12 +43,22 @@ export async function verifyAudioFile(filePath: string): Promise<AudioVerificati
 
     // MPEG audio frame sync: 0xFF followed by 0xE0..0xFF
     if (head[0] === 0xff && (head[1] & 0xe0) === 0xe0) {
-      return { isValid: true, size: stat.size, format: "mp3", reason: "MPEG audio frame sync present" };
+      return {
+        isValid: true,
+        size: stat.size,
+        format: "mp3",
+        reason: "MPEG audio frame sync present",
+      };
     }
 
     // WebM / Matroska EBML header
     if (head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) {
-      return { isValid: true, size: stat.size, format: "webm", reason: "EBML (WebM/Matroska) header present" };
+      return {
+        isValid: true,
+        size: stat.size,
+        format: "webm",
+        reason: "EBML (WebM/Matroska) header present",
+      };
     }
 
     // ISO base media (MP4 / M4A): bytes 4..7 == "ftyp"
@@ -51,9 +66,14 @@ export async function verifyAudioFile(filePath: string): Promise<AudioVerificati
       head[4] === 0x66 && // f
       head[5] === 0x74 && // t
       head[6] === 0x79 && // y
-      head[7] === 0x70    // p
+      head[7] === 0x70 // p
     ) {
-      return { isValid: true, size: stat.size, format: "mp4", reason: 'ISO BMFF "ftyp" box present' };
+      return {
+        isValid: true,
+        size: stat.size,
+        format: "mp4",
+        reason: 'ISO BMFF "ftyp" box present',
+      };
     }
 
     return {

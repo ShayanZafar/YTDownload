@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import { insertDownloadSchema, downloads } from './schema';
+import { z } from "zod";
+import { downloads } from "./schema";
 
 export const errorSchemas = {
   validation: z.object({
@@ -17,8 +17,8 @@ export const errorSchemas = {
 export const api = {
   downloads: {
     list: {
-      method: 'GET' as const,
-      path: '/api/downloads' as const,
+      method: "GET" as const,
+      path: "/api/downloads" as const,
       responses: {
         200: z.array(z.custom<typeof downloads.$inferSelect>()),
       },
@@ -26,20 +26,20 @@ export const api = {
   },
   video: {
     info: {
-      method: 'POST' as const,
-      path: '/api/video/info' as const,
+      method: "POST" as const,
+      path: "/api/video/info" as const,
       input: z.object({ url: z.string().url() }),
       responses: {
         200: z.object({
           title: z.string(),
           thumbnail: z.string(),
-          url: z.string()
+          url: z.string(),
         }),
         400: errorSchemas.validation,
         500: errorSchemas.internal,
-      }
-    }
-  }
+      },
+    },
+  },
 };
 
 export function buildUrl(path: string, params?: Record<string, string | number>): string {

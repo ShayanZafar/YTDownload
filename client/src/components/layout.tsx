@@ -8,10 +8,13 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Subtle ambient background glow */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
-      
+
       <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-background/60 backdrop-blur-xl">
         <div className="max-w-5xl mx-auto flex h-16 items-center px-6">
-          <Link href="/" className="flex items-center gap-2 group hover:opacity-80 transition-opacity">
+          <Link
+            href="/"
+            className="flex items-center gap-2 group hover:opacity-80 transition-opacity"
+          >
             <div className="w-8 h-8 rounded-xl bg-primary text-primary-foreground flex items-center justify-center shadow-md">
               <Headphones className="w-4 h-4" />
             </div>

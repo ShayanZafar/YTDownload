@@ -7,6 +7,7 @@ This document covers the project's architecture, local development setup, enviro
 ## Tech Stack
 
 ### Frontend
+
 - **React 18** with TypeScript
 - **Vite 7** as the dev server and build tool
 - **Wouter** for client-side routing
@@ -16,12 +17,14 @@ This document covers the project's architecture, local development setup, enviro
 - **Lucide React** for icons
 
 ### Backend
+
 - **Node.js** with **Express 5**
 - **TypeScript** (executed via `tsx` in development, bundled with `esbuild` in production)
 - **youtube-dl-exec** wrapping a bundled **yt-dlp** binary for YouTube video info & audio stream extraction (yt-dlp itself requires Python 3 to be installed on the host)
 - **Zod** for request validation
 
 ### Database
+
 - **PostgreSQL** (any standard provider, e.g. Neon, Replit DB, Supabase, RDS)
 - **Drizzle ORM** for type-safe database access
 - **drizzle-kit** for schema migrations
@@ -65,9 +68,11 @@ This document covers the project's architecture, local development setup, enviro
 ## Architecture Overview
 
 ### Single-port serving
+
 The Express server and the Vite dev server are mounted on a single port (default `5000`). In development, Vite middleware is attached to Express via `server/vite.ts`, so the API and the frontend live on the same origin — no CORS or proxy configuration required. In production, the built client assets are served as static files by `server/static.ts`.
 
 ### Data flow
+
 1. The frontend calls `/api/video/info` with a YouTube URL.
 2. The backend validates the URL with `ytdl.validateURL`, fetches metadata via `ytdl.getInfo`, and returns `{ title, thumbnail, url }`.
 3. When the user clicks **Download Audio**, the browser navigates to `/api/video/download?url=...`. The server streams the audio (`filter: 'audioonly'`, `quality: 'highestaudio'`) directly to the response with `Content-Type: audio/mpeg` and a `Content-Disposition` header.
@@ -75,9 +80,11 @@ The Express server and the Vite dev server are mounted on a single port (default
 5. The frontend re-fetches `/api/downloads` to refresh the recent-extractions list.
 
 ### Storage abstraction
+
 All database access goes through the `IStorage` interface in `server/storage.ts`. Routes never touch the database directly — they call `storage.getDownloads()` or `storage.createDownload(...)`. This makes it easy to swap implementations or add caching later.
 
 ### Shared types & routes
+
 `shared/schema.ts` defines the Drizzle table, the `createInsertSchema` Zod validator, and `Download` / `InsertDownload` TypeScript types. Both the client and the server import from `@shared/schema`, guaranteeing the API contract stays in sync.
 
 ---
@@ -100,10 +107,10 @@ downloads {
 
 ## API Reference
 
-| Method | Path                  | Purpose                                                          |
-| ------ | --------------------- | ---------------------------------------------------------------- |
-| GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.              |
-| POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.            |
+| Method | Path                  | Purpose                                                           |
+| ------ | --------------------- | ----------------------------------------------------------------- |
+| GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.               |
+| POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.             |
 | GET    | `/api/video/download` | Query: `?url=...`. Streams the extracted MP3 audio as a download. |
 
 All JSON errors follow the shape `{ message: string, field?: string }`.
@@ -112,11 +119,11 @@ All JSON errors follow the shape `{ message: string, field?: string }`.
 
 ## Environment Variables
 
-| Variable        | Required | Description                                                                   |
-| --------------- | -------- | ----------------------------------------------------------------------------- |
-| `DATABASE_URL`  | Yes      | PostgreSQL connection string (e.g. `postgres://user:pass@host:5432/dbname`).  |
-| `NODE_ENV`      | No       | `development` (default) or `production`. Controls Vite vs static serving.     |
-| `PORT`          | No       | Port to bind (default `5000`).                                                |
+| Variable       | Required | Description                                                                  |
+| -------------- | -------- | ---------------------------------------------------------------------------- |
+| `DATABASE_URL` | Yes      | PostgreSQL connection string (e.g. `postgres://user:pass@host:5432/dbname`). |
+| `NODE_ENV`     | No       | `development` (default) or `production`. Controls Vite vs static serving.    |
+| `PORT`         | No       | Port to bind (default `5000`).                                               |
 
 In Replit, `DATABASE_URL` is provisioned automatically when a database is added to the project. For other environments, set it in your shell or hosting platform's environment-variable UI.
 
@@ -125,6 +132,7 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 ## Local Development Setup
 
 ### Prerequisites
+
 - **Node.js 20** or newer
 - **npm** (bundled with Node)
 - A reachable **PostgreSQL** instance
@@ -132,24 +140,28 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 ### Steps
 
 1. **Clone the repository**
+
    ```bash
    git clone <your-repo-url>
    cd <project-directory>
    ```
 
 2. **Install dependencies**
+
    ```bash
    npm install
    ```
 
 3. **Configure environment variables**
    Create a `.env` file (or export the variables in your shell):
+
    ```bash
    DATABASE_URL=postgres://user:password@localhost:5432/youtube_audio
    ```
 
 4. **Push the database schema**
    This creates the `downloads` table from `shared/schema.ts`:
+
    ```bash
    npm run db:push
    ```
@@ -164,13 +176,13 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 
 ## Available npm Scripts
 
-| Script           | What it does                                                                 |
-| ---------------- | ---------------------------------------------------------------------------- |
-| `npm run dev`    | Starts the dev server (Express + Vite middleware) via `tsx`.                 |
-| `npm run build`  | Runs `script/build.ts` to bundle the client (Vite) and the server (esbuild). |
-| `npm start`      | Runs the production build from `dist/index.cjs` with `NODE_ENV=production`.  |
-| `npm run check`  | Type-checks the entire project with `tsc`.                                   |
-| `npm run db:push`| Syncs your Drizzle schema to the database (no migration files needed).       |
+| Script            | What it does                                                                 |
+| ----------------- | ---------------------------------------------------------------------------- |
+| `npm run dev`     | Starts the dev server (Express + Vite middleware) via `tsx`.                 |
+| `npm run build`   | Runs `script/build.ts` to bundle the client (Vite) and the server (esbuild). |
+| `npm start`       | Runs the production build from `dist/index.cjs` with `NODE_ENV=production`.  |
+| `npm run check`   | Type-checks the entire project with `tsc`.                                   |
+| `npm run db:push` | Syncs your Drizzle schema to the database (no migration files needed).       |
 
 ---
 
@@ -197,15 +209,18 @@ Configuration files: `vitest.config.ts` and `playwright.config.ts`.
 Boots the real Express app in-process (no Vite, no port binding) and exercises `/api/video/info`, `/api/video/download`, and `/api/downloads` against a stable test video — the very first YouTube upload, "Me at the zoo" (`jNQXAC9IVRw`).
 
 What it checks:
+
 1. An invalid URL returns HTTP 400 with a message.
 2. A real YouTube URL returns title + thumbnail metadata.
 3. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file's header is verified as a valid MP3.
 4. The completed download is recorded in the `downloads` table and surfaces through `/api/downloads`.
 
 Run it:
+
 ```bash
 DATABASE_URL=... npx vitest run tests/api
 ```
+
 `DATABASE_URL` is required because the test exercises the storage layer end-to-end. In Replit this is already exported.
 
 ### Browser end-to-end (Playwright)
@@ -213,21 +228,25 @@ DATABASE_URL=... npx vitest run tests/api
 Drives Chromium against the live app (using the `webServer` block in `playwright.config.ts`, which reuses your dev server if it's already running on port 5000, or starts `npm run dev` itself otherwise).
 
 What it checks:
+
 1. The hero loads, the URL input accepts the test video URL, and clicking **Extract** renders a preview card with the title, thumbnail, and a download link.
 2. Clicking **Download Audio** triggers a browser download whose suggested filename ends in `.mp3` and whose saved bytes pass the MP3-header check.
 3. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
 One-time browser install (already done if you've run the suite before):
+
 ```bash
 npx playwright install chromium
 ```
 
 Run it:
+
 ```bash
 npx playwright test
 ```
 
 Open the HTML report after a run:
+
 ```bash
 npx playwright show-report
 ```
@@ -257,26 +276,33 @@ The following packages were added solely to support the test suites: `vitest`, `
 ## Production Build & Deployment
 
 ### Build artifacts
+
 Running `npm run build` produces:
+
 - A client bundle (HTML/JS/CSS) inside `dist/public/`.
 - A single bundled server file at `dist/index.cjs`.
 
 ### Running in production
+
 ```bash
 NODE_ENV=production DATABASE_URL=... PORT=5000 npm start
 ```
+
 The Express server serves the static client from `dist/public` and the API from the same port.
 
 ### Deploying on Replit (recommended)
+
 1. Open the project in Replit.
 2. Confirm a PostgreSQL database is attached so `DATABASE_URL` is set.
 3. From the Replit interface, click **Deploy** (or **Publish**). Replit handles building, hosting, TLS certificates, health checks, and a public `.replit.app` domain automatically.
 4. After publishing, every subsequent push or change can be redeployed from the same panel.
 
 ### Deploying on other platforms
+
 The app is a standard Node.js + PostgreSQL service and runs on any provider that supports long-running Node processes (Railway, Render, Fly.io, a VPS, Docker, etc.).
 
 A typical flow:
+
 1. Provision a PostgreSQL database and copy the connection string.
 2. Set environment variables on the host: `DATABASE_URL`, `NODE_ENV=production`, and `PORT` (if the platform requires a specific port).
 3. Build the project: `npm ci && npm run build`.
@@ -300,14 +326,14 @@ A typical flow:
 
 ## Troubleshooting
 
-| Symptom                                                  | Likely cause / fix                                                                                       |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `tsx: not found` when running `npm run dev`              | `node_modules` is incomplete. Run `npm install` again.                                                   |
-| `DATABASE_URL must be set...` thrown on startup          | Export `DATABASE_URL` or attach a database in Replit before starting.                                    |
-| `Invalid YouTube URL` on the info endpoint               | The submitted URL did not pass `ytdl.validateURL`. Try a standard `youtube.com/watch?v=...` link.        |
-| Download starts but the file is empty / 0 bytes          | The video may be age-restricted, region-locked, or removed. Try a different URL.                         |
-| Port `5000` already in use                               | Set `PORT=<other-port>` in the environment, then restart.                                                |
-| Schema changes don't appear in the database              | Run `npm run db:push` to sync the latest Drizzle schema.                                                 |
+| Symptom                                         | Likely cause / fix                                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `tsx: not found` when running `npm run dev`     | `node_modules` is incomplete. Run `npm install` again.                                            |
+| `DATABASE_URL must be set...` thrown on startup | Export `DATABASE_URL` or attach a database in Replit before starting.                             |
+| `Invalid YouTube URL` on the info endpoint      | The submitted URL did not pass `ytdl.validateURL`. Try a standard `youtube.com/watch?v=...` link. |
+| Download starts but the file is empty / 0 bytes | The video may be age-restricted, region-locked, or removed. Try a different URL.                  |
+| Port `5000` already in use                      | Set `PORT=<other-port>` in the environment, then restart.                                         |
+| Schema changes don't appear in the database     | Run `npm run db:push` to sync the latest Drizzle schema.                                          |
 
 ---
 

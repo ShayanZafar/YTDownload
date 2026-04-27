@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+.cache
+.git
+playwright-report
+test-results
+attached_assets
+.local
+*.lock
+package-lock.json
+client/src/components/ui

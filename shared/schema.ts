@@ -9,7 +9,10 @@ export const downloads = pgTable("downloads", {
   downloadedAt: timestamp("downloaded_at").defaultNow(),
 });
 
-export const insertDownloadSchema = createInsertSchema(downloads).omit({ id: true, downloadedAt: true });
+export const insertDownloadSchema = createInsertSchema(downloads).omit({
+  id: true,
+  downloadedAt: true,
+});
 
 export type Download = typeof downloads.$inferSelect;
 export type InsertDownload = z.infer<typeof insertDownloadSchema>;

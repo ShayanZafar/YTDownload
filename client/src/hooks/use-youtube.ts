@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 import { z } from "zod";
 
@@ -28,30 +28,29 @@ export function useRecentDownloads() {
 }
 
 export function useVideoInfo() {
-  const queryClient = useQueryClient();
-  
   return useMutation({
     mutationFn: async (url: string) => {
       // Validate input before sending
       const validatedInput = api.video.info.input.parse({ url });
-      
+
       const res = await fetch(api.video.info.path, {
         method: api.video.info.method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(validatedInput),
         credentials: "include",
       });
-      
+
       if (!res.ok) {
         if (res.status === 400 || res.status === 500) {
           const errorData = await res.json();
-          const schema = res.status === 400 ? api.video.info.responses[400] : api.video.info.responses[500];
+          const schema =
+            res.status === 400 ? api.video.info.responses[400] : api.video.info.responses[500];
           const parsedError = schema.safeParse(errorData);
           throw new Error(parsedError.success ? parsedError.data.message : "An error occurred");
         }
         throw new Error("Failed to fetch video information");
       }
-      
+
       const data = await res.json();
       return parseWithLogging(api.video.info.responses[200], data, "video.info");
     },

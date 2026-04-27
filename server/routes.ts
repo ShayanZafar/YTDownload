@@ -1,67 +1,21 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
+import { type Server } from "http";
 import youtubedl from "youtube-dl-exec";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
+import { extractVideoId, pickThumbnail, type ThumbnailLike } from "./youtube-url";
 
-const YOUTUBE_HOSTS = new Set([
-  "youtube.com",
-  "www.youtube.com",
-  "m.youtube.com",
-  "music.youtube.com",
-  "youtu.be",
-]);
-
-function extractVideoId(rawUrl: string): string | null {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    return null;
-  }
-
-  if (!YOUTUBE_HOSTS.has(parsed.hostname)) return null;
-
-  if (parsed.hostname === "youtu.be") {
-    const id = parsed.pathname.slice(1).split("/")[0];
-    return /^[a-zA-Z0-9_-]{11}$/.test(id) ? id : null;
-  }
-
-  const v = parsed.searchParams.get("v");
-  if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
-
-  const m = parsed.pathname.match(/\/(?:shorts|embed|v)\/([a-zA-Z0-9_-]{11})/);
-  if (m) return m[1];
-
-  return null;
-}
-
-type YtDlpInfo = {
+type YtDlpInfo = ThumbnailLike & {
   title?: string;
-  thumbnail?: string;
-  thumbnails?: Array<{ url: string; width?: number }>;
 };
 
-function pickThumbnail(info: YtDlpInfo): string {
-  if (info.thumbnails && info.thumbnails.length > 0) {
-    const sorted = [...info.thumbnails].sort(
-      (a, b) => (b.width ?? 0) - (a.width ?? 0)
-    );
-    return sorted[0].url;
-  }
-  return info.thumbnail ?? "";
-}
-
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express
-): Promise<Server> {
+export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.get(api.downloads.list.path, async (_req, res) => {
     try {
       const allDownloads = await storage.getDownloads();
       res.status(200).json(allDownloads);
-    } catch (error) {
+    } catch {
       res.status(500).json({ message: "Failed to fetch downloads" });
     }
   });
@@ -126,8 +80,7 @@ export async function registerRoutes(
         noPlaylist: true,
       })) as YtDlpInfo;
 
-      const safeTitle =
-        (info.title ?? "audio").replace(/[^\w\s-]/g, "").trim() || "audio";
+      const safeTitle = (info.title ?? "audio").replace(/[^\w\s-]/g, "").trim() || "audio";
 
       try {
         await storage.createDownload({ url, title: safeTitle });
