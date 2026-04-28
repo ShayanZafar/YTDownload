@@ -135,7 +135,36 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 
 - **Node.js 20** or newer
 - **npm** (bundled with Node)
-- A reachable **PostgreSQL** instance
+- **Python 3** on `PATH` — required by `yt-dlp`, which the download endpoint shells out to. Without it, `/api/video/download` will fail at runtime with `python3: No such file or directory`.
+  - macOS: pre-installed, or `brew install python@3.11`
+  - Debian/Ubuntu: `sudo apt install python3`
+  - Fedora/RHEL: `sudo dnf install python3`
+  - Verify with `python3 --version` (should be 3.8+).
+- A reachable **PostgreSQL** instance — see the next section for how to get one.
+
+### Get a PostgreSQL instance
+
+You have three reasonable options; pick whichever is least friction for you.
+
+**Option 1 — Hosted (fastest, zero install).** Sign up for a free Postgres at [Neon](https://neon.tech/), [Supabase](https://supabase.com/), or [Render](https://render.com/), copy the connection string they give you, and use it as `DATABASE_URL`. No local install, no port conflicts.
+
+**Option 2 — Docker (one command).** If you have Docker installed:
+
+```bash
+docker run -d --name yt-mp3-db \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=youtube_audio \
+  -p 5432:5432 \
+  postgres:16
+```
+
+Then use `DATABASE_URL=postgres://postgres:postgres@localhost:5432/youtube_audio`.
+
+**Option 3 — Local install.**
+
+- macOS: `brew install postgresql@16 && brew services start postgresql@16`
+- Debian/Ubuntu: `sudo apt install postgresql && sudo systemctl start postgresql`
+- Then: `createdb youtube_audio` and use `DATABASE_URL=postgres://$USER@localhost:5432/youtube_audio`.
 
 ### Steps
 
@@ -153,11 +182,14 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
    ```
 
 3. **Configure environment variables**
-   Create a `.env` file (or export the variables in your shell):
+   Copy the example file and fill in your real `DATABASE_URL`:
 
    ```bash
-   DATABASE_URL=postgres://user:password@localhost:5432/youtube_audio
+   cp .env.example .env
+   # then edit .env in your editor
    ```
+
+   `.env` is git-ignored, so credentials never leave your machine.
 
 4. **Push the database schema**
    This creates the `downloads` table from `shared/schema.ts`:
