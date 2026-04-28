@@ -37,3 +37,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 ## Looking For Setup Or Deployment Info?
 
 See [TECHNICAL.md](./TECHNICAL.md) for architecture details, local development setup, environment variables, and deployment instructions.
+
+## Coming From A Different Stack?
+
+If your background is .NET / C# (or any other stack) and you want a guided tour of this codebase's tech choices and patterns, see [LEARNING.md](./LEARNING.md). It maps every concept here onto its closest .NET equivalent and explains the "why" behind each decision.
