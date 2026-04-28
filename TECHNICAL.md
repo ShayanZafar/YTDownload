@@ -174,6 +174,101 @@ In Replit, `DATABASE_URL` is provisioned automatically when a database is added 
 
 ---
 
+## Local Development on Windows
+
+The steps above assume a Unix-like shell (macOS / Linux / WSL / Git Bash). Native Windows shells (PowerShell, `cmd.exe`) need a few different commands. Pick **one** of the three paths below.
+
+### Prerequisites — install once
+
+Run these in an **elevated PowerShell** (right-click → "Run as Administrator"):
+
+```powershell
+winget install -e --id OpenJS.NodeJS.LTS         # Node 20+ and npm
+winget install -e --id Python.Python.3.11        # Python 3 (required by yt-dlp)
+winget install -e --id Git.Git                   # Git
+winget install -e --id PostgreSQL.PostgreSQL.16  # OPTIONAL — skip if using a hosted DB
+```
+
+Close and reopen PowerShell so the new programs are on `PATH`. Verify:
+
+```powershell
+node --version      # v20.x or newer
+npm --version       # 10.x or newer
+python --version    # 3.11.x
+git --version
+```
+
+If `python --version` doesn't work, the yt-dlp download endpoint will fail at runtime with `python3: No such file or directory` — fix `PATH` before continuing.
+
+### Get a PostgreSQL connection string
+
+Either install PostgreSQL locally (above) and use a URL like
+`postgres://postgres:<password>@localhost:5432/youtube_audio`, or use a free hosted Postgres (Neon, Supabase, etc.) and copy the connection string they give you. The latter is faster.
+
+### Clone and install
+
+```powershell
+git clone <your-repo-url>
+cd <project-directory>
+npm install
+```
+
+### Pick one of three ways to run
+
+#### Path A — WSL (Ubuntu) **— recommended, simplest**
+
+If you have WSL installed (`wsl --install` in elevated PowerShell, then reboot), open an Ubuntu terminal and follow the regular Linux/macOS steps above verbatim. Everything works as documented because you're now in a real Unix shell.
+
+#### Path B — Git Bash
+
+Install [Git for Windows](https://git-scm.com/download/win) (or `winget install -e --id Git.Git` from above), then open the **Git Bash** shell. The standard Linux/macOS commands work here too, including `export DATABASE_URL=...` and `npm run dev`.
+
+#### Path C — Native PowerShell
+
+Works, but requires using PowerShell's environment-variable syntax and bypassing the npm `dev`/`start` scripts (which use a Unix-style `NODE_ENV=development tsx ...` prefix that PowerShell and `cmd.exe` don't understand).
+
+```powershell
+# Set the database URL for this shell session
+$env:DATABASE_URL = "postgres://postgres:<password>@localhost:5432/youtube_audio"
+
+# Push the schema (this script is portable — no NODE_ENV prefix)
+npm run db:push
+
+# Start the dev server (replicate `npm run dev` manually)
+$env:NODE_ENV = "development"
+npx tsx server/index.ts
+```
+
+To make the database URL persist across shells, use `setx` once:
+
+```powershell
+setx DATABASE_URL "postgres://postgres:<password>@localhost:5432/youtube_audio"
+```
+
+(Then close and reopen PowerShell — `setx` only takes effect in new sessions.)
+
+### Verify the production build on Windows
+
+To confirm the production pipeline works end-to-end on your Windows box (after `npm install` and `DATABASE_URL` are set):
+
+```powershell
+npm run build                          # bundles client (Vite) + server (esbuild) → dist/
+$env:NODE_ENV = "production"
+node dist/index.cjs                    # equivalent to `npm start` on Unix
+```
+
+If you see `Server listening on port 5000` and `http://localhost:5000` loads the homepage, the build pipeline is working on Windows.
+
+### Common Windows gotchas
+
+- **Port 5000 is in use.** Windows sometimes binds port 5000 (older versions, third-party services). Identify the process with `Get-NetTCPConnection -LocalPort 5000` and stop it, or change the port in `server/index.ts`.
+- **`'NODE_ENV' is not recognized as an internal or external command.`** You're in `cmd.exe` and ran `npm run dev`. Use Path A, B, or C above.
+- **`python3: No such file or directory` from yt-dlp.** Python isn't on `PATH`. Reinstall with the "Add Python to PATH" option, or fix `PATH` manually.
+- **Long file paths in `node_modules`.** If `npm install` fails with `ENAMETOOLONG`, enable Windows long-path support: `New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force` (elevated PowerShell, then reboot).
+- **CRLF vs. LF line endings.** This repo's `.prettierrc` enforces `lf`. Configure Git once per machine: `git config --global core.autocrlf input`.
+
+---
+
 ## Commands
 
 ### Wired-up npm scripts
