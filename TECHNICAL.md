@@ -73,11 +73,12 @@ The Express server and the Vite dev server are mounted on a single port (default
 
 ### Data flow
 
-1. The frontend calls `/api/video/info` with a YouTube URL.
-2. The backend validates the URL with `ytdl.validateURL`, fetches metadata via `ytdl.getInfo`, and returns `{ title, thumbnail, url }`.
-3. When the user clicks **Download Audio**, the browser navigates to `/api/video/download?url=...`. The server streams the audio (`filter: 'audioonly'`, `quality: 'highestaudio'`) directly to the response with `Content-Type: audio/mpeg` and a `Content-Disposition` header.
-4. Each successful download is logged to PostgreSQL via the `DatabaseStorage` class.
-5. The frontend re-fetches `/api/downloads` to refresh the recent-extractions list.
+1. The frontend calls `POST /api/video/info` with a YouTube URL.
+2. The backend validates the body with Zod, extracts the canonical video ID (`server/youtube-url.ts`), shells out to `yt-dlp` for metadata, and returns `{ title, thumbnail, url }`.
+3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename), inserts a `downloads` row, then spawns a `yt-dlp` subprocess with `format: "bestaudio"` and pipes its stdout straight into the HTTP response with `Content-Type: audio/mpeg` and a `Content-Disposition` header.
+4. The frontend re-fetches `/api/downloads` to refresh the recent-extractions list.
+
+The visual versions of these flows live in [System Design](#system-design) below.
 
 ### Storage abstraction
 
@@ -86,6 +87,159 @@ All database access goes through the `IStorage` interface in `server/storage.ts`
 ### Shared types & routes
 
 `shared/schema.ts` defines the Drizzle table, the `createInsertSchema` Zod validator, and `Download` / `InsertDownload` TypeScript types. Both the client and the server import from `@shared/schema`, guaranteeing the API contract stays in sync.
+
+---
+
+## System Design
+
+This section is the visual companion to the prose above. All diagrams use [Mermaid](https://mermaid.js.org/), which renders natively on GitHub, Replit's markdown preview, and most editors with a Markdown plugin.
+
+### Component diagram
+
+The whole system is one Node process plus one Postgres database plus one external dependency (`yt-dlp`, invoked as a subprocess that calls out to YouTube).
+
+```mermaid
+flowchart LR
+  Browser["Browser<br/>(React + Vite client)"]
+  Node["Node.js process<br/>(Express + Vite middleware)"]
+  YtDlp["yt-dlp subprocess<br/>(spawned per request)"]
+  YouTube["YouTube<br/>(public API + CDN)"]
+  DB[("PostgreSQL<br/>downloads table")]
+
+  Browser -- "HTTPS<br/>/api/* + static assets" --> Node
+  Node -- "spawn (stdin/stdout pipe)" --> YtDlp
+  YtDlp -- "HTTPS" --> YouTube
+  Node -- "SQL over TLS" --> DB
+```
+
+Key things this picture makes obvious:
+
+- **One port, one process.** The client, the API, and (in dev) the Vite dev server all share port 5000. There is no separate API gateway, no reverse proxy in the default setup.
+- **`yt-dlp` is a subprocess, not a library.** Every metadata fetch and every download spawns a fresh `yt-dlp` process. That's the unit of failure for anything YouTube-related.
+- **The database is only on the write path of the download flow** — and even there, a DB failure does not block the download (see Failure modes).
+
+### Sequence: video info (`POST /api/video/info`)
+
+The cheap, synchronous path the user hits when they paste a URL.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Browser
+  participant S as Express handler
+  participant U as youtube-url.ts
+  participant Y as yt-dlp subprocess
+  participant YT as YouTube
+
+  C->>S: POST /api/video/info { url }
+  S->>S: api.video.info.input.parse(req.body)  // Zod
+  S->>U: extractVideoId(url)
+  U-->>S: "jNQXAC9IVRw" | null
+  alt videoId is null
+    S-->>C: 400 { message: "Invalid YouTube URL" }
+  else valid
+    S->>Y: youtubedl(canonical, { dumpSingleJson, skipDownload })
+    Y->>YT: HTTPS metadata request
+    YT-->>Y: JSON metadata
+    Y-->>S: { title, thumbnails, ... }
+    S->>U: pickThumbnail(info)
+    U-->>S: best thumbnail URL
+    S-->>C: 200 { title, thumbnail, url }
+  end
+```
+
+### Sequence: audio download (`GET /api/video/download`)
+
+The streaming path. The interesting part is that the server starts writing bytes to the HTTP response **before** the subprocess has finished — so once headers are sent we can no longer respond with a clean error code.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Browser
+  participant S as Express handler
+  participant DB as PostgreSQL
+  participant Y as yt-dlp subprocess
+  participant YT as YouTube
+
+  C->>S: GET /api/video/download?url=...
+  S->>S: extractVideoId(url) → validate
+  S->>Y: metadata pass (dumpSingleJson)
+  Y->>YT: HTTPS
+  YT-->>Y: JSON
+  Y-->>S: { title }
+  S->>DB: INSERT INTO downloads (url, title)
+  Note over S,DB: DB error here is logged but swallowed —<br/>download still proceeds
+  DB-->>S: ok / error
+  S-->>C: 200 + Content-Disposition + Content-Type: audio/mpeg
+  S->>Y: spawn yt-dlp (format=bestaudio, output=-)
+  Y->>YT: HTTPS audio stream
+  loop streaming
+    YT-->>Y: audio bytes
+    Y-->>S: stdout chunk
+    S-->>C: response chunk
+  end
+  alt client aborts
+    C->>S: req "close" event
+    S->>Y: SIGTERM
+  else yt-dlp exits non-zero
+    Y-->>S: stderr + exit code
+    S->>S: log stderr, end response
+  end
+```
+
+### Deployment topology
+
+In Replit Autoscale (the production target), the picture collapses to one container with a few outbound dependencies.
+
+```mermaid
+flowchart LR
+  subgraph Replit["Replit Autoscale Container"]
+    Node2["Node.js (dist/index.cjs)<br/>+ bundled yt-dlp binary<br/>+ Python 3 runtime"]
+  end
+  Internet["Internet users"] -- HTTPS --> Node2
+  Node2 -- HTTPS --> YouTubeProd["YouTube"]
+  Node2 -- "SQL over TLS<br/>(DATABASE_URL secret)" --> Neon[("Hosted Postgres<br/>e.g. Neon / Supabase")]
+```
+
+Notes on this topology:
+
+- The container is **stateless** — every restart is clean. All persistent data is in Postgres.
+- `yt-dlp` is bundled into `node_modules/youtube-dl-exec/bin/` at build time, so we don't need to install it at runtime. We **do** need Python 3 in the container (the Replit deployment uses the project's Nix module set).
+- There's no object storage. Audio files are streamed straight from `yt-dlp` to the client and never touch disk on the server.
+
+### Failure modes
+
+The interesting failures are at the boundaries with `yt-dlp`, YouTube, and Postgres. The table below is the truth as of the code in `server/routes.ts`:
+
+| Failure                              | Where surfaced                  | Behavior                                                                                                          | User sees                                                  |
+| ------------------------------------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Invalid / non-YouTube URL            | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                              | `400 Invalid YouTube URL`                                  |
+| Zod body validation fails (info)     | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                    | `400 { message, field }`                                   |
+| `yt-dlp` metadata throws             | `youtubedl(...)` rejection      | Caught in handler                                                                                                 | `500 { message }` (info) or `500` text (download)          |
+| DB insert into `downloads` fails     | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error`, download proceeds                                                     | Nothing — file still downloads, history just won't show it |
+| `yt-dlp` subprocess fails to spawn   | `subprocess.stdout` is `null`   | Throws → caught in handler                                                                                        | `500 Failed to spawn yt-dlp subprocess`                    |
+| `yt-dlp` exits non-zero mid-stream   | `subprocess.on("close")`        | stderr logged, response ended; if headers already sent, browser sees a truncated download                         | Partial / broken file                                      |
+| Client cancels the download          | `req.on("close")`               | Subprocess killed with `SIGTERM`                                                                                  | n/a (user already left)                                    |
+| Postgres unreachable on `/downloads` | `storage.getDownloads()` throws | Caught in handler                                                                                                 | `500 Failed to fetch downloads`, history list shows error  |
+| YouTube blocks the request           | `yt-dlp` exits non-zero         | Same as the "exits non-zero" row — that's why we keep `yt-dlp` itself up to date, not roll our own scraping logic | Partial / broken file                                      |
+
+The deliberate design choice worth flagging: **a database outage doesn't break downloads**. The download history is best-effort, the audio extraction is the product. We chose this over the alternative (fail the download if we can't log it), because the user's download is what they came for.
+
+### Scaling considerations
+
+This stack is designed for a small-to-medium audience. Here's where it would crack and what we'd do about it:
+
+| Bottleneck                     | When it bites                                                                                             | First thing to do                                                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Single Node process            | Sustained concurrent downloads, since each one occupies an event-loop slot for the duration of the stream | Run multiple Node instances behind a load balancer (Replit Autoscale already scales horizontally on request count). |
+| `yt-dlp` subprocess fan-out    | Lots of simultaneous downloads → many Python processes → CPU + memory pressure                            | Add a per-instance concurrency cap (e.g., a small `p-limit` queue around `youtubedl.exec`).                         |
+| Outbound bandwidth from server | Every byte of audio flows server → client                                                                 | Move to a presigned-URL or proxy-and-cache model, where popular videos hit a CDN instead of `yt-dlp` per request.   |
+| Postgres connection pool       | Many concurrent requests sharing one pool                                                                 | Tune the pool size in `server/db.ts`; for serverless Postgres (Neon), the HTTP driver handles this automatically.   |
+| `yt-dlp` extractor rot         | YouTube periodically changes its players and `yt-dlp` ships a fix                                         | Bump the `youtube-dl-exec` dependency on a cadence (or pin a specific `yt-dlp` binary release).                     |
+| No background job queue        | If a future feature needs work to outlive the request (e.g., transcoding to real MP3)                     | Introduce a queue (BullMQ + Redis is the conventional pick) and a worker process.                                   |
+| No caching of metadata         | Same URL fetched repeatedly costs a `yt-dlp` spawn each time                                              | Add a short TTL cache (in-memory `lru-cache` or Redis) keyed by canonical video ID.                                 |
+
+None of these are problems today. They're listed here so the next person doesn't have to rediscover the ceiling.
 
 ---
 
