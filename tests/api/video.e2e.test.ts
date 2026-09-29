@@ -16,6 +16,9 @@ let httpServer: Server;
 let app: express.Express;
 
 beforeAll(async () => {
+  // Pick up DATABASE_URL from .env, the same way the app does.
+  await import("../../server/env");
+
   if (!process.env.DATABASE_URL) {
     throw new Error(
       "DATABASE_URL must be set to run end-to-end API tests. " +

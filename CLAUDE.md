@@ -1,0 +1,64 @@
+# YouTube → audio extractor
+
+Small full-stack app: paste a YouTube URL, preview it, download the audio track. Developed and run
+locally on Windows (it also works on macOS/Linux). `README.md` is the user guide, `TECHNICAL.md` has
+architecture, setup and deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
+
+## Stack
+
+- **Frontend:** React 18 + Vite, wouter (routing), TanStack Query, shadcn/ui, Tailwind — `client/`
+- **Backend:** Express 5 + TypeScript (`tsx` in dev, esbuild bundle in prod) — `server/`
+- **Database:** PostgreSQL via Drizzle ORM; one table, `downloads` (the history list) — `shared/schema.ts`
+- **YouTube:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads into
+  `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed)
+- **MP3:** `ffmpeg-static` (ffmpeg fetched by `npm install`; `FFMPEG_BIN` overrides it)
+
+## Layout
+
+- `server/index.ts` — entry point; Vite middleware in dev, static `dist/public` in prod
+- `server/env.ts` — loads `.env`; imported first by `index.ts` and `db.ts`
+- `server/routes.ts` — `POST /api/video/info`, `GET /api/video/download`, `GET /api/downloads`
+- `server/audio.ts` — yt-dlp and ffmpeg arguments/spawning for the MP3 pipeline (unit-tested)
+- `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
+- `server/storage.ts`, `server/db.ts` — Drizzle storage layer
+- `shared/` — schema and API contracts shared by client and server
+- `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` is generated shadcn/ui
+- `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube + DB), `tests/browser` (Playwright)
+
+## Commands
+
+- `npm run dev` — dev server at http://localhost:5000 (needs Postgres running)
+- `npm run check` — type-check
+- `npx vitest run tests/unit` — fast unit tests
+- `npx vitest run tests/api` — end-to-end API tests (needs DB + internet)
+- `npx playwright test` — browser tests (starts `npm run dev` if nothing is on port 5000)
+- `npx eslint .` and `npx prettier --check .`
+- `npm run build`, then `npm start` — production bundle
+- `npm run db:push` — sync the Drizzle schema to the database
+
+## Local setup (Windows)
+
+- Postgres runs in the `yt-mp3-db` Docker container (auto-restarts while Docker Desktop is running;
+  otherwise `docker start yt-mp3-db`). If `/api/downloads` returns "Failed to fetch downloads", the
+  database is down. Created with the command in TECHNICAL.md → "Local Development on Windows".
+- `.env` (git-ignored) holds `DATABASE_URL`; optional `PORT` and `HOST`. Shell variables override it.
+- In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
+- `npm install` / `npm rebuild youtube-dl-exec` need `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment:
+  the package's installer demands Python 3.9+ even though Windows' `yt-dlp.exe` doesn't use it.
+- If `npm install` skips dev dependencies, `NODE_ENV=production` is set in that shell — unset it.
+
+## Conventions and gotchas
+
+- Keep everything cross-platform: set env vars in npm scripts with `cross-env`, never a bare
+  `VAR=value` prefix; no `reusePort` in `listen()` (fails with ENOTSUP on Windows).
+- Downloads stream yt-dlp stdout → ffmpeg stdin → response (192k CBR MP3, ID3v2.3 tags). CBR is
+  deliberate: a streamed VBR file has no seek header, so players show the wrong duration.
+- The download route owns two child processes. It watches `res` "close" from the very start and
+  kills both on cancel, and swallows EPIPE on `ffmpeg.stdin`. Unhandled stream errors or a missed
+  kill mean a crashed server or processes left running forever, so re-test cancel paths after edits.
+- Headers go out with the first MP3 chunk, so failures before any audio become a `502`; don't write
+  to `res` before the pipeline produces output.
+- yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
+- If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
+  (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).
+- Prettier config is in `.prettierrc` (`endOfLine: auto`, so CRLF checkouts on Windows are fine).

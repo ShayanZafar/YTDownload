@@ -1,3 +1,4 @@
+import "./env";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -85,19 +86,14 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
+  // One port serves both the API and the client. Listens on this machine only
+  // by default; set HOST=0.0.0.0 to expose it to your network or a container.
+  // (No `reusePort` here: it only works on Linux and makes listen() fail with
+  // ENOTSUP on Windows and macOS.)
   const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
-    },
-  );
+  const host = process.env.HOST || "127.0.0.1";
+  httpServer.listen({ port, host }, () => {
+    const shown = host === "0.0.0.0" || host === "127.0.0.1" ? "localhost" : host;
+    log(`serving on http://${shown}:${port}`);
+  });
 })();

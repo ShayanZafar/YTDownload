@@ -1,14 +1,21 @@
 import type { Express } from "express";
 import { type Server } from "http";
+import type { ChildProcess } from "child_process";
 import youtubedl from "youtube-dl-exec";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { extractVideoId, pickThumbnail, type ThumbnailLike } from "./youtube-url";
+import { YT_DLP_BASE_FLAGS, spawnFfmpegMp3, spawnYtDlpAudio } from "./audio";
 
 type YtDlpInfo = ThumbnailLike & {
   title?: string;
+  uploader?: string;
+  channel?: string;
 };
+
+const isRunning = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;
+const lastLine = (text: string) => text.trim().split(/\r?\n/).pop() ?? "";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.get(api.downloads.list.path, async (_req, res) => {
@@ -34,8 +41,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const info = (await youtubedl(canonical, {
         dumpSingleJson: true,
         skipDownload: true,
-        noWarnings: true,
-        noPlaylist: true,
+        ...YT_DLP_BASE_FLAGS,
       })) as YtDlpInfo;
 
       res.status(200).json({
@@ -56,12 +62,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Streams the audio track of a video as a download. Note: YouTube serves
-  // audio in webm/opus or m4a/aac containers — not true MP3 — but we keep
-  // the .mp3/audio-mpeg headers so the file is recognised as audio by
-  // browsers and music players. Re-encoding to real MP3 would require
-  // ffmpeg; that's a deliberate non-goal here.
+  // Streams a video's audio as an MP3 download: yt-dlp → ffmpeg → response.
+  // See server/audio.ts for the encoding details.
   app.get("/api/video/download", async (req, res) => {
+    // Watch for the browser going away (download cancelled, tab closed) from the
+    // very start — the metadata lookup below can take 10–20s, and a cancel during
+    // it must stop us from starting processes that would then block forever.
+    let clientGone = false;
+    let stopPipeline: (() => void) | undefined;
+    res.on("close", () => {
+      if (res.writableFinished) return; // normal completion
+      clientGone = true;
+      stopPipeline?.();
+    });
+
     try {
       const url = req.query.url as string;
       const videoId = url ? extractVideoId(url) : null;
@@ -71,69 +85,97 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const canonical = `https://www.youtube.com/watch?v=${videoId}`;
 
-      // Light metadata pass first so we have a filename and can fail early
-      // (with a clean 500) before opening a streaming response.
+      // Light metadata pass first so we have a filename and tags, and can fail
+      // early (with a clean 500) before opening a streaming response.
       const info = (await youtubedl(canonical, {
         dumpSingleJson: true,
         skipDownload: true,
-        noWarnings: true,
-        noPlaylist: true,
+        ...YT_DLP_BASE_FLAGS,
       })) as YtDlpInfo;
 
-      const safeTitle = (info.title ?? "audio").replace(/[^\w\s-]/g, "").trim() || "audio";
+      const title = info.title ?? "audio";
+      const safeTitle = title.replace(/[^\w\s-]/g, "").trim() || "audio";
+
+      // Cancelled while we were looking up the video: don't log it or start work.
+      if (clientGone) return;
 
       try {
         await storage.createDownload({ url, title: safeTitle });
       } catch (dbError) {
         console.error("Failed to log download", dbError);
       }
+      if (clientGone) return;
 
+      // These only go out with the first chunk of audio, so a failure before
+      // then can still be turned into a proper error response (see below).
       res.header("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
       res.header("Content-Type", "audio/mpeg");
-      res.header("Accept-Ranges", "bytes");
 
-      // Spawn yt-dlp and stream stdout straight into the response.
-      // `output: "-"` tells yt-dlp to write the audio bytes to stdout.
-      const subprocess = youtubedl.exec(canonical, {
-        format: "bestaudio",
-        output: "-",
-        quiet: true,
-        noWarnings: true,
-        noPlaylist: true,
+      // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.
+      const ffmpeg = spawnFfmpegMp3({ title, artist: info.uploader ?? info.channel });
+      const ytdlp = spawnYtDlpAudio(canonical);
+      stopPipeline = () => {
+        for (const p of [ytdlp, ffmpeg]) if (isRunning(p)) p.kill();
+      };
+
+      let ytdlpErr = "";
+      let ffmpegErr = "";
+      let spawnError = "";
+      ytdlp.stderr.on("data", (chunk) => (ytdlpErr += chunk));
+      ffmpeg.stderr.on("data", (chunk) => (ffmpegErr += chunk));
+      ytdlp.on("error", (e) => {
+        spawnError = `yt-dlp failed to start: ${e.message}`;
+        stopPipeline?.();
       });
-
-      if (!subprocess.stdout || !subprocess.stderr) {
-        throw new Error("Failed to spawn yt-dlp subprocess");
-      }
-
-      let stderrBuf = "";
-      subprocess.stderr.on("data", (chunk) => {
-        stderrBuf += chunk.toString();
+      ffmpeg.on("error", (e) => {
+        spawnError = `ffmpeg failed to start: ${e.message}`;
+        stopPipeline?.();
       });
+      // If ffmpeg exits first, yt-dlp's remaining writes hit a closed pipe
+      // (EPIPE). That's expected — but unhandled, the error would crash the server.
+      ffmpeg.stdin.on("error", () => {});
 
-      subprocess.stdout.pipe(res);
+      ytdlp.stdout.pipe(ffmpeg.stdin);
+      ffmpeg.stdout.pipe(res, { end: false });
 
-      subprocess.on("error", (e) => {
-        console.error("yt-dlp spawn error", e);
-        if (!res.headersSent) res.status(500).send(e.message);
-        else res.end();
-      });
-
-      subprocess.on("close", (code) => {
-        if (code !== 0 && !res.writableEnded) {
-          console.error(`yt-dlp exited with code ${code}: ${stderrBuf}`);
-          res.end();
+      ytdlp.on("close", (code) => {
+        // ffmpeg sees end-of-input and finishes on its own; just record why.
+        if (code !== 0 && !clientGone) {
+          console.error(`yt-dlp exited with code ${code}: ${lastLine(ytdlpErr)}`);
         }
       });
 
-      // If the client aborts, kill the subprocess so we don't leak it.
-      req.on("close", () => {
-        if (subprocess.exitCode === null) subprocess.kill("SIGTERM");
+      ffmpeg.on("close", (code) => {
+        stopPipeline?.(); // make sure yt-dlp isn't left running
+        if (clientGone) return;
+
+        if (res.headersSent) {
+          // Audio was already flowing. On a mid-stream failure the file is cut
+          // short — there's no way to signal an error once a 200 has been sent.
+          if (code !== 0) console.error(`ffmpeg exited with code ${code}: ${lastLine(ffmpegErr)}`);
+          res.end();
+          return;
+        }
+
+        // Failed before producing any audio (e.g. YouTube refused the stream).
+        const reason =
+          spawnError ||
+          lastLine(ytdlpErr) ||
+          lastLine(ffmpegErr) ||
+          `ffmpeg exited with code ${code}`;
+        console.error(`Download failed before any audio was sent: ${reason}`);
+        res.removeHeader("Content-Disposition");
+        res.status(502).type("text/plain").send(`Couldn't download the audio: ${reason}`);
       });
     } catch (err) {
       console.error(err);
+      stopPipeline?.();
       if (!res.headersSent) {
-        res.status(500).send(err instanceof Error ? err.message : "Failed to download video");
+        res.removeHeader("Content-Disposition");
+        res
+          .status(500)
+          .type("text/plain")
+          .send(err instanceof Error ? err.message : "Failed to download video");
       } else {
         res.end();
       }

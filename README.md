@@ -6,19 +6,19 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 
 - **Paste a YouTube URL** — Drop in any standard YouTube video link.
 - **Preview the video** — See the title and thumbnail before downloading, so you can confirm you've got the right one.
-- **Extract high-quality audio** — One-click download of the audio track in MP3 format at the highest available quality.
+- **Extract high-quality audio** — One-click download of the audio track as a 192 kbps MP3, converted from the best audio stream YouTube offers.
 - **Browse recent extractions** — Every download is saved to a history list so you can quickly grab a file again later without re-pasting the URL.
 
 ## Key Features
 
-| Feature               | Description                                                                                        |
-| --------------------- | -------------------------------------------------------------------------------------------------- |
-| Instant video preview | Title and thumbnail load before you commit to downloading.                                         |
-| High-quality audio    | Pulls the best available audio stream from the source video.                                       |
-| MP3 download          | Files are delivered as `.mp3` with a sensible filename derived from the video title.               |
-| Download history      | A persistent list of recent extractions with one-click redownload.                                 |
-| Friendly errors       | Clear messages when a URL is invalid, the video can't be fetched, or the network fails.            |
-| Responsive design     | Works on desktop and mobile, with a polished hero section, animated result card, and history grid. |
+| Feature               | Description                                                                                          |
+| --------------------- | ---------------------------------------------------------------------------------------------------- |
+| Instant video preview | Title and thumbnail load before you commit to downloading.                                           |
+| High-quality audio    | Pulls the best available audio stream from the source video.                                         |
+| MP3 download          | Real MP3 files (192 kbps) named after the video, with title and artist tags that music players show. |
+| Download history      | A persistent list of recent extractions with one-click redownload.                                   |
+| Friendly errors       | Clear messages when a URL is invalid, the video can't be fetched, or the network fails.              |
+| Responsive design     | Works on desktop and mobile, with a polished hero section, animated result card, and history grid.   |
 
 ## How To Use It
 
