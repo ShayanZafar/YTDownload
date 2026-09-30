@@ -155,7 +155,7 @@ export default function Home() {
                 </h3>
 
                 <p className="text-sm text-muted-foreground line-clamp-1">
-                  Ready to download. High quality MP3 format.
+                  Ready to download as a 320 kbps MP3.
                 </p>
 
                 <div className="mt-2 w-full">

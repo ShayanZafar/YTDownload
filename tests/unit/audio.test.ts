@@ -1,10 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { AUDIO_FORMAT, MP3_BITRATE, ffmpegMp3Args, ytDlpAudioArgs } from "../../server/audio";
+import {
+  AUDIO_FORMAT,
+  LAME_QUALITY,
+  MP3_BITRATE,
+  ffmpegMp3Args,
+  ytDlpAudioArgs,
+} from "../../server/audio";
 
 describe("ytDlpAudioArgs", () => {
   const args = ytDlpAudioArgs("https://www.youtube.com/watch?v=jNQXAC9IVRw");
 
-  it("puts the URL first and streams the preferred audio format to stdout", () => {
+  it("puts the URL first and streams the best available audio to stdout", () => {
     expect(args[0]).toBe("https://www.youtube.com/watch?v=jNQXAC9IVRw");
     expect(args).toContain("--format");
     expect(args[args.indexOf("--format") + 1]).toBe(AUDIO_FORMAT);
@@ -17,11 +23,13 @@ describe("ytDlpAudioArgs", () => {
 });
 
 describe("ffmpegMp3Args", () => {
-  it("reads stdin and writes a constant-bitrate MP3 to stdout", () => {
+  it("reads stdin and writes a 320 kbps constant-bitrate MP3 to stdout", () => {
     const args = ffmpegMp3Args({ title: "Song" });
     expect(args[args.indexOf("-i") + 1]).toBe("pipe:0");
     expect(args[args.indexOf("-c:a") + 1]).toBe("libmp3lame");
+    expect(MP3_BITRATE).toBe("320k");
     expect(args[args.indexOf("-b:a") + 1]).toBe(MP3_BITRATE);
+    expect(args[args.indexOf("-compression_level") + 1]).toBe(LAME_QUALITY);
     expect(args.slice(-3)).toEqual(["-f", "mp3", "pipe:1"]);
   });
 

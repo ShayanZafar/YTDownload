@@ -51,8 +51,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 
 - Keep everything cross-platform: set env vars in npm scripts with `cross-env`, never a bare
   `VAR=value` prefix; no `reusePort` in `listen()` (fails with ENOTSUP on Windows).
-- Downloads stream yt-dlp stdout → ffmpeg stdin → response (192k CBR MP3, ID3v2.3 tags). CBR is
-  deliberate: a streamed VBR file has no seek header, so players show the wrong duration.
+- Downloads stream yt-dlp stdout → ffmpeg stdin → response: `bestaudio` (best free stream, usually
+  Opus ~130 kbps; no Premium/cookies) → 320k CBR MP3, LAME `-q 2`, ID3v2.3 tags. CBR is deliberate:
+  a streamed VBR file has no seek header, so players show the wrong duration.
 - The download route owns two child processes. It watches `res` "close" from the very start and
   kills both on cancel, and swallows EPIPE on `ffmpeg.stdin`. Unhandled stream errors or a missed
   kill mean a crashed server or processes left running forever, so re-test cancel paths after edits.

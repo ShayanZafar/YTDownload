@@ -22,13 +22,23 @@ export const YT_DLP_BASE_FLAGS = {
   jsRuntimes: "node",
 } as const;
 
-// Prefer WebM/Opus: Matroska streams cleanly through a pipe. M4A is the fallback.
-export const AUDIO_FORMAT = "bestaudio[ext=webm]/bestaudio";
+// The best audio stream YouTube serves without an account. yt-dlp ranks the
+// streams by quality: for most videos that's Opus at ~130 kbps (format 251),
+// with AAC (140) as the fallback, and it skips the volume-compressed "DRC"
+// variants. (Higher-bitrate streams exist only for YouTube Premium; we don't
+// use them.) Both Opus/WebM and AAC/M4A stream fine through the ffmpeg pipe.
+export const AUDIO_FORMAT = "bestaudio";
 
-// Constant bitrate on purpose: the MP3 is streamed while it's encoded, so ffmpeg
-// can't go back and write the seek header a VBR file needs — without it, players
-// show the wrong duration. With CBR, duration is simply size ÷ bitrate.
-export const MP3_BITRATE = "192k";
+// 320 kbps is the highest bitrate MP3 supports, so converting loses as little
+// as possible of the source. Constant bitrate on purpose: the MP3 is streamed
+// while it's encoded, so ffmpeg can't go back and write the seek header a VBR
+// file needs — without it, players show the wrong duration.
+export const MP3_BITRATE = "320k";
+
+// LAME's quality setting (0 = best/slowest … 9 = fastest). 2 is what LAME
+// recommends for high quality; 0 and 1 are over twice as slow again for no
+// audible gain. Encodes at roughly 15× real time on a typical PC.
+export const LAME_QUALITY = "2";
 
 // youtube-dl-exec's typings leave these out, but the module does export them.
 const ytDlpModule = youtubedl as unknown as {
@@ -55,9 +65,10 @@ export function ffmpegMp3Args({ title, artist }: Mp3Metadata): string[] {
   // Drop whatever tags the source container carried and write our own.
   args.push("-map_metadata", "-1", "-metadata", `title=${title}`);
   if (artist) args.push("-metadata", `artist=${artist}`);
+  args.push("-c:a", "libmp3lame", "-b:a", MP3_BITRATE, "-compression_level", LAME_QUALITY);
   // ID3v2.3 rather than ffmpeg's default v2.4: Windows Explorer and many car/phone
   // players only read v2.3 tags.
-  args.push("-c:a", "libmp3lame", "-b:a", MP3_BITRATE, "-id3v2_version", "3");
+  args.push("-id3v2_version", "3");
   args.push("-f", "mp3", "pipe:1");
   return args;
 }

@@ -80,7 +80,7 @@ The Express server and the Vite dev server are mounted on a single port (default
 
 1. The frontend calls `POST /api/video/info` with a YouTube URL.
 2. The backend validates the body with Zod, extracts the canonical video ID (`server/youtube-url.ts`), shells out to `yt-dlp` for metadata, and returns `{ title, thumbnail, url }`.
-3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), inserts a `downloads` row, then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream (WebM/Opus preferred) to stdout → `ffmpeg` reads it on stdin and writes a 192 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded.
+3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), inserts a `downloads` row, then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded.
 4. The frontend re-fetches `/api/downloads` to refresh the recent-extractions list.
 
 The visual versions of these flows live in [System Design](#system-design) below.
@@ -178,7 +178,7 @@ sequenceDiagram
   Y-->>S: { title, uploader }
   S->>DB: INSERT INTO downloads (url, title)
   Note over S,DB: DB error here is logged but swallowed —<br/>download still proceeds
-  S->>F: spawn ffmpeg (stdin → libmp3lame 192k → stdout)
+  S->>F: spawn ffmpeg (stdin → libmp3lame 320k → stdout)
   S->>Y: spawn yt-dlp (bestaudio, output=-)
   Y->>YT: HTTPS audio stream
   loop streaming
