@@ -79,3 +79,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   `npm install-scripts approve esbuild ffmpeg-static youtube-dl-exec` (they fetch esbuild, ffmpeg, yt-dlp).
 - Don't make Vite errors exit the process (the old Replit template did) — a refused request or a
   half-saved file would kill the dev server.
+
+## Workflow
+
+- Commit to `main` after each completed milestone (a feature, fix or cleanup that is done and
+  tested) without asking first, then push to `origin/main`. Keep each commit to one milestone with a
+  descriptive message; don't commit half-finished work.
