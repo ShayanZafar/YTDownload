@@ -80,7 +80,7 @@ The Express server and the Vite dev server are mounted on a single port (default
 
 1. The frontend calls `POST /api/video/info` with a YouTube URL.
 2. The backend validates the body with Zod, extracts the canonical video ID (`server/youtube-url.ts`), shells out to `yt-dlp` for metadata, and returns `{ title, thumbnail, url }`.
-3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), inserts a `downloads` row, then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded.
+3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), inserts a `downloads` row, then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies YouTube's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
 4. The frontend re-fetches `/api/downloads` to refresh the recent-extractions list.
 
 The visual versions of these flows live in [System Design](#system-design) below.
@@ -276,11 +276,11 @@ downloads {
 
 ## API Reference
 
-| Method | Path                  | Purpose                                                           |
-| ------ | --------------------- | ----------------------------------------------------------------- |
-| GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.               |
-| POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.             |
-| GET    | `/api/video/download` | Query: `?url=...`. Streams the extracted MP3 audio as a download. |
+| Method | Path                  | Purpose                                                                                                                                                                                                 |
+| ------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.                                                                                                                                                     |
+| POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.                                                                                                                                                   |
+| GET    | `/api/video/download` | Query: `?url=...&format=mp3\|original` (`mp3` is the default). Streams a 320 kbps MP3, or YouTube's original audio unconverted (`.opus` / `.m4a` / `.mka`), as a download. `400` for an unknown format. |
 
 All JSON errors follow the shape `{ message: string, field?: string }`.
 
@@ -468,7 +468,7 @@ These tools are installed and configured but have no shortcut script in `package
 
 ## Testing
 
-The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share a small helper (`tests/utils/mp3.ts`) that verifies a downloaded file is a real MP3 by inspecting its bytes: an optional ID3v2 tag followed by an MPEG Layer III frame header. (A WebM or M4A file renamed to `.mp3` fails it.) Fast, offline unit tests in `tests/unit/` cover URL parsing and the yt-dlp/ffmpeg arguments.
+The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing and the yt-dlp/ffmpeg arguments.
 
 ### Layout
 
@@ -482,7 +482,8 @@ tests/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
 │   └── audio.test.ts            # yt-dlp / ffmpeg argument builders
 └── utils/
-    └── mp3.ts                    # Shared MP3-header validator
+    ├── mp3.ts                    # MP3 validator
+    └── original-audio.ts         # .opus / .m4a / .mka validator
 ```
 
 Configuration files: `vitest.config.ts` and `playwright.config.ts`.
@@ -496,7 +497,9 @@ What it checks:
 1. An invalid URL returns HTTP 400 with a message.
 2. A real YouTube URL returns title + thumbnail metadata.
 3. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file is verified to be a real MP3 (ID3 tag + MPEG frame), not just an audio file with an `.mp3` name.
-4. The completed download is recorded in the `downloads` table and surfaces through `/api/downloads`.
+4. `?format=original` returns YouTube's audio unconverted, with a matching extension and content type, and the file is what its extension says.
+5. An unknown `format` is rejected with `400`.
+6. The completed download is recorded in the `downloads` table and surfaces through `/api/downloads`.
 
 Run it:
 
@@ -514,7 +517,8 @@ What it checks:
 
 1. The hero loads, the URL input accepts the test video URL, and clicking **Extract** renders a preview card with the title, thumbnail, and a download link.
 2. Clicking **Download Audio** triggers a browser download whose suggested filename ends in `.mp3` and whose saved bytes pass the MP3-header check.
-3. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+3. Turning on **Original audio** switches the link to `format=original`, and the download is a valid `.opus` (or `.m4a`/`.mka`) file.
+4. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
 One-time browser install (already done if you've run the suite before):
 

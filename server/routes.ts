@@ -6,12 +6,21 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { extractVideoId, pickThumbnail, type ThumbnailLike } from "./youtube-url";
-import { YT_DLP_BASE_FLAGS, spawnFfmpegMp3, spawnYtDlpAudio } from "./audio";
+import {
+  AUDIO_FORMAT,
+  YT_DLP_BASE_FLAGS,
+  audioOutput,
+  spawnFfmpeg,
+  spawnYtDlpAudio,
+} from "./audio";
 
 type YtDlpInfo = ThumbnailLike & {
   title?: string;
   uploader?: string;
   channel?: string;
+  // The audio stream yt-dlp picked (present when a format is requested).
+  format_id?: string;
+  acodec?: string;
 };
 
 const isRunning = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;
@@ -62,9 +71,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Streams a video's audio as an MP3 download: yt-dlp → ffmpeg → response.
-  // See server/audio.ts for the encoding details.
-  app.get("/api/video/download", async (req, res) => {
+  // Streams a video's audio as a download: yt-dlp → ffmpeg → response.
+  // `?format=mp3` (default) converts to MP3; `?format=original` keeps YouTube's
+  // own stream untouched. See server/audio.ts for the details.
+  app.get(api.video.download.path, async (req, res) => {
     // Watch for the browser going away (download cancelled, tab closed) from the
     // very start — the metadata lookup below can take 10–20s, and a cancel during
     // it must stop us from starting processes that would then block forever.
@@ -77,19 +87,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     });
 
     try {
-      const url = req.query.url as string;
-      const videoId = url ? extractVideoId(url) : null;
+      const query = api.video.download.query.safeParse(req.query);
+      if (!query.success) {
+        return res.status(400).send(query.error.errors[0].message);
+      }
+      const { url, format } = query.data;
+      const videoId = extractVideoId(url);
       if (!videoId) {
         return res.status(400).send("Invalid or missing YouTube URL");
       }
 
       const canonical = `https://www.youtube.com/watch?v=${videoId}`;
 
-      // Light metadata pass first so we have a filename and tags, and can fail
-      // early (with a clean 500) before opening a streaming response.
+      // Light metadata pass first, so we have a filename and tags, know which
+      // audio stream YouTube will give us, and can fail early (with a clean 500)
+      // before opening a streaming response.
       const info = (await youtubedl(canonical, {
         dumpSingleJson: true,
         skipDownload: true,
+        format: AUDIO_FORMAT,
         ...YT_DLP_BASE_FLAGS,
       })) as YtDlpInfo;
 
@@ -108,12 +124,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // These only go out with the first chunk of audio, so a failure before
       // then can still be turned into a proper error response (see below).
-      res.header("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
-      res.header("Content-Type", "audio/mpeg");
+      const output = audioOutput(
+        format,
+        { title, artist: info.uploader ?? info.channel },
+        info.acodec,
+      );
+      res.header("Content-Disposition", `attachment; filename="${safeTitle}.${output.ext}"`);
+      res.header("Content-Type", output.contentType);
 
       // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.
-      const ffmpeg = spawnFfmpegMp3({ title, artist: info.uploader ?? info.channel });
-      const ytdlp = spawnYtDlpAudio(canonical);
+      // yt-dlp is pinned to the stream the metadata pass picked, so the container
+      // chosen for "original" always matches the audio that arrives.
+      const ffmpeg = spawnFfmpeg(output.ffmpegArgs);
+      const ytdlp = spawnYtDlpAudio(canonical, info.format_id);
       stopPipeline = () => {
         for (const p of [ytdlp, ffmpeg]) if (isRunning(p)) p.kill();
       };

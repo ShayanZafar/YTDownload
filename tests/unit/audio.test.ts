@@ -3,9 +3,11 @@ import {
   AUDIO_FORMAT,
   LAME_QUALITY,
   MP3_BITRATE,
+  audioOutput,
   ffmpegMp3Args,
   ytDlpAudioArgs,
 } from "../../server/audio";
+import { buildDownloadUrl } from "../../shared/routes";
 
 describe("ytDlpAudioArgs", () => {
   const args = ytDlpAudioArgs("https://www.youtube.com/watch?v=jNQXAC9IVRw");
@@ -19,6 +21,62 @@ describe("ytDlpAudioArgs", () => {
 
   it("lets yt-dlp use Node as its JavaScript runtime", () => {
     expect(args[args.indexOf("--js-runtimes") + 1]).toBe("node");
+  });
+
+  it("can be pinned to a specific stream", () => {
+    const pinned = ytDlpAudioArgs("https://www.youtube.com/watch?v=jNQXAC9IVRw", "251");
+    expect(pinned[pinned.indexOf("--format") + 1]).toBe("251");
+  });
+});
+
+describe("audioOutput", () => {
+  const meta = { title: "Song", artist: "Someone" };
+  const valueAfter = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
+
+  it("mp3 → a converted .mp3", () => {
+    const out = audioOutput("mp3", meta, "opus");
+    expect(out).toMatchObject({ ext: "mp3", contentType: "audio/mpeg" });
+    expect(out.ffmpegArgs).toEqual(ffmpegMp3Args(meta));
+  });
+
+  it("original + Opus → Ogg Opus (.opus), audio copied without re-encoding", () => {
+    const out = audioOutput("original", meta, "opus");
+    expect(out).toMatchObject({ ext: "opus", contentType: "audio/ogg" });
+    expect(valueAfter(out.ffmpegArgs, "-c:a")).toBe("copy");
+    expect(valueAfter(out.ffmpegArgs, "-f")).toBe("opus");
+    expect(out.ffmpegArgs).not.toContain("libmp3lame");
+    expect(out.ffmpegArgs).toContain("title=Song");
+    expect(out.ffmpegArgs).toContain("artist=Someone");
+    expect(out.ffmpegArgs.at(-1)).toBe("pipe:1");
+  });
+
+  it("original + AAC → streamable .m4a, audio copied", () => {
+    const out = audioOutput("original", meta, "mp4a.40.2");
+    expect(out).toMatchObject({ ext: "m4a", contentType: "audio/mp4" });
+    expect(valueAfter(out.ffmpegArgs, "-c:a")).toBe("copy");
+    expect(valueAfter(out.ffmpegArgs, "-movflags")).toContain("empty_moov");
+  });
+
+  it("original + anything else → Matroska audio (.mka)", () => {
+    expect(audioOutput("original", meta, "vorbis").ext).toBe("mka");
+    expect(audioOutput("original", meta, undefined).ext).toBe("mka");
+  });
+});
+
+describe("buildDownloadUrl", () => {
+  const video = "https://www.youtube.com/watch?v=jNQXAC9IVRw&t=30";
+
+  it("defaults to MP3 without a format parameter", () => {
+    const url = new URL(buildDownloadUrl(video), "http://x");
+    expect(url.pathname).toBe("/api/video/download");
+    expect(url.searchParams.get("url")).toBe(video);
+    expect(url.searchParams.has("format")).toBe(false);
+  });
+
+  it("asks for the original audio when chosen", () => {
+    const url = new URL(buildDownloadUrl(video, "original"), "http://x");
+    expect(url.searchParams.get("format")).toBe("original");
+    expect(url.searchParams.get("url")).toBe(video);
   });
 });
 

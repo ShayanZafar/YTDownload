@@ -23,6 +23,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/storage.ts`, `server/db.ts` — Drizzle storage layer
 - `shared/` — schema and API contracts shared by client and server
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` is generated shadcn/ui
+- `client/src/hooks/use-download-format.ts` — the MP3 / Original audio toggle, remembered in localStorage
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube + DB), `tests/browser` (Playwright)
 
 ## Commands
@@ -57,8 +58,12 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - The download route owns two child processes. It watches `res` "close" from the very start and
   kills both on cancel, and swallows EPIPE on `ffmpeg.stdin`. Unhandled stream errors or a missed
   kill mean a crashed server or processes left running forever, so re-test cancel paths after edits.
-- Headers go out with the first MP3 chunk, so failures before any audio become a `502`; don't write
-  to `res` before the pipeline produces output.
+- `?format=original` (the "Original audio" toggle) skips re-encoding: ffmpeg `-c:a copy` into `.opus`
+  (Ogg) for Opus, fragmented `.m4a` for AAC, `.mka` otherwise. The metadata pass uses the same
+  `bestaudio` selector and the stream is pinned to its `format_id`, so container and codec match.
+  The format enum and `buildDownloadUrl()` live in `shared/routes.ts`.
+- Headers go out with the first chunk of audio, so failures before any audio become a `502`; don't
+  write to `res` before the pipeline produces output.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
   (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).

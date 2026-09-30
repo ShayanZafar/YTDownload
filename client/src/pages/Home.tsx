@@ -3,8 +3,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
 import { useVideoInfo, useRecentDownloads } from "@/hooks/use-youtube";
+import { useDownloadFormat } from "@/hooks/use-download-format";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { useQueryClient } from "@tanstack/react-query";
-import { api } from "@shared/routes";
+import { api, buildDownloadUrl } from "@shared/routes";
 import { formatDistanceToNow } from "date-fns";
 import {
   Search,
@@ -19,6 +22,8 @@ import {
 
 export default function Home() {
   const [url, setUrl] = useState("");
+  const [format, setFormat] = useDownloadFormat();
+  const isOriginal = format === "original";
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -57,7 +62,9 @@ export default function Home() {
 
     toast({
       title: "Download Started",
-      description: "Your audio file is being prepared.",
+      description: isOriginal
+        ? "Fetching the original audio from YouTube."
+        : "Converting to MP3 — the file will save as it's ready.",
     });
 
     // Invalidate history after a brief delay assuming the download successfully registered
@@ -155,19 +162,46 @@ export default function Home() {
                 </h3>
 
                 <p className="text-sm text-muted-foreground line-clamp-1">
-                  Ready to download as a 320 kbps MP3.
+                  {isOriginal
+                    ? "Ready to download the original audio."
+                    : "Ready to download as a 320 kbps MP3."}
                 </p>
 
                 <div className="mt-2 w-full">
                   <a
-                    href={`/api/video/download?url=${encodeURIComponent(videoInfo.url)}`}
+                    href={buildDownloadUrl(videoInfo.url, format)}
                     download
                     onClick={handleDownload}
                     className="w-full flex items-center justify-center gap-2 h-14 rounded-xl bg-foreground text-background font-semibold hover-elevate active-elevate-2 transition-all shadow-xl shadow-foreground/20"
                   >
                     <Download className="w-5 h-5" />
                     Download Audio
+                    <span className="font-normal opacity-60">
+                      · {isOriginal ? "Original" : "MP3"}
+                    </span>
                   </a>
+
+                  <div className="mt-3 flex items-start justify-between gap-4 rounded-xl border border-border px-4 py-3 text-left">
+                    <div>
+                      <Label
+                        htmlFor="original-audio"
+                        className="text-sm font-medium text-foreground cursor-pointer"
+                      >
+                        Original audio
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                        YouTube's own stream, not converted (usually .opus). Smaller and untouched;
+                        plays in VLC, but not on some phones and car stereos.
+                      </p>
+                    </div>
+                    <Switch
+                      id="original-audio"
+                      checked={isOriginal}
+                      onCheckedChange={(on) => setFormat(on ? "original" : "mp3")}
+                      className="mt-0.5"
+                    />
+                  </div>
+
                   <button
                     onClick={() => {
                       reset();
@@ -237,8 +271,9 @@ export default function Home() {
                       : "Recently"}
                   </span>
                   <a
-                    href={`/api/video/download?url=${encodeURIComponent(item.url)}`}
+                    href={buildDownloadUrl(item.url, format)}
                     download
+                    title={isOriginal ? "Redownload the original audio" : "Redownload as MP3"}
                     className="text-primary font-medium hover:underline flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
                   >
                     Redownload <Download className="w-3 h-3" />

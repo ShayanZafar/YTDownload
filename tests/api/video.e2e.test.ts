@@ -6,6 +6,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { verifyMp3File } from "../utils/mp3";
+import { verifyOriginalAudioFile } from "../utils/original-audio";
 
 // Stable, public, non-restricted test video:
 // "Me at the zoo" - the very first video uploaded to YouTube (April 2005).
@@ -65,13 +66,11 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(res.body.thumbnail).toMatch(/^https?:\/\//);
   });
 
-  it("downloads a valid MP3 audio file from /api/video/download", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-test-"));
-    const outPath = path.join(tmpDir, "out.mp3");
-
-    const res = await request(app)
+  // GET /api/video/download with the body collected as raw bytes.
+  const download = (query: Record<string, string>) =>
+    request(app)
       .get("/api/video/download")
-      .query({ url: TEST_VIDEO_URL })
+      .query(query)
       .buffer(true)
       .parse((response, callback) => {
         const chunks: Buffer[] = [];
@@ -79,6 +78,12 @@ describe("YouTube → MP3 end-to-end (API)", () => {
         response.on("end", () => callback(null, Buffer.concat(chunks)));
         response.on("error", (err) => callback(err, Buffer.alloc(0)));
       });
+
+  it("downloads a valid MP3 audio file from /api/video/download", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-test-"));
+    const outPath = path.join(tmpDir, "out.mp3");
+
+    const res = await download({ url: TEST_VIDEO_URL });
 
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toContain("audio/mpeg");
@@ -94,6 +99,37 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(verdict.size).toBeGreaterThan(10_000); // at least 10KB of audio
 
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("downloads YouTube's original audio, unconverted, with ?format=original", async () => {
+    const res = await download({ url: TEST_VIDEO_URL, format: "original" });
+    expect(res.status).toBe(200);
+
+    const disposition = String(res.headers["content-disposition"]);
+    const ext = /\.(opus|m4a|mka)"$/.exec(disposition)?.[1];
+    expect(ext, `unexpected filename in: ${disposition}`).toBeDefined();
+    const contentTypes: Record<string, string> = {
+      opus: "audio/ogg",
+      m4a: "audio/mp4",
+      mka: "audio/x-matroska",
+    };
+    expect(res.headers["content-type"]).toContain(contentTypes[ext!]);
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-test-"));
+    const outPath = path.join(tmpDir, `out.${ext}`);
+    await fs.writeFile(outPath, res.body as Buffer);
+    const verdict = await verifyOriginalAudioFile(outPath, ext!);
+    expect(verdict.isValid, `Not a valid .${ext}: ${verdict.reason}`).toBe(true);
+    expect(verdict.size).toBeGreaterThan(10_000);
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("rejects an unknown download format", async () => {
+    const res = await request(app)
+      .get("/api/video/download")
+      .query({ url: TEST_VIDEO_URL, format: "flac" });
+    expect(res.status).toBe(400);
+    expect(res.text).toMatch(/mp3.*original/);
   });
 
   it("logs the download in /api/downloads after a successful extraction", async () => {

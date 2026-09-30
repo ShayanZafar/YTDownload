@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { verifyMp3File } from "../utils/mp3";
+import { verifyOriginalAudioFile } from "../utils/original-audio";
 
 // Stable, public, non-restricted test video:
 // "Me at the zoo" - the very first video uploaded to YouTube (April 2005).
@@ -52,6 +53,38 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     ).toBe(true);
     expect(verdict.size).toBeGreaterThan(10_000);
 
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  test("the Original audio toggle downloads YouTube's own stream, unconverted", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.locator('input[type="url"]').fill(TEST_VIDEO_URL);
+    await page.locator('button[type="submit"]').click();
+
+    const downloadLink = page.locator('a[href^="/api/video/download"]', {
+      hasText: /download audio/i,
+    });
+    await expect(downloadLink).toBeVisible({ timeout: 60_000 });
+    await expect(downloadLink).toContainText(/mp3/i); // MP3 is the default
+
+    await page.getByRole("switch", { name: /original audio/i }).click();
+    await expect(downloadLink).toContainText(/original/i);
+    await expect(downloadLink).toHaveAttribute("href", /format=original/);
+
+    const downloadPromise = page.waitForEvent("download", { timeout: 90_000 });
+    await downloadLink.click();
+    const download = await downloadPromise;
+
+    const ext = /\.(opus|m4a|mka)$/i.exec(download.suggestedFilename())?.[1];
+    expect(ext, `unexpected filename: ${download.suggestedFilename()}`).toBeDefined();
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-browser-test-"));
+    const savedPath = path.join(tmpDir, download.suggestedFilename());
+    await download.saveAs(savedPath);
+    const verdict = await verifyOriginalAudioFile(savedPath, ext!.toLowerCase());
+    expect(verdict.isValid, `Not a valid .${ext}: ${verdict.reason}`).toBe(true);
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
