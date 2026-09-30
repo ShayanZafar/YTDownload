@@ -100,6 +100,48 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  test("user searches for a song, picks a result, and gets its download link", async ({ page }) => {
+    await page.goto("/");
+
+    // Link mode is the default; switch to searching by song.
+    const searchMode = page.getByRole("button", { name: /search by song/i });
+    await expect(searchMode).toHaveAttribute("aria-pressed", "false");
+    await searchMode.click();
+    await expect(searchMode).toHaveAttribute("aria-pressed", "true");
+
+    await page.getByRole("searchbox").fill("me at the zoo jawed");
+    await page.getByRole("button", { name: /^search$/i }).click();
+
+    const results = page.getByRole("region", { name: /search results/i });
+    const zoo = results.getByRole("button", { name: /^me at the zoo, by /i }).first();
+    await expect(zoo).toBeVisible({ timeout: 60_000 });
+    await zoo.click();
+    await expect(zoo).toHaveAttribute("aria-pressed", "true");
+
+    // The preview card offers the picked video for download.
+    const downloadLink = page.locator('a[href^="/api/video/download"]', {
+      hasText: /download audio/i,
+    });
+    await expect(downloadLink).toBeVisible();
+    await expect(downloadLink).toHaveAttribute("href", /jNQXAC9IVRw/);
+
+    // Search mode is remembered on reload.
+    await page.reload();
+    await expect(page.getByRole("button", { name: /search by song/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // A link typed into the search box is opened instead of searched for.
+    await page.getByRole("searchbox").fill(TEST_VIDEO_URL);
+    await page.getByRole("button", { name: /^search$/i }).click();
+    await expect(page.getByRole("button", { name: /paste a link/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(downloadLink).toBeVisible({ timeout: 60_000 });
+  });
+
   test("invalid URL surfaces a friendly error toast", async ({ page }) => {
     await page.goto("/");
 

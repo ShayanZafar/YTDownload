@@ -37,8 +37,8 @@ This document covers the project's architecture, local development setup, enviro
 ├── client/                    # Frontend React application
 │   ├── src/
 │   │   ├── components/        # UI components (the shadcn/ui ones the app uses, in components/ui)
-│   │   ├── hooks/             # Custom React hooks (e.g. use-youtube)
-│   │   ├── lib/               # Helpers (queryClient, utils)
+│   │   ├── hooks/             # Custom React hooks (API calls, remembered choices)
+│   │   ├── lib/               # Helpers (queryClient, utils, format: durations + link detection)
 │   │   ├── pages/             # Route pages (Home, NotFound)
 │   │   ├── App.tsx            # Top-level app & router
 │   │   ├── main.tsx           # React entry point
@@ -50,6 +50,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── host-check.ts          # Refuses requests for unknown host names (DNS rebinding)
 │   ├── routes.ts              # API route handlers
 │   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers
+│   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
 │   ├── audio.ts               # yt-dlp / ffmpeg arguments for the download pipeline
 │   ├── vite.ts                # Dev-only Vite middleware integration
@@ -76,13 +77,25 @@ The Express server and the Vite dev server are mounted on a single port (default
 
 ### Data flow
 
-1. The frontend calls `POST /api/video/info` with a YouTube URL.
-2. The backend validates the body with Zod, extracts the canonical video ID (`server/youtube-url.ts`), shells out to `yt-dlp` for metadata, and returns `{ title, thumbnail, url }`.
+1. The user either pastes a link or searches by song (the **Paste a link / Search by song** switch above the input, remembered in `localStorage`). Whatever the switch says, a link is opened and anything else is searched for (`asLink()` in `client/src/lib/format.ts`).
+   - **Link:** the frontend calls `POST /api/video/info`. The backend validates the body with Zod, extracts the canonical video ID (`server/youtube-url.ts`), shells out to `yt-dlp` for metadata, and returns `{ title, thumbnail, url }`.
+   - **Search:** the frontend calls `GET /api/search?q=...`. The backend runs `yt-dlp --flat-playlist --dump-single-json ytsearch12:<query>` (`server/search.ts`), which lists YouTube's top results in a few seconds without opening each video, then ranks them (below) and returns up to 8. Picking a result fills the same preview card with the result's own title and thumbnail — no second `yt-dlp` call.
+2. Both paths end at the preview card, which links to the download endpoint for that video.
 3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies YouTube's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
 4. Only when the download has fully succeeded — `yt-dlp` and `ffmpeg` both exited cleanly and the whole file was handed to the browser — does the server add it to the history. A cancelled or failed download is never recorded.
 5. Meanwhile the page polls `/api/downloads` every few seconds until the new entry appears, so the Recent Extractions list updates by itself (it gives up after 15 minutes, since a cancelled download never shows up).
 
 The visual versions of these flows live in [System Design](#system-design) below.
+
+### Search ranking
+
+Every YouTube upload of a song tops out at the same free audio quality (~130 kbps Opus), so the real difference between results is what the uploader started from. `rankResults()` in `server/search.ts` therefore keeps YouTube's relevance order, with three adjustments:
+
+- **Official uploads of the song move up** — YouTube's auto-generated `Artist - Topic` channels (made from label releases), VEVO channels, and verified channels named after the artist: the title starts with the channel's name (the artist's own channel posting "Artist - Song") or the channel is named in the search ("Queen Official" posting "Bohemian Rhapsody" when you searched "queen bohemian rhapsody"). A verified lyrics channel posting someone else's song, or a TV channel's "… performs Get Lucky | BBC", doesn't count.
+- **Results missing part of the search move down** — at least 75% of the search's words (ignoring filler like "official", "lyrics", "the") must appear in the title or channel name. This keeps another artist's song with the same name below the one you meant, and an official upload is only moved up when it matches.
+- **Other versions move down** — titles with words like live, performance, concert, cover, remix, karaoke, instrumental, sped up, slowed, nightcore, flashmob or trailer, unless the search asks for that kind of version ("… live" keeps live versions, performances and concerts where they are).
+
+Live streams, upcoming premieres, duplicates and non-video entries are dropped. The query reaches `yt-dlp` as a separate argument after `--`, never through a shell, so nothing typed in the search box can run as a command or be read as a `yt-dlp` option.
 
 ### Storage abstraction
 
@@ -90,7 +103,7 @@ The download history goes through the `IStorage` interface in `server/storage.ts
 
 ### Shared types & routes
 
-`shared/schema.ts` defines the Zod schema for a history entry and the `Download` / `InsertDownload` types; `shared/routes.ts` defines the API contract (paths, request/response schemas, the `mp3 | original` download formats, and `buildDownloadUrl()`). Both the client and the server import from `@shared/*`, so the contract stays in sync — the client validates `/api/downloads` responses against the same schema the server writes.
+`shared/schema.ts` defines the Zod schemas for a history entry and a search result, and the `Download` / `InsertDownload` / `SearchResult` types; `shared/routes.ts` defines the API contract (paths, request/response schemas, the `mp3 | original` download formats, and `buildDownloadUrl()`). Both the client and the server import from `@shared/*`, so the contract stays in sync — the client validates `/api/downloads` responses against the same schema the server writes.
 
 ---
 
@@ -153,6 +166,34 @@ sequenceDiagram
     U-->>S: best thumbnail URL
     S-->>C: 200 { title, thumbnail, url }
   end
+```
+
+### Sequence: song search (`GET /api/search`)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Browser
+  participant S as Express handler
+  participant R as search.ts
+  participant Y as yt-dlp subprocess
+  participant YT as YouTube
+
+  C->>S: GET /api/search?q=daft punk get lucky
+  S->>S: api.video.search.query.safeParse  // Zod: 1–200 chars
+  alt empty or too long
+    S-->>C: 400 { message, field: "q" }
+  else valid
+    S->>R: searchYouTube(q)
+    R->>Y: spawn yt-dlp --flat-playlist --dump-single-json -- "ytsearch12:q"
+    Y->>YT: HTTPS search
+    YT-->>Y: result list
+    Y-->>R: { entries: [{ id, title, channel, duration, channel_is_verified, live_status }] }
+    R->>R: rankResults(): official up, live/cover down, max 8
+    R-->>S: SearchResult[]
+    S-->>C: 200 { results }
+  end
+  Note over C: Picking a result shows it in the preview card —<br/>the download then works exactly like a pasted link
 ```
 
 ### Sequence: audio download (`GET /api/video/download`)
@@ -230,6 +271,8 @@ The interesting failures are at the boundaries with `yt-dlp`, YouTube, and the h
 | ---------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | Invalid / non-YouTube URL          | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                    |
 | Zod body validation fails (info)   | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                     |
+| Empty or too-long search           | `api.video.search.query`        | Rejected before `yt-dlp` runs                                                                                   | `400 { message, field: "q" }`                                |
+| `yt-dlp` search fails or hangs     | `searchYouTube(...)`            | Non-zero exit → its last error line; killed after 30 s                                                          | `500 { message }`, shown as a toast and inline error         |
 | `yt-dlp` metadata throws           | `youtubedl(...)` rejection      | Caught in handler                                                                                               | `500 { message }` (info) or `500` text (download)            |
 | Saving the history entry fails     | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error` (the file was already delivered)                                     | Nothing — file still downloads, history just won't show it   |
 | `yt-dlp` / `ffmpeg` fails to start | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`         |
@@ -283,6 +326,7 @@ None of these are problems today. They're listed here so the next person doesn't
 | Method | Path                  | Purpose                                                                                                                                                                                                 |
 | ------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.                                                                                                                                                     |
+| GET    | `/api/search`         | Query: `?q=...` (1–200 characters). Returns `{ results: [{ id, url, title, channel, duration, thumbnail, official }] }`, up to 8, official uploads first. `400` for an empty search.                    |
 | POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.                                                                                                                                                   |
 | GET    | `/api/video/download` | Query: `?url=...&format=mp3\|original` (`mp3` is the default). Streams a 320 kbps MP3, or YouTube's original audio unconverted (`.opus` / `.m4a` / `.mka`), as a download. `400` for an unknown format. |
 
@@ -416,7 +460,7 @@ These tools are installed and configured but have no shortcut script in `package
 
 ## Testing
 
-The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing and the yt-dlp/ffmpeg arguments.
+The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history file, the host check, and the UI's small formatting helpers.
 
 ### Layout
 
@@ -428,7 +472,11 @@ tests/
 │   └── download.spec.ts         # Playwright, drives the real UI in Chromium
 ├── unit/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
-│   └── audio.test.ts            # yt-dlp / ffmpeg argument builders
+│   ├── audio.test.ts            # yt-dlp / ffmpeg argument builders
+│   ├── search.test.ts           # search ranking + "official" detection
+│   ├── format.test.ts           # durations + link-vs-search detection
+│   ├── storage.test.ts          # history file
+│   └── host-check.test.ts       # DNS-rebinding protection
 └── utils/
     ├── mp3.ts                    # MP3 validator
     └── original-audio.ts         # .opus / .m4a / .mka validator
@@ -438,16 +486,17 @@ Configuration files: `vitest.config.ts` and `playwright.config.ts`.
 
 ### API end-to-end (Vitest + Supertest)
 
-Boots the real Express app in-process (no Vite, no port binding) and exercises `/api/video/info`, `/api/video/download`, and `/api/downloads` against a stable test video — the very first YouTube upload, "Me at the zoo" (`jNQXAC9IVRw`).
+Boots the real Express app in-process (no Vite, no port binding) and exercises `/api/video/info`, `/api/search`, `/api/video/download`, and `/api/downloads` against a stable test video — the very first YouTube upload, "Me at the zoo" (`jNQXAC9IVRw`).
 
 What it checks:
 
 1. An invalid URL returns HTTP 400 with a message.
 2. A real YouTube URL returns title + thumbnail metadata.
-3. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file is verified to be a real MP3 (ID3 tag + MPEG frame), not just an audio file with an `.mp3` name.
-4. `?format=original` returns YouTube's audio unconverted, with a matching extension and content type, and the file is what its extension says.
-5. An unknown `format` is rejected with `400`.
-6. The completed download is recorded in the history and surfaces through `/api/downloads`.
+3. Searching for "me at the zoo jawed" finds the test video, with a channel, duration and thumbnail; an empty search is rejected with `400`.
+4. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file is verified to be a real MP3 (ID3 tag + MPEG frame), not just an audio file with an `.mp3` name.
+5. `?format=original` returns YouTube's audio unconverted, with a matching extension and content type, and the file is what its extension says.
+6. An unknown `format` is rejected with `400`.
+7. The completed download is recorded in the history and surfaces through `/api/downloads`; a download cancelled part-way through is not.
 
 Run it:
 
@@ -466,7 +515,8 @@ What it checks:
 1. The hero loads, the URL input accepts the test video URL, and clicking **Extract** renders a preview card with the title, thumbnail, and a download link.
 2. Clicking **Download Audio** triggers a browser download whose suggested filename ends in `.mp3` and whose saved bytes pass the MP3-header check.
 3. Turning on **Original audio** switches the link to `format=original`, and the download is a valid `.opus` (or `.m4a`/`.mka`) file.
-4. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+4. Switching to **Search by song**, searching for the test video and picking it shows the preview with a download link for that video; the mode survives a reload, and a link typed into the search box is opened (the switch flips back to **Paste a link**).
+5. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
 One-time browser install (already done if you've run the suite before):
 
@@ -491,7 +541,7 @@ npx playwright show-report
 Both suites depend on `yt-dlp` (invoked via the `youtube-dl-exec` wrapper) being able to talk to YouTube's API. YouTube actively changes its internals — signed/encrypted stream URLs, PoToken (proof-of-origin token) requirements, format reshuffling — so any extractor can break between releases. yt-dlp is the most aggressively maintained option in this space, but you should still expect periodic breakage.
 
 - The negative tests (invalid URLs → 400) keep passing regardless — they prove the wiring still works.
-- The metadata test (`/api/video/info`) and the download test (`/api/video/download`) both depend on yt-dlp successfully reaching YouTube. If they start failing, first reinstall to get the latest bundled binary:
+- The metadata, search and download tests all depend on yt-dlp successfully reaching YouTube. If they start failing, first reinstall to get the latest bundled binary:
 
   ```bash
   # via the package manager — do not edit package.json directly

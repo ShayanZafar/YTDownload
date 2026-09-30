@@ -87,6 +87,35 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(res.body.thumbnail).toMatch(/^https?:\/\//);
   });
 
+  it("finds a video by searching for its title on /api/search", async () => {
+    const res = await request(app).get("/api/search").query({ q: "me at the zoo jawed" });
+
+    expect(res.status).toBe(200);
+    const results = res.body.results as { id: string; url: string; title: string }[];
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.length).toBeLessThanOrEqual(8);
+    const zoo = results.find((r) => r.id === "jNQXAC9IVRw");
+    expect(
+      zoo,
+      `"Me at the zoo" missing from: ${results.map((r) => r.title).join(" | ")}`,
+    ).toMatchObject({
+      url: TEST_VIDEO_URL,
+      title: expect.stringMatching(/me at the zoo/i),
+      channel: expect.any(String),
+      duration: expect.any(Number),
+      thumbnail: expect.stringMatching(/^https:\/\//),
+      official: expect.any(Boolean),
+    });
+  });
+
+  it("rejects an empty search", async () => {
+    for (const query of [{}, { q: "   " }]) {
+      const res = await request(app).get("/api/search").query(query);
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ message: expect.any(String), field: "q" });
+    }
+  });
+
   // GET /api/video/download with the body collected as raw bytes.
   const download = (query: Record<string, string>) =>
     request(app)

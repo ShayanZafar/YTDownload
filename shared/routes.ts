@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { downloadSchema } from "./schema";
+import { downloadSchema, searchResultSchema } from "./schema";
 
 /**
  * What the download endpoint can produce:
@@ -44,6 +44,25 @@ export const api = {
           thumbnail: z.string(),
           url: z.string(),
         }),
+        400: errorSchemas.validation,
+        500: errorSchemas.internal,
+      },
+    },
+    search: {
+      method: "GET" as const,
+      path: "/api/search" as const,
+      query: z.object({
+        q: z
+          .string({
+            required_error: "Type something to search for",
+            invalid_type_error: "Type something to search for",
+          })
+          .trim()
+          .min(1, "Type something to search for")
+          .max(200, "That search is too long"),
+      }),
+      responses: {
+        200: z.object({ results: z.array(searchResultSchema) }),
         400: errorSchemas.validation,
         500: errorSchemas.internal,
       },

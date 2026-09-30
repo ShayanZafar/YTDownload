@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { api } from "@shared/routes";
+import { api, errorSchemas } from "@shared/routes";
 import { z } from "zod";
 
 /**
@@ -25,6 +25,23 @@ export function useRecentDownloads(pollEveryMs: number | false = false) {
       if (!res.ok) throw new Error("Failed to fetch recent downloads");
       const data = await res.json();
       return parseWithLogging(api.downloads.list.responses[200], data, "downloads.list");
+    },
+  });
+}
+
+/** Song search: YouTube results for a text query, official uploads first. */
+export function useSongSearch() {
+  return useMutation({
+    mutationFn: async (query: string) => {
+      const res = await fetch(`${api.video.search.path}?${new URLSearchParams({ q: query })}`, {
+        credentials: "include",
+      });
+      const data: unknown = await res.json().catch(() => undefined);
+      if (!res.ok) {
+        const parsedError = errorSchemas.internal.safeParse(data);
+        throw new Error(parsedError.success ? parsedError.data.message : "Search failed");
+      }
+      return parseWithLogging(api.video.search.responses[200], data, "video.search").results;
     },
   });
 }

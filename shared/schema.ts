@@ -10,4 +10,19 @@ export const downloadSchema = z.object({
 });
 
 export type Download = z.infer<typeof downloadSchema>;
+
+/** One song search result (a YouTube video). */
+export const searchResultSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  title: z.string(),
+  channel: z.string(),
+  /** Length in seconds, when YouTube reports it. */
+  duration: z.number().nullable(),
+  thumbnail: z.string(),
+  /** Uploaded by the artist or label ("Artist - Topic", VEVO, or the artist's own verified channel). */
+  official: z.boolean(),
+});
+
+export type SearchResult = z.infer<typeof searchResultSchema>;
 export type InsertDownload = Pick<Download, "url" | "title">;

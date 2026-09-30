@@ -1,8 +1,9 @@
 # YouTube → audio extractor
 
-Small full-stack app: paste a YouTube URL, preview it, download the audio track. Developed and run
-locally on Windows (it also works on macOS/Linux). `README.md` is the user guide, `TECHNICAL.md` has
-architecture, setup and deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
+Small full-stack app: paste a YouTube URL (or search for a song), preview it, download the audio
+track. Developed and run locally on Windows (it also works on macOS/Linux). `README.md` is the user
+guide, `TECHNICAL.md` has architecture, setup and deployment details, and `LEARNING.md` maps the
+stack onto .NET concepts.
 
 ## Stack
 
@@ -19,22 +20,27 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/index.ts` — entry point; Vite middleware in dev, static `dist/public` in prod
 - `server/env.ts` — loads `.env`; imported first by `index.ts`
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
-- `server/routes.ts` — `POST /api/video/info`, `GET /api/video/download`, `GET /api/downloads`
+- `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/video/download`,
+  `GET /api/downloads`
+- `server/search.ts` — song search: `yt-dlp ytsearch12:` (flat, ~4s) + `rankResults()` (official
+  uploads up; partial matches and live/cover/remix down unless searched for); pure parts unit-tested
 - `server/audio.ts` — yt-dlp and ffmpeg arguments/spawning for the MP3 pipeline (unit-tested)
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 100 entries, queued writes, temp-file + rename
 - `shared/` — schema and API contracts shared by client and server
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
   components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
-- `client/src/hooks/use-download-format.ts` — the MP3 / Original audio toggle, remembered in localStorage
-- `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube + DB), `tests/browser` (Playwright)
+- `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
+  Original audio toggle (`use-download-format.ts`) and the Paste a link / Search by song switch
+- `client/src/lib/format.ts` — `formatDuration()` and `asLink()` (a link is opened, anything else searched)
+- `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser` (Playwright)
 
 ## Commands
 
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running)
 - `npm run check` — type-check
 - `npx vitest run tests/unit` — fast unit tests
-- `npx vitest run tests/api` — end-to-end API tests (needs DB + internet)
+- `npx vitest run tests/api` — end-to-end API tests (needs internet)
 - `npx playwright test` — browser tests (starts `npm run dev` if nothing is on port 5000)
 - `npx eslint .` and `npx prettier --check .`
 - `npm run build`, then `npm start` — production bundle
@@ -68,6 +74,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   response `finish`es) — never on cancel or failure. The page polls `/api/downloads` until it appears.
 - Headers go out with the first chunk of audio, so failures before any audio become a `502`; don't
   write to `res` before the pipeline produces output.
+- Search spawns yt-dlp directly (no shell) with the query after `--`; keep it that way so search
+  text can't become a command or a yt-dlp option. Results carry their own title/thumbnail, so
+  picking one needs no `/api/video/info` call.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
   (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).
