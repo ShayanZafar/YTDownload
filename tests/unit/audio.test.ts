@@ -6,6 +6,8 @@ import {
   audioOutput,
   ffmpegMp3Args,
   ytDlpAudioArgs,
+  ytDlpErrorLine,
+  ytDlpFailure,
 } from "../../server/audio";
 import { buildDownloadUrl } from "../../shared/routes";
 
@@ -114,5 +116,29 @@ describe("ffmpegMp3Args", () => {
   it("passes titles as a single argument (no shell quoting involved)", () => {
     const args = ffmpegMp3Args({ title: 'a "quoted" & piped | title' });
     expect(args).toContain('title=a "quoted" & piped | title');
+  });
+});
+
+describe("yt-dlp errors", () => {
+  it("keeps just the reason from yt-dlp's last ERROR line", () => {
+    const stderr = [
+      "WARNING: [youtube] Falling back to generic n function search",
+      "ERROR: [youtube] jNQXAC9IVRw: Sign in to confirm you’re not a bot",
+      "",
+    ].join("\r\n");
+    expect(ytDlpErrorLine(stderr)).toBe("Sign in to confirm you’re not a bot");
+    expect(ytDlpErrorLine("ERROR: Unable to download webpage: timed out")).toBe(
+      "Unable to download webpage: timed out",
+    );
+    expect(ytDlpErrorLine("some other problem")).toBe("some other problem");
+    expect(ytDlpErrorLine("")).toBe("");
+  });
+
+  it("explains a failed youtube-dl-exec call from yt-dlp's output, not the command line", () => {
+    const failure = Object.assign(new Error("The command spawned as:\n\n  `yt-dlp …`"), {
+      stderr: "ERROR: [youtube] abcdefghijk: Video unavailable",
+    });
+    expect(ytDlpFailure(failure)).toBe("Video unavailable");
+    expect(ytDlpFailure(new Error("spawn yt-dlp ENOENT"))).toBe("spawn yt-dlp ENOENT");
   });
 });

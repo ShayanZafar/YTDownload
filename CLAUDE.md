@@ -9,8 +9,9 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 
 - **Frontend:** React 18 + Vite, wouter (routing), TanStack Query, shadcn/ui, Tailwind — `client/`
 - **Backend:** Express 5 + TypeScript (`tsx` in dev, esbuild bundle in prod) — `server/`
-- **Storage:** no database — the download history is `data/history.json` (git-ignored), written by
-  `server/storage.ts`; entry shape in `shared/schema.ts`
+- **Storage:** no database — the download history is `data/history.json` and the settings are
+  `data/settings.json` (both git-ignored), written by `server/storage.ts` and `server/settings.ts`;
+  shapes in `shared/schema.ts`
 - **YouTube:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads into
   `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed)
 - **MP3:** `ffmpeg-static` (ffmpeg fetched by `npm install`; `FFMPEG_BIN` overrides it)
@@ -21,13 +22,22 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `server/env.ts` — loads `.env`; imported first by `index.ts`
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/video/download`,
-  `GET /api/downloads`
+  `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`, `GET /api/downloads`
+- `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
+  browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
+  replacing a file (`Song (1).mp3`); streams JSON-line progress (`saveEventSchema`)
+- `server/settings.ts` — app settings (the Save to folder) in `data/settings.json` (`SETTINGS_FILE`)
+- `server/folders.ts` — the folder browser (list/make folders, quick links — on Windows from the
+  registry's User Shell Folders — writable check, `createNewFile()`, `availablePath()`)
+- `server/local-only.ts` — `localOnly()`: folder routes answer only loopback, same-origin, JSON
+  requests with no proxy headers; `GET /api/settings` says `canSaveToFolder: false` elsewhere
 - `server/search.ts` — song search: `yt-dlp ytsearch12:` (flat, ~4s) + `rankResults()` (official
   uploads up; partial matches and live/cover/remix down unless searched for); pure parts unit-tested
 - `server/spotify.ts` — Spotify song links (`/api/search?q=<link>`): title/artists/length from the
   public embed page `open.spotify.com/embed/track/<id>` (`__NEXT_DATA__`, no account or API key),
   then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first)
-- `server/audio.ts` — yt-dlp and ffmpeg arguments/spawning for the MP3 pipeline (unit-tested)
+- `server/audio.ts` — yt-dlp and ffmpeg arguments (unit-tested), `fetchAudioInfo()` (metadata pass)
+  and `startAudioPipeline()` (yt-dlp → ffmpeg, used by both download and save), yt-dlp error lines
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename
@@ -39,17 +49,18 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
   Original audio toggle (`use-download-format.ts`) and the Paste a link / Search by song switch
 - `client/src/lib/format.ts` — `formatDuration()`, `isSpotifyLink()` and `asLink()` (a YouTube link
   is opened; a Spotify link or anything else is searched)
-- `client/src/lib/save-folder.ts` + `hooks/use-save-folder.ts` — the "Save to" folder (File System
-  Access API, Chrome/Edge desktop only): picked folder handle kept in IndexedDB, downloads fetched
-  and streamed into it (`saveToFolder()`); unsupported browsers keep plain `<a download>` links.
-  The setting itself (`components/save-to-setting.tsx`) sits under the search box, always visible;
-  unsupported browsers get a note there instead of a missing setting
+- `client/src/lib/save-to-folder.ts` + `hooks/use-save-settings.ts` — the page's side of "Save to":
+  settings/folder API calls and `saveOnServer()` (reads the progress lines with `getReader()`).
+  `components/folder-picker.tsx` is the folder browser (native `<dialog>`, portalled to `<body>`);
+  `components/save-to-setting.tsx` sits under the search box, always visible — other devices get
+  a note there instead
 - `client/src/components/renameable-title.tsx` — the preview card's title; click it to rename the
   file (sent as `?name=` on the download link); Enter keeps, Esc cancels
 - `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
   Extractions in the browser: word/partial matching, autocomplete suggestions (combobox; picking one
   filters to that exact title), date ranges, highlighting; the list pages 25 at a time
-- `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser` (Playwright)
+- `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
+  (Playwright, in Chrome and WebKit; Firefox on request)
 
 ## Commands
 
@@ -57,16 +68,18 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `npm run check` — type-check
 - `npx vitest run tests/unit` — fast unit tests
 - `npx vitest run tests/api` — end-to-end API tests (needs internet)
-- `npx playwright test` — browser tests in the installed Google Chrome (starts its own server on port 5099)
+- `npx playwright test` — browser tests in installed Google Chrome and WebKit (starts its own server on
+  port 5099); `--project=chrome|webkit` for one; `E2E_BROWSERS=chrome,webkit,firefox` adds Firefox.
+  First time: `npx playwright install chrome webkit firefox`
 - `npx eslint .` and `npx prettier --check .`
 - `npm run build`, then `npm start` — production bundle
 
 ## Local setup (Windows)
 
-- No setup beyond `npm install`. `.env` is optional (`PORT`, `HOST`, `HISTORY_FILE`, `FFMPEG_BIN`);
-  shell variables override it. Delete `data/history.json` to clear the history.
-- The API tests point `HISTORY_FILE` at a temp folder, and the Playwright config starts its own server on
-  port 5099 with a temp history, so tests never touch the real history.
+- No setup beyond `npm install`. `.env` is optional (`PORT`, `HOST`, `HISTORY_FILE`, `SETTINGS_FILE`,
+  `FFMPEG_BIN`); shell variables override it. Delete `data/history.json` to clear the history.
+- The API tests point `HISTORY_FILE`/`SETTINGS_FILE` at a temp folder, and the Playwright config starts its
+  own server on port 5099 with a temp history and settings, so tests never touch the real ones.
 - In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
 - `npm install` / `npm rebuild youtube-dl-exec` need `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment:
   the package's installer demands Python 3.9+ even though Windows' `yt-dlp.exe` doesn't use it.
@@ -79,9 +92,10 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - Downloads stream yt-dlp stdout → ffmpeg stdin → response: `bestaudio` (best free stream, usually
   Opus ~130 kbps; no Premium/cookies) → 320k CBR MP3, LAME `-q 2`, ID3v2.3 tags. CBR is deliberate:
   a streamed VBR file has no seek header, so players show the wrong duration.
-- The download route owns two child processes. It watches `res` "close" from the very start and
-  kills both on cancel, and swallows EPIPE on `ffmpeg.stdin`. Unhandled stream errors or a missed
-  kill mean a crashed server or processes left running forever, so re-test cancel paths after edits.
+- A download (or save) owns two child processes, started by `startAudioPipeline()` in `audio.ts`,
+  which swallows EPIPE on `ffmpeg.stdin` and kills yt-dlp once ffmpeg is done. The routes watch `res`
+  "close" from the very start and call `stop()` on cancel. Unhandled stream errors or a missed kill
+  mean a crashed server or processes left running forever, so re-test cancel paths after edits.
 - `?format=original` (the "Original audio" toggle) skips re-encoding: ffmpeg `-c:a copy` into `.opus`
   (Ogg) for Opus, fragmented `.m4a` for AAC, `.mka` otherwise. The metadata pass uses the same
   `bestaudio` selector and the stream is pinned to its `format_id`, so container and codec match.
@@ -101,13 +115,18 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - Spotify: only the validated 22-character track id goes into the one embed URL we fetch (no
   user-controlled URLs are ever fetched). If Spotify links break, check the embed page's
   `__NEXT_DATA__` shape first (`parseEmbedPage()`); the cloud workspace can't reach Spotify.
-- "Save to" folder: `ensureWriteAccess()` must run straight from the click (permission prompts need
-  a user gesture). Download links stay real `<a href download>` elements — `startDownload()` only
-  calls `preventDefault()` when a folder is set — so the default path and its tests are unchanged.
-  The Playwright test fakes `showDirectoryPicker` with an OPFS folder (native dialogs can't be driven)
-  and runs in the installed Google Chrome (`channel: "chrome"`): Playwright's headless shell crashes
-  restoring a folder handle from IndexedDB, and on Windows 10 the downloaded full Chromium (Chrome for
-  Testing) fails to start with a side-by-side configuration error.
+- "Save to" folder: download links stay real `<a href download>` elements — `startDownload()` only
+  calls `preventDefault()` (and `POST /api/video/save` instead) when a folder is set — so the default
+  path and its tests are unchanged. Anything that reads or writes the user's disk must sit behind
+  `localOnly()`. A save's lifetime is its connection: aborting the fetch (Cancel, closing the tab)
+  kills the pipeline and deletes the `.part` file, so re-test cancel paths after edits here too.
+- Every feature must work in current Chrome, Edge, Firefox and Safari (build target: Safari 16+). No
+  browser-only APIs; no regex lookbehind (Safari < 16.4 throws) and no `for await` over streams —
+  `tests/unit/browser-support.test.ts` checks. Playwright runs every test in Chrome and WebKit, and
+  in Firefox only via `E2E_BROWSERS`: on this Windows 10 PC Playwright's Firefox and Chromium builds
+  fail to start (side-by-side configuration error), which is also why Chrome is the installed one
+  (`channel: "chrome"`). The installed Firefox works over BiDi (`channel: "moz-firefox"`), but BiDi's
+  `fill()` doesn't reach React inputs — type with `pressSequentially()` there.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
   (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).

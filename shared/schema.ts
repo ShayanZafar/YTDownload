@@ -46,3 +46,47 @@ export const spotifyTrackSchema = z.object({
 
 export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
 export type InsertDownload = Pick<Download, "url" | "title">;
+
+/** The "Save to" setting as the page sees it. */
+export const saveSettingsSchema = z.object({
+  /** Folder downloads are saved into, or null for the browser's own downloads. */
+  saveFolder: z.string().nullable(),
+  /**
+   * Can this browser save into a folder? Only one on the computer running the
+   * app can — elsewhere (e.g. a phone) downloads go to that device instead.
+   */
+  canSaveToFolder: z.boolean(),
+});
+
+export type SaveSettings = z.infer<typeof saveSettingsSchema>;
+
+export const folderEntrySchema = z.object({ name: z.string(), path: z.string() });
+export type FolderEntry = z.infer<typeof folderEntrySchema>;
+
+/** One folder's contents in the folder browser, plus quick links to common places. */
+export const folderListingSchema = z.object({
+  path: z.string(),
+  parent: z.string().nullable(),
+  folders: z.array(folderEntrySchema),
+  places: z.array(folderEntrySchema),
+});
+
+export type FolderListing = z.infer<typeof folderListingSchema>;
+
+/**
+ * Saving into the folder streams one JSON object per line: progress while the
+ * audio arrives, then "done" (or "error").
+ */
+export const saveEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("progress"), bytes: z.number() }),
+  z.object({
+    type: z.literal("done"),
+    fileName: z.string(),
+    folder: z.string(),
+    path: z.string(),
+    bytes: z.number(),
+  }),
+  z.object({ type: z.literal("error"), message: z.string() }),
+]);
+
+export type SaveEvent = z.infer<typeof saveEventSchema>;

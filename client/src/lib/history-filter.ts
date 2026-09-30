@@ -163,14 +163,39 @@ export function highlightParts(text: string, query: string): { text: string; mat
     .sort((a, b) => b.length - a.length); // longest first, so "oceans" wins over "o"
   if (words.length === 0) return [{ text, match: false }];
 
-  const patterns = words.map((word) => {
+  // Where each word appears, as [start, end) ranges. No lookbehind in these
+  // patterns: Safari only understands it from version 16.4.
+  const ranges: [number, number][] = [];
+  for (const word of words) {
     const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const atWordStart = `(?<=^|[^\\p{L}\\p{N}])${escaped}`;
-    return new RegExp(atWordStart, "iu").test(text) ? atWordStart : escaped;
-  });
-  // Splitting on a pattern with one capture group puts the matches at the odd positions.
-  return text
-    .split(new RegExp(`(${patterns.join("|")})`, "iu"))
-    .map((part, i) => ({ text: part, match: i % 2 === 1 }))
-    .filter((part) => part.text !== "");
+    const atWordStart = rangesOf(new RegExp(`(^|[^\\p{L}\\p{N}])(${escaped})`, "giu"), text);
+    ranges.push(
+      ...(atWordStart.length > 0
+        ? atWordStart
+        : rangesOf(new RegExp(`()(${escaped})`, "giu"), text)),
+    );
+  }
+
+  // Leftmost first, and the longest where two start together; skip overlaps.
+  ranges.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+  const parts: { text: string; match: boolean }[] = [];
+  let at = 0;
+  for (const [start, end] of ranges) {
+    if (start < at) continue;
+    if (start > at) parts.push({ text: text.slice(at, start), match: false });
+    parts.push({ text: text.slice(start, end), match: true });
+    at = end;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), match: false });
+  return parts;
+}
+
+/** Where `pattern` (global, word in its second group) matches: the word's [start, end). */
+function rangesOf(pattern: RegExp, text: string): [number, number][] {
+  const found: [number, number][] = [];
+  for (let m = pattern.exec(text); m; m = pattern.exec(text)) {
+    const start = m.index + m[1].length;
+    found.push([start, start + m[2].length]);
+  }
+  return found;
 }

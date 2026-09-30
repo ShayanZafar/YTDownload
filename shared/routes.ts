@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { downloadSchema, searchResultSchema, spotifyTrackSchema } from "./schema";
+import {
+  downloadSchema,
+  folderEntrySchema,
+  folderListingSchema,
+  saveSettingsSchema,
+  searchResultSchema,
+  spotifyTrackSchema,
+} from "./schema";
 
 /**
  * What the download endpoint can produce:
@@ -86,6 +93,53 @@ export const api = {
         /** File name to save as (without extension); the video's title if left out. */
         name: z.string().max(300, "That file name is too long").optional(),
       }),
+    },
+    /** Download straight into the "Save to" folder (streams progress as JSON lines). */
+    save: {
+      method: "POST" as const,
+      path: "/api/video/save" as const,
+      input: z.object({
+        url: z.string().min(1, "Missing YouTube URL"),
+        format: z
+          .enum(downloadFormats, {
+            errorMap: () => ({ message: 'format must be "mp3" or "original"' }),
+          })
+          .default("mp3"),
+        name: z.string().max(300, "That file name is too long").optional(),
+      }),
+    },
+  },
+  settings: {
+    get: {
+      method: "GET" as const,
+      path: "/api/settings" as const,
+      responses: { 200: saveSettingsSchema },
+    },
+    update: {
+      method: "PUT" as const,
+      path: "/api/settings" as const,
+      input: z.object({
+        /** A folder on this computer, or null to go back to the browser's downloads. */
+        saveFolder: z.string().max(1000).nullable(),
+      }),
+      responses: { 200: saveSettingsSchema, 400: errorSchemas.validation },
+    },
+  },
+  folders: {
+    list: {
+      method: "GET" as const,
+      path: "/api/folders" as const,
+      query: z.object({ path: z.string().max(1000).optional() }),
+      responses: { 200: folderListingSchema },
+    },
+    create: {
+      method: "POST" as const,
+      path: "/api/folders" as const,
+      input: z.object({
+        parent: z.string().min(1).max(1000),
+        name: z.string().min(1, "Give the new folder a name").max(200),
+      }),
+      responses: { 201: folderEntrySchema },
     },
   },
 };

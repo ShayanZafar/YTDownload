@@ -169,4 +169,10 @@ describe("highlightParts", () => {
   it("treats regex characters as plain text", () => {
     expect(marked("What? (Remix) [2019]", "(remix) [2019")).toBe("What? ([Remix]) [[2019]]");
   });
+
+  it("marks every place a word appears, in any script", () => {
+    expect(marked("Ocean to ocean", "ocean")).toBe("[Ocean] to [ocean]");
+    expect(marked("LiSA - 紅蓮華", "紅蓮")).toBe("LiSA - [紅蓮]華");
+    expect(marked("Progression", "gre")).toBe("Pro[gre]ssion"); // only inside a word: still marked
+  });
 });

@@ -53,12 +53,18 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first
 │   ├── spotify.ts             # Spotify song links → title, artists, length (public embed page)
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
-│   ├── audio.ts               # yt-dlp / ffmpeg arguments for the download pipeline
+│   ├── audio.ts               # yt-dlp / ffmpeg: arguments, metadata pass, the download pipeline
+│   ├── save.ts                # POST /api/video/save — saves a download straight into the Save to folder
+│   ├── settings.ts            # App settings (the Save to folder) → data/settings.json
+│   ├── folders.ts             # The folder browser: list and make folders, quick links, new files
+│   ├── local-only.ts          # Folder routes answer only this computer's own page
+│   ├── retry-when-busy.ts     # Retries a rename/delete Windows briefly blocks (antivirus, indexer)
 │   ├── vite.ts                # Dev-only Vite middleware integration
 │   └── static.ts              # Production static-file serving
 ├── shared/                    # Code shared between client & server
-│   ├── schema.ts              # Zod schema + types for history entries
-│   └── routes.ts              # Typed API route definitions
+│   ├── schema.ts              # Zod schemas + types (history, search, settings, folders, save progress)
+│   ├── routes.ts              # Typed API route definitions
+│   └── filename.ts            # safeFileName(): download names Windows accepts
 ├── script/
 │   └── build.ts               # Production build script
 ├── tailwind.config.ts         # Tailwind theme configuration
@@ -87,7 +93,7 @@ The Express server and the Vite dev server are mounted on a single port (default
    The file is named after the video's title, or after `?name=` when you renamed it in the preview card (click the title — `client/src/components/renameable-title.tsx`). Either way the name goes through `safeFileName()` in `shared/filename.ts` — used by the page too, so the name shown is the name saved: characters Windows can't store are replaced (`/` → `-`, `:` and `|` → `-`, `?*"<>` dropped), a typed `.mp3` is dropped, reserved names like `CON` get a `_`, and it's capped at 150 characters. Accents and non-Latin letters are kept: `res.attachment()` sends both an ASCII `filename` and a UTF-8 `filename*` (RFC 6266), which browsers prefer. The ID3 tags and the history keep the video's title.
 4. Only when the download has fully succeeded — `yt-dlp` and `ffmpeg` both exited cleanly and the whole file was handed to the browser — does the server add it to the history. A cancelled or failed download is never recorded.
 5. Meanwhile the page polls `/api/downloads` every few seconds until the new entry appears, so the Recent Extractions list updates by itself (it gives up after 15 minutes, since a cancelled download never shows up).
-6. With a **Save to** folder chosen, step 3 happens in the page instead of the browser's download manager — see [Save to a folder](#save-to-a-folder).
+6. With a **Save to** folder chosen, step 3 changes: the app saves the file into that folder itself (`POST /api/video/save`) instead of handing it to the browser's download manager — see [Save to a folder](#save-to-a-folder).
 
 The visual versions of these flows live in [System Design](#system-design) below.
 
@@ -114,15 +120,23 @@ The response adds `spotify: { id, url, title, artists, duration, thumbnail }`; t
 
 ### Save to a folder
 
-Browsers always put downloads in their own downloads folder; a page can't change that. What Chrome and Edge (desktop) do offer is the File System Access API, so `client/src/lib/save-folder.ts` saves into a folder you pick instead:
+Browsers always put downloads in their own downloads folder, and a web page can't choose another one (only Chrome and Edge have an API for it). But the app runs on your computer, so it saves the file itself — which works the same in every browser:
 
-1. The setting sits just below the search box (`client/src/components/save-to-setting.tsx`), always visible, so it can be set before a video is opened and applies to **Redownload** too. **Choose folder** calls `showDirectoryPicker({ mode: "readwrite", startIn: "music" })` — the normal Windows folder dialog. The page only ever sees the folder's name, never its path.
-2. The folder handle is kept in IndexedDB (`yt-audio` → `settings` → `save-folder`; a handle can't go in `localStorage`) and restored on the next visit. Before writing, `ensureWriteAccess()` checks permission and, if needed, asks — which must happen straight from a click, so it's the first thing the Download click does. Chrome asks once per visit, or never again if you pick **Allow on every visit**.
-3. Download clicks are intercepted (`startDownload()` in `Home.tsx`): the page `fetch`es the same `/api/video/download` URL and streams the body through a byte counter into `FileSystemFileHandle.createWritable()`. The name comes from the response's `Content-Disposition`, made safe for Windows, and an existing file is never overwritten (`Song (1).mp3`, like browsers do).
-4. **Cancel** aborts the `fetch`, which closes the connection — the server sees the same "close" as a cancelled browser download, kills `yt-dlp`/`ffmpeg`, and records nothing. The browser writes to a temporary file and only swaps it in when the stream closes cleanly, and `saveToFolder()` removes the empty placeholder file, so a cancelled or failed download leaves nothing behind.
-5. The server needs no changes: it records the history entry when the response finishes, exactly as for a normal download.
+1. **The setting** sits just below the search box (`client/src/components/save-to-setting.tsx`), always visible, so it can be set before a video is opened and applies to **Redownload** too. It's stored by the app in `data/settings.json` (or wherever `SETTINGS_FILE` points; `server/settings.ts`), so every browser on this computer shares it. `GET /api/settings` returns `{ saveFolder, canSaveToFolder }`.
+2. **Choosing the folder:** browsers can't show a folder picker that tells the page a real path, so **Choose folder** opens the app's own folder browser (`client/src/components/folder-picker.tsx`, a native `<dialog>`). `GET /api/folders?path=…` lists a folder's subfolders (hidden and system ones left out) plus quick links — Music, Downloads, Desktop, Documents, Home and, on Windows, each drive (`server/folders.ts`). On Windows the quick links come from the registry (`User Shell Folders`), so a Music folder moved to another drive or into OneDrive is found where it really is. You can click through folders, type or paste a path (Explorer's **Copy as path** quotes are fine), or make a **New folder** (`POST /api/folders`). **Use** sends `PUT /api/settings`, which checks the folder by writing a tiny file there and deleting it — on Windows the permission check alone misses folders only an administrator can change, like `C:\` or Program Files.
+3. **Saving:** download clicks are intercepted (`startDownload()` in `Home.tsx`): instead of following the link, the page calls `POST /api/video/save` with `{ url, format, name }` (`saveOnServer()` in `client/src/lib/save-to-folder.ts`). The server (`server/save.ts`) runs the same yt-dlp → ffmpeg pipeline as a download (`startAudioPipeline()` in `server/audio.ts`), but into `<name>.<ext>.part` in the folder — created with the `wx` flag, so the system itself refuses to open an existing file. When both processes have exited cleanly, it's renamed to `<name>.<ext>` — or `<name> (1).<ext>` and so on; an existing file is never replaced (picking the name and renaming happen one save at a time) — and added to the history.
+4. **Progress:** once the first audio arrives, the reply is a stream of JSON lines (`application/x-ndjson`, `saveEventSchema` in `shared/schema.ts`): `{"type":"progress","bytes":…}` every quarter-second, then `{"type":"done","fileName","folder","path","bytes"}` or `{"type":"error","message"}`. Problems found before that — no folder chosen (`409`), the folder is gone (`404`) or off-limits (`403`), YouTube refused the video (`502`) — are a normal JSON error. The page reads the stream with `getReader()` (Safari can't loop over it with `for await`) and shows the size on the button.
+5. **Cancel** aborts the `fetch`. The server sees the connection close, kills `yt-dlp`/`ffmpeg`, deletes the `.part` file and records nothing — the same as a cancelled browser download. Leaving or reloading the page does the same, so while a save is running the page asks first (`beforeunload`).
 
-Browsers without `showDirectoryPicker` (Firefox, Safari, phones — and any page not on `localhost` or HTTPS, since the API needs a secure context) show a short note in place of the setting, and downloads stay plain `<a download>` links. The Playwright test can't click through a native folder dialog, so it replaces `showDirectoryPicker` with one that returns a folder in the browser's private storage (OPFS) — a real folder handle, written to the same way — and reads the saved MP3 back out of it.
+**Only a browser on this computer can use it** (`server/local-only.ts`). The folder routes (`PUT /api/settings`, `/api/folders`, `/api/video/save`) answer only requests from a loopback address with no proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`), and only from the app's own page: another website's request is labelled `Sec-Fetch-Site: cross-site` (or carries a different `Origin`) and gets a `403`, and changes must be sent as JSON, which a plain HTML form on another site can't do (`415`). With `HOST=0.0.0.0`, a phone on your Wi-Fi gets `canSaveToFolder: false`: the setting is replaced by a note, and its downloads go to the phone as usual.
+
+### Works in every browser
+
+Every feature works in current Chrome, Edge, Firefox and Safari, on computers and phones (Save to only on the computer running the app, as above). The build targets Vite's default baseline — Chrome/Edge 107+, Firefox 104+, Safari 16+ — so:
+
+- The page uses no browser-specific APIs; the one it used to (File System Access, for Save to) was replaced by the app saving the file itself. The folder browser is a native `<dialog>`, which all of them have.
+- Syntax that older Safari rejects at run time is kept out, and `tests/unit/browser-support.test.ts` checks the page's code for it: no regular-expression lookbehind (`(?<=…)`, Safari 16.4+ — history highlighting used one, which would have crashed the page in Safari 16.0–16.3) and no `for await` over a stream (Safari can't).
+- The Playwright tests run in Chrome (Blink) and WebKit (Safari's engine), and in Firefox (Gecko) when asked — see [Browser end-to-end](#browser-end-to-end-playwright).
 
 ### Searching the history
 
@@ -139,9 +153,11 @@ The request log (`server/index.ts`) prints at most 200 characters of each JSON r
 
 The download history goes through the `IStorage` interface in `server/storage.ts`; routes only call `storage.getDownloads()` and `storage.createDownload(...)`. The implementation, `FileStorage`, keeps the newest 1,000 entries (about 200 KB) in `data/history.json` (or wherever `HISTORY_FILE` points). Writes are queued one at a time and go through a temp file + rename, so simultaneous downloads can't clobber each other and a crash can't leave half a file. If the file is ever unreadable, it's copied aside as `history.json.broken-<timestamp>` and a fresh list starts — the history is a convenience, so it should never break downloads.
 
+The settings (just the **Save to** folder so far) work the same way in `server/settings.ts`: `data/settings.json` (or `SETTINGS_FILE`), queued writes, temp file + rename; a missing or damaged file simply means the defaults. On Windows, antivirus or the search indexer can hold a brand-new file for a moment, so renames and deletes go through `retryWhenBusy()` (`server/retry-when-busy.ts`).
+
 ### Shared types & routes
 
-`shared/schema.ts` defines the Zod schemas for a history entry and a search result, and the `Download` / `InsertDownload` / `SearchResult` types; `shared/routes.ts` defines the API contract (paths, request/response schemas, the `mp3 | original` download formats, and `buildDownloadUrl()`). Both the client and the server import from `@shared/*`, so the contract stays in sync — the client validates `/api/downloads` responses against the same schema the server writes.
+`shared/schema.ts` defines the Zod schemas for a history entry, a search result, the **Save to** setting, folder listings and save progress events, with their types (`Download`, `SearchResult`, `SaveSettings`, `FolderListing`, `SaveEvent`, …); `shared/routes.ts` defines the API contract (paths, request/response schemas, the `mp3 | original` download formats, and `buildDownloadUrl()`). Both the client and the server import from `@shared/*`, so the contract stays in sync — the client validates `/api/downloads` responses against the same schema the server writes.
 
 ---
 
@@ -161,6 +177,8 @@ flowchart LR
   Ffmpeg["ffmpeg subprocess<br/>(spawned per download)"]
   YouTube["YouTube<br/>(public API + CDN)"]
   History[("data/history.json<br/>download history")]
+  Settings[("data/settings.json<br/>Save to folder")]
+  Folder[("Save to folder<br/>(your Music folder, say)")]
 
   Browser -- "HTTPS<br/>/api/* + static assets" --> Node
   Node -- "spawn" --> YtDlp
@@ -168,6 +186,8 @@ flowchart LR
   Ffmpeg -- "MP3 (stdout)" --> Node
   YtDlp -- "HTTPS" --> YouTube
   Node -- "read / write" --> History
+  Node -- "read / write" --> Settings
+  Node -- "writes downloads<br/>(Save to only)" --> Folder
 ```
 
 Key things this picture makes obvious:
@@ -281,6 +301,44 @@ sequenceDiagram
   end
 ```
 
+### Sequence: saving into the folder (`POST /api/video/save`)
+
+The same pipeline as a download, written to a file in the **Save to** folder instead of the response; the response carries progress.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Page
+  participant S as save.ts
+  participant P as yt-dlp → ffmpeg
+  participant D as Save to folder
+  participant H as history.json
+
+  C->>S: POST /api/video/save { url, format, name }
+  S->>S: localOnly · validate · settings.get() · folder writable?
+  alt no folder / folder gone / not allowed
+    S-->>C: 409 / 404 / 403 { message }
+  else ok
+    S->>P: metadata pass, then start the pipeline
+    S->>D: create "Song.mp3.part" (wx: never an existing file)
+    loop audio arriving
+      P-->>D: MP3 bytes
+      S-->>C: {"type":"progress","bytes":…} (every 250 ms)
+    end
+    alt both processes exit 0
+      S->>D: rename to "Song.mp3" (or "Song (1).mp3"…)
+      S->>H: add entry (url, title)
+      S-->>C: {"type":"done","fileName","folder","path","bytes"}
+    else failure part-way
+      S->>D: delete the .part file
+      S-->>C: {"type":"error","message"}
+    else page cancels (connection closes)
+      S->>P: kill both
+      S->>D: delete the .part file
+    end
+  end
+```
+
 ### Deployment topology
 
 If you ever host it (on a VPS, Render, Fly.io, a Docker container, …), the picture collapses to one server process with a few outbound dependencies.
@@ -297,30 +355,33 @@ flowchart LR
 
 Notes on this topology:
 
-- The only persistent data is `data/history.json`. In a container, put it on a persistent volume (or point `HISTORY_FILE` at one), or accept that the history resets on redeploy.
+- The only persistent data is `data/history.json` and `data/settings.json`. In a container, put them on a persistent volume (or point `HISTORY_FILE` / `SETTINGS_FILE` at one), or accept that they reset on redeploy.
 - `yt-dlp` and `ffmpeg` are fetched into `node_modules/` at install time (`youtube-dl-exec/bin/`, `ffmpeg-static/`), so nothing is installed at runtime. On Linux we **do** need Python 3.10+ in the container, because the Linux yt-dlp build is a Python script.
-- There's no object storage. Audio is streamed from `yt-dlp` through `ffmpeg` to the client and never touches disk on the server.
+- There's no object storage. Audio is streamed from `yt-dlp` through `ffmpeg` to the client and never touches disk on the server — except with **Save to**, which only a browser on the same computer can use.
 
 ### Failure modes
 
 The interesting failures are at the boundaries with `yt-dlp`, YouTube, and the history file. The table below is the truth as of the code in `server/routes.ts`:
 
-| Failure                             | Where surfaced                  | Behavior                                                                                                        | User sees                                                    |
-| ----------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Invalid / non-YouTube URL           | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                    |
-| Zod body validation fails (info)    | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                     |
-| Empty or too-long search            | `api.video.search.query`        | Rejected before `yt-dlp` runs                                                                                   | `400 { message, field: "q" }`                                |
-| `yt-dlp` search fails or hangs      | `searchYouTube(...)`            | Non-zero exit → its last error line; killed after 30 s                                                          | `500 { message }`, shown as a toast and inline error         |
-| Spotify album/playlist/short link   | `parseSpotifyLink(...)`         | Rejected before any request                                                                                     | `400` explaining that only song links work                   |
-| Spotify unreachable or page changed | `fetchSpotifyTrack(...)`        | 10 s timeout; missing song → `404`, anything else → `502`                                                       | `404` / `502 { message }`, shown as a toast and inline error |
-| `yt-dlp` metadata throws            | `youtubedl(...)` rejection      | Caught in handler                                                                                               | `500 { message }` (info) or `500` text (download)            |
-| Saving the history entry fails      | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error` (the file was already delivered)                                     | Nothing — file still downloads, history just won't show it   |
-| `yt-dlp` / `ffmpeg` fails to start  | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`         |
-| `yt-dlp` fails before any audio     | `ffmpeg` exits with no output   | Headers not sent yet, so the handler can still answer with an error                                             | `502` with yt-dlp's error message (browser: failed download) |
-| `yt-dlp` exits non-zero mid-stream  | `ytdlp.on("close")`             | stderr logged; `ffmpeg` sees end-of-input, flushes and exits; response ended                                    | Shorter but valid MP3                                        |
-| Client cancels the download         | `res.on("close")`               | Watched from the start of the request: nothing is spawned if it's already gone, otherwise both processes killed | n/a (user already left)                                      |
-| History file can't be read          | `storage.getDownloads()`        | Unparseable file is copied aside and a fresh list starts; other read errors → caught in handler                 | Empty history, or `500 Failed to fetch downloads`            |
-| YouTube blocks the request          | `yt-dlp` exits non-zero         | Same as the two rows above — that's why we keep `yt-dlp` itself up to date, not roll our own scraping logic     | `502`, or a shortened file if it happens mid-stream          |
+| Failure                             | Where surfaced                  | Behavior                                                                                                        | User sees                                                     |
+| ----------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Invalid / non-YouTube URL           | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                     |
+| Zod body validation fails (info)    | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                      |
+| Empty or too-long search            | `api.video.search.query`        | Rejected before `yt-dlp` runs                                                                                   | `400 { message, field: "q" }`                                 |
+| `yt-dlp` search fails or hangs      | `searchYouTube(...)`            | Non-zero exit → its last error line; killed after 30 s                                                          | `500 { message }`, shown as a toast and inline error          |
+| Spotify album/playlist/short link   | `parseSpotifyLink(...)`         | Rejected before any request                                                                                     | `400` explaining that only song links work                    |
+| Spotify unreachable or page changed | `fetchSpotifyTrack(...)`        | 10 s timeout; missing song → `404`, anything else → `502`                                                       | `404` / `502 { message }`, shown as a toast and inline error  |
+| `yt-dlp` metadata throws            | `youtubedl(...)` rejection      | Caught in handler; the message is yt-dlp's own error line (`ytDlpFailure()`), not the command line              | `500 { message }` (info), `500` text (download), `502` (save) |
+| Saving the history entry fails      | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error` (the file was already delivered)                                     | Nothing — file still downloads, history just won't show it    |
+| `yt-dlp` / `ffmpeg` fails to start  | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`          |
+| `yt-dlp` fails before any audio     | `ffmpeg` exits with no output   | Headers not sent yet, so the handler can still answer with an error                                             | `502` with yt-dlp's error message (browser: failed download)  |
+| `yt-dlp` exits non-zero mid-stream  | `ytdlp.on("close")`             | stderr logged; `ffmpeg` sees end-of-input, flushes and exits; response ended                                    | Shorter but valid MP3                                         |
+| Client cancels the download         | `res.on("close")`               | Watched from the start of the request: nothing is spawned if it's already gone, otherwise both processes killed | n/a (user already left)                                       |
+| History file can't be read          | `storage.getDownloads()`        | Unparseable file is copied aside and a fresh list starts; other read errors → caught in handler                 | Empty history, or `500 Failed to fetch downloads`             |
+| Save to folder gone or off-limits   | `assertWritableFolder(...)`     | Checked before any work starts; the page reloads the setting                                                    | `404` / `403 { message }`, shown as a toast                   |
+| Disk full or write fails mid-save   | `.part` file stream `error`     | Pipeline stopped, `.part` file deleted, nothing recorded                                                        | An `error` line (`507` if it happens before any audio)        |
+| Save cancelled, or the page closes  | `res.on("close")` in `save.ts`  | Both processes killed, `.part` file deleted, nothing recorded                                                   | "Download cancelled"                                          |
+| YouTube blocks the request          | `yt-dlp` exits non-zero         | Same as the two rows above — that's why we keep `yt-dlp` itself up to date, not roll our own scraping logic     | `502`, or a shortened file if it happens mid-stream           |
 
 The deliberate design choice worth flagging: **a history problem never breaks downloads**. The download history is best-effort, the audio extraction is the product. We chose this over the alternative (fail the download if we can't log it), because the user's download is what they came for.
 
@@ -368,6 +429,11 @@ None of these are problems today. They're listed here so the next person doesn't
 | GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.                                                                                                                                                                                                                                                                                                                                                                                     |
 | GET    | `/api/search`         | Query: `?q=...` (1–200 characters). Returns `{ results: [{ id, url, title, channel, duration, thumbnail, official }] }`, up to 8, official uploads first. `400` for an empty search. If `q` is a Spotify song link, also returns `spotify: { id, url, title, artists, duration, thumbnail }` and ranks same-length uploads first; `400` for other Spotify links, `404` for a song Spotify doesn't have, `502` if Spotify can't be read. |
 | POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.                                                                                                                                                                                                                                                                                                                                                                                   |
+| POST   | `/api/video/save`     | Body: `{ url, format?, name? }`, as for a download. Saves the audio into the **Save to** folder and streams JSON lines: `progress` (bytes so far), then `done` (`fileName`, `folder`, `path`, `bytes`) or `error` (`message`). `409` if no folder is chosen, `404`/`403` if it's gone or off-limits, `502` if YouTube refuses the video. This computer's own page only.                                                                 |
+| GET    | `/api/settings`       | Returns `{ saveFolder, canSaveToFolder }` — the **Save to** folder (or `null` for the browser's downloads), and whether this browser can use one (only on the computer running the app).                                                                                                                                                                                                                                                |
+| PUT    | `/api/settings`       | Body: `{ saveFolder }` — a full folder path, or `null`. The folder must exist and be writable (checked by writing a small file there). This computer's own page only.                                                                                                                                                                                                                                                                   |
+| GET    | `/api/folders`        | Query: `?path=...` (optional; defaults to the **Save to** folder, else Music, else home). Returns `{ path, parent, folders: [{ name, path }], places: [{ name, path }] }`. This computer's own page only.                                                                                                                                                                                                                               |
+| POST   | `/api/folders`        | Body: `{ parent, name }`. Makes a folder (the name cleaned up like a file name); `201 { name, path }`, `409` if it exists. This computer's own page only.                                                                                                                                                                                                                                                                               |
 | GET    | `/api/video/download` | Query: `?url=...&format=mp3\|original&name=...` (`mp3` is the default; `name` is an optional file name without extension, otherwise the video's title). Streams a 320 kbps MP3, or YouTube's original audio unconverted (`.opus` / `.m4a` / `.mka`), as a download. `400` for an unknown format.                                                                                                                                        |
 
 All JSON errors follow the shape `{ message: string, field?: string }`.
@@ -383,6 +449,7 @@ All JSON errors follow the shape `{ message: string, field?: string }`.
 | `HOST`          | No       | Interface to listen on (default `127.0.0.1`; use `0.0.0.0` in a container).                                       |
 | `ALLOWED_HOSTS` | No       | Extra host names to answer to, comma-separated (e.g. a Tailscale name). `localhost` and IP addresses always work. |
 | `HISTORY_FILE`  | No       | Where to keep the download history (default `data/history.json`).                                                 |
+| `SETTINGS_FILE` | No       | Where to keep the app's settings — the **Save to** folder (default `data/settings.json`).                         |
 | `FFMPEG_BIN`    | No       | Use this ffmpeg instead of the one `ffmpeg-static` downloads.                                                     |
 
 None are required. To set any, put them in a `.env` file in the project root (copy `.env.example`); `server/env.ts` loads it on startup. Variables already set in your shell or hosting platform take priority over the file.
@@ -500,7 +567,7 @@ These tools are installed and configured but have no shortcut script in `package
 
 ## Testing
 
-The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history file, the host check, and the UI's small formatting helpers.
+The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history and settings files, the folder browser, the host and local-only checks, the page's save client, and the UI's small formatting helpers.
 
 ### Layout
 
@@ -509,7 +576,7 @@ tests/
 ├── api/
 │   └── video.e2e.test.ts        # Vitest + Supertest, hits Express directly
 ├── browser/
-│   └── download.spec.ts         # Playwright, drives the real UI in headless Google Chrome
+│   └── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request)
 ├── unit/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
 │   ├── audio.test.ts            # yt-dlp / ffmpeg argument builders
@@ -519,6 +586,11 @@ tests/
 │   ├── spotify.test.ts          # Spotify links, embed-page parsing, title clean-up, same-length ranking
 │   ├── format.test.ts           # durations + link-vs-search detection
 │   ├── storage.test.ts          # history file
+│   ├── settings.test.ts         # settings file (the Save to folder)
+│   ├── folders.test.ts          # folder browser, never-overwrite file names, Windows quick links
+│   ├── local-only.test.ts       # folder routes: this computer's own page only
+│   ├── save-to-folder.test.ts   # the page's save client: progress lines, errors, cancel
+│   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
 │   └── host-check.test.ts       # DNS-rebinding protection
 └── utils/
     ├── mp3.ts                    # MP3 validator
@@ -529,7 +601,7 @@ Configuration files: `vitest.config.ts` and `playwright.config.ts`.
 
 ### API end-to-end (Vitest + Supertest)
 
-Boots the real Express app in-process (no Vite, no port binding) and exercises `/api/video/info`, `/api/search`, `/api/video/download`, and `/api/downloads` against a stable test video — the very first YouTube upload, "Me at the zoo" (`jNQXAC9IVRw`).
+Boots the real Express app in-process (no Vite, no port binding) and exercises `/api/video/info`, `/api/search`, `/api/video/download`, `/api/video/save`, `/api/settings`, `/api/folders` and `/api/downloads` against a stable test video — the very first YouTube upload, "Me at the zoo" (`jNQXAC9IVRw`).
 
 What it checks:
 
@@ -540,6 +612,7 @@ What it checks:
 5. `?format=original` returns YouTube's audio unconverted, with a matching extension and content type, and the file is what its extension says.
 6. An unknown `format` is rejected with `400`.
 7. The completed download is recorded in the history and surfaces through `/api/downloads`; a download cancelled part-way through is not.
+8. **Save to** (into a temporary folder): nothing is saved before a folder is chosen (`409`); a missing folder, a file and a relative path are refused; folders can be listed and made. A save streams progress and then `done`, and leaves a valid MP3 (and nothing else) in the folder, recorded in the history; the same name again becomes "… (1).mp3", accents and all; original audio saves too; a video YouTube won't give is a `502` with yt-dlp's reason and leaves nothing behind; a save cancelled part-way leaves no file and no history entry; and requests marked as coming from another website, or sent as a form instead of JSON, are refused.
 
 Run it:
 
@@ -547,11 +620,11 @@ Run it:
 npx vitest run tests/api
 ```
 
-The tests point `HISTORY_FILE` at a temporary folder, so they never add entries to your real history.
+The tests point `HISTORY_FILE` and `SETTINGS_FILE` at a temporary folder, so they never touch your real history or settings.
 
 ### Browser end-to-end (Playwright)
 
-Drives headless Google Chrome against the app. `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 and a throwaway `HISTORY_FILE`, so the tests never add entries to your real history and can run while your own copy is up on port 5000. Set `E2E_BASE_URL` to test an already-running server instead.
+Drives the app in real browser engines, headless, running every test in each: your installed Google Chrome and WebKit (the engine behind Safari) by default, plus Firefox if you ask for it (below). `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 with a throwaway `HISTORY_FILE` and `SETTINGS_FILE`, so the tests never touch your real history or settings and can run while your own copy is up on port 5000. Set `E2E_BASE_URL` to test an already-running server instead.
 
 What it checks:
 
@@ -560,22 +633,25 @@ What it checks:
 3. Turning on **Original audio** switches the link to `format=original`, and the download is a valid `.opus` (or `.m4a`/`.mka`) file.
 4. Switching to **Search by song**, searching for the test video and picking it shows the preview with a download link for that video; the mode survives a reload, and a link typed into the search box is opened (the switch flips back to **Paste a link**).
 5. Pasting a Spotify song link into the link box switches to **Search by song**, shows the song from Spotify, and picks the best YouTube match with a download link ready.
-6. **Save to** can be set before opening a video. With it set to a folder (backed by OPFS in the test), cancelling a download leaves the folder empty; a full download lands there as a valid MP3, not through the browser's download manager, appears in the history, and the folder is still chosen after a reload.
-7. In a browser without a folder picker (simulated by removing `showDirectoryPicker`), a note explains where downloads go and there's no **Choose folder** button.
+6. **Save to** can be set before opening a video, in the app's folder browser: typing a temporary folder's path opens it, **New folder** makes "Test Music" there and opens it, and **Use** chooses it. Cancelling a download leaves the folder empty; a full download lands there on disk as a valid MP3 — not through the browser's download manager — and appears in the history; the folder is still chosen after a reload; and the **×** goes back to the browser's downloads.
+7. A browser on another device (simulated by answering `/api/settings` with `canSaveToFolder: false`) gets a note saying where downloads go, and no **Choose folder** button.
 8. Recent Extractions (with a made-up history served in place of `/api/downloads`): 25 entries at a time with **Show more**; typing narrows the list word by word; suggestions list each song once with its download count; picking one with the keyboard shows exactly that song; the date filters work alone and with a search; and "Clear search and filters" resets everything.
 9. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
-The tests run in your installed Google Chrome, in headless mode (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in. Playwright's own lightweight "headless shell" can't be used: it crashes when a page restores a saved **Save to** folder from IndexedDB (real Chrome and Edge are fine). If Chrome isn't installed:
+The Chrome tests use your installed Google Chrome (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in; WebKit and Firefox are Playwright's own builds. Install whichever are missing (free, one time):
 
 ```bash
-npx playwright install chrome
+npx playwright install chrome webkit firefox
 ```
 
 Run it:
 
 ```bash
-npx playwright test
+npx playwright test                   # Chrome and WebKit
+npx playwright test --project=webkit  # just one
 ```
+
+`E2E_BROWSERS` picks the engines (default `chrome,webkit`); in PowerShell, `$env:E2E_BROWSERS="chrome,webkit,firefox"; npx playwright test` adds Firefox. It's opt-in because on some Windows 10 PCs Playwright's Firefox build — like its Chromium (Chrome for Testing) — won't start: Windows reports "the application has failed to start because its side-by-side configuration is incorrect" (the event log names a missing private assembly, `mozglue` for Firefox). Your installed Firefox can still be driven through WebDriver BiDi (`channel: "moz-firefox"`), but Playwright's BiDi support is experimental: its `fill()` doesn't reach React's inputs, so the suite can't use it as it stands.
 
 Open the HTML report after a run:
 
@@ -618,7 +694,7 @@ Running `npm run build` produces:
 ### Running in production
 
 ```bash
-npm start   # optionally with PORT / HOST / HISTORY_FILE set
+npm start   # optionally with PORT / HOST / HISTORY_FILE / SETTINGS_FILE set
 ```
 
 The Express server serves the static client from `dist/public` and the API from the same port.
@@ -629,7 +705,7 @@ The app is a standard Node.js service and runs on any provider that supports lon
 
 A typical flow:
 
-1. Set environment variables on the host: `HOST=0.0.0.0`, `PORT` if the platform requires one, and `HISTORY_FILE` on a persistent volume if you want the history to survive redeploys.
+1. Set environment variables on the host: `HOST=0.0.0.0`, `PORT` if the platform requires one, and `HISTORY_FILE` / `SETTINGS_FILE` on a persistent volume if you want the history and settings to survive redeploys. (**Save to** only works for a browser on the machine running the app, so on a server it's simply not offered.)
 2. Build the project: `npm ci && npm run build`.
 3. Start the server: `npm start`.
 4. Point your domain / load balancer at the host's exposed port.
@@ -648,19 +724,22 @@ A typical flow:
 - **Dev server errors don't stop the server:** Vite errors (a refused file, a syntax error while editing) are logged and shown in the browser overlay.
 - The download endpoint accepts only validated YouTube URLs (`extractVideoId` in `server/youtube-url.ts`, which rebuilds a canonical URL from the video ID) and sanitises the filename before sending it back in `Content-Disposition`. yt-dlp and ffmpeg are run with argument arrays, never through a shell.
 - Request bodies and query strings are validated with Zod schemas before use.
+- **Folder access (`server/local-only.ts`):** the routes that browse folders and save into them only answer this computer's own page — a loopback address with no proxy headers, a same-origin request (`Sec-Fetch-Site`/`Origin`), and changes sent as JSON. Another website you visit can't make the app list your folders or write files, and neither can another device on your network. See [Save to a folder](#save-to-a-folder).
 - The server listens on `127.0.0.1` by default and has no authentication; see the note under [Deploying](#deploying).
 
 ---
 
 ## Troubleshooting
 
-| Symptom                                           | Likely cause / fix                                                                                                                                         |
-| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tsx: not found` when running `npm run dev`       | `node_modules` is incomplete. Run `npm install` again.                                                                                                     |
-| `Invalid YouTube URL` on the info endpoint        | The URL isn't a recognised YouTube link. Try a standard `youtube.com/watch?v=...` link.                                                                    |
-| Download fails with "Couldn't download the audio" | YouTube refused the stream (age-restricted, region-locked, removed, or bot check). Try another video, or update yt-dlp with `npm rebuild youtube-dl-exec`. |
-| Port `5000` already in use                        | Set `PORT=<other-port>` in the environment, then restart.                                                                                                  |
-| History list is empty after an update             | Check for `data/history.json.broken-*` — the old file couldn't be read and was set aside.                                                                  |
+| Symptom                                           | Likely cause / fix                                                                                                                                                                                                                                               |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tsx: not found` when running `npm run dev`       | `node_modules` is incomplete. Run `npm install` again.                                                                                                                                                                                                           |
+| `Invalid YouTube URL` on the info endpoint        | The URL isn't a recognised YouTube link. Try a standard `youtube.com/watch?v=...` link.                                                                                                                                                                          |
+| Download fails with "Couldn't download the audio" | YouTube refused the stream (age-restricted, region-locked, removed, or bot check). Try another video, or update yt-dlp with `npm rebuild youtube-dl-exec`.                                                                                                       |
+| Port `5000` already in use                        | Set `PORT=<other-port>` in the environment, then restart.                                                                                                                                                                                                        |
+| History list is empty after an update             | Check for `data/history.json.broken-*` — the old file couldn't be read and was set aside.                                                                                                                                                                        |
+| "The app isn't allowed to save into …"            | Windows keeps some folders for administrators (the top of `C:\`, Program Files, Windows). Pick a folder inside your user folder, like Music. If it's a folder you own, Windows Security's **Controlled folder access** may be blocking Node.js — allow it there. |
+| **Save to** isn't offered, just a note            | You're on another device (or going through a proxy or tunnel). Open the app at `http://localhost:5000` on the computer running it.                                                                                                                               |
 
 ---
 

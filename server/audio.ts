@@ -2,15 +2,18 @@
  * Turning a YouTube video into a downloadable audio stream.
  *
  *   yt-dlp  ──(best audio on stdout)──▶  ffmpeg  ──(file on stdout)──▶  HTTP response
+ *                                                                   or a file in the "Save to" folder
  *
  * ffmpeg either converts to MP3 (the default) or, for "original", just
  * repackages YouTube's own stream into a proper audio file without re-encoding.
- * Nothing touches disk, and the browser's download starts with the first chunk.
+ * No temporary files: the browser's download starts with the first chunk (or,
+ * with a "Save to" folder, the file is written as the audio arrives).
  * Both binaries are fetched by `npm install` (youtube-dl-exec → yt-dlp,
  * ffmpeg-static → ffmpeg), so there's nothing to install system-wide.
  * Set FFMPEG_BIN to use a different ffmpeg.
  */
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
+import type { Readable } from "stream";
 import ffmpegStatic from "ffmpeg-static";
 import youtubedl from "youtube-dl-exec";
 import type { DownloadFormat } from "@shared/routes";
@@ -144,4 +147,158 @@ export function spawnFfmpeg(args: string[]) {
     throw new Error("No bundled ffmpeg for this platform. Set FFMPEG_BIN to an ffmpeg binary.");
   }
   return spawn(FFMPEG_PATH, args, { windowsHide: true });
+}
+
+/** What the metadata pass found out about a video's audio. */
+export type AudioInfo = AudioMetadata & {
+  /** The audio stream yt-dlp picked; the download is pinned to it. */
+  formatId?: string;
+  /** Its codec ("opus", "mp4a.40.2"…), which decides the "original" file type. */
+  acodec?: string;
+};
+
+/**
+ * The light metadata pass before a download: the title and artist (for the
+ * file name and tags) and which audio stream YouTube will give us. A video
+ * that can't be downloaded fails here, before any response or file is started.
+ */
+export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
+  let info: {
+    title?: string;
+    uploader?: string;
+    channel?: string;
+    format_id?: string;
+    acodec?: string;
+  };
+  try {
+    info = (await youtubedl(videoUrl, {
+      dumpSingleJson: true,
+      skipDownload: true,
+      format: AUDIO_FORMAT,
+      ...YT_DLP_BASE_FLAGS,
+    })) as typeof info;
+  } catch (err) {
+    throw new Error(ytDlpFailure(err), { cause: err });
+  }
+  return {
+    title: info.title ?? "audio",
+    artist: info.uploader ?? info.channel,
+    formatId: info.format_id,
+    acodec: info.acodec,
+  };
+}
+
+export type AudioPipeline = {
+  /** The finished audio file as ffmpeg writes it — pipe it to the response or a file. */
+  audio: Readable;
+  /** Kills both processes (a cancelled download). Safe to call at any time. */
+  stop: () => void;
+  /**
+   * Settles once both processes have exited: `ok` when both succeeded; if not,
+   * `reason` is the most useful error line (yt-dlp's, when it has one).
+   */
+  finished: Promise<{ ok: boolean; reason: string }>;
+};
+
+/**
+ * Starts yt-dlp → ffmpeg for one video: yt-dlp fetches the audio stream the
+ * metadata pass picked, and ffmpeg turns it into the file `ffmpegArgs` describe.
+ */
+export function startAudioPipeline(
+  videoUrl: string,
+  formatId: string | undefined,
+  ffmpegArgs: string[],
+): AudioPipeline {
+  // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.
+  const ffmpeg = spawnFfmpeg(ffmpegArgs);
+  const ytdlp = spawnYtDlpAudio(videoUrl, formatId);
+  const stop = () => {
+    for (const p of [ytdlp, ffmpeg]) if (isRunning(p)) p.kill();
+  };
+
+  const errors = { ytdlp: "", ffmpeg: "", spawn: "" };
+  ytdlp.stderr.on("data", (chunk) => (errors.ytdlp = (errors.ytdlp + chunk).slice(-4000)));
+  ffmpeg.stderr.on("data", (chunk) => (errors.ffmpeg = (errors.ffmpeg + chunk).slice(-4000)));
+  ytdlp.on("error", (e) => {
+    errors.spawn ||= `yt-dlp failed to start: ${e.message}`;
+    stop();
+  });
+  ffmpeg.on("error", (e) => {
+    errors.spawn ||= `ffmpeg failed to start: ${e.message}`;
+    stop();
+  });
+  // If ffmpeg exits first, yt-dlp's remaining writes hit a closed pipe
+  // (EPIPE). That's expected — but unhandled, the error would crash the server.
+  ffmpeg.stdin.on("error", () => {});
+  ytdlp.stdout.pipe(ffmpeg.stdin);
+
+  // ffmpeg is done once its output has all been read ("close"). Whatever the
+  // reason it ended, make sure yt-dlp isn't left running.
+  const ffmpegCode = new Promise<number | null>((resolve) =>
+    ffmpeg.once("close", (code) => resolve(code)),
+  ).finally(stop);
+  const finished = Promise.all([exitCode(ytdlp), ffmpegCode]).then(([ytdlpCode, ffCode]) => {
+    const ok = ytdlpCode === 0 && ffCode === 0 && !errors.spawn;
+    const reason = ok
+      ? ""
+      : errors.spawn ||
+        ytDlpErrorLine(errors.ytdlp) ||
+        lastLine(errors.ffmpeg) ||
+        (ytdlpCode !== 0
+          ? `yt-dlp exited with code ${ytdlpCode}`
+          : `ffmpeg exited with code ${ffCode}`);
+    return { ok, reason };
+  });
+
+  return { audio: ffmpeg.stdout, stop, finished };
+}
+
+const isRunning = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;
+const lastLine = (text: string) => text.trim().split(/\r?\n/).pop() ?? "";
+
+/**
+ * The part of yt-dlp's error output worth showing someone: its last "ERROR:"
+ * line, without the prefixes. "ERROR: [youtube] jNQXAC9IVRw: Video unavailable"
+ * → "Video unavailable".
+ */
+export function ytDlpErrorLine(stderr: string): string {
+  const lines = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const line = lines.filter((l) => l.startsWith("ERROR:")).pop() ?? lines.pop() ?? "";
+  return line.replace(/^ERROR:\s*/, "").replace(/^\[[^\]]+\]\s*[\w-]+:\s*/, "");
+}
+
+/** Why a youtube-dl-exec call failed, from yt-dlp's own error output when there is some. */
+export function ytDlpFailure(err: unknown): string {
+  const stderr = (err as { stderr?: unknown } | null)?.stderr;
+  return (
+    (typeof stderr === "string" && ytDlpErrorLine(stderr)) ||
+    (err instanceof Error ? err.message : "yt-dlp failed")
+  );
+}
+
+/**
+ * A process's exit code (null if it was killed) once it has exited and its
+ * output has been read. yt-dlp.exe on Windows does its work in a second
+ * process of its own, which could hold the output open after we kill the
+ * first — so after the exit, stop waiting for the output within a moment.
+ */
+function exitCode(p: ChildProcess, graceMs = 2_000): Promise<number | null> {
+  return new Promise((resolve) => {
+    let timer: NodeJS.Timeout | undefined;
+    const done = () => {
+      clearTimeout(timer);
+      resolve(p.exitCode);
+    };
+    p.once("close", done);
+    p.once("exit", () => {
+      timer = setTimeout(done, graceMs);
+    });
+    // Never started at all (e.g. the binary is missing): there's no exit to wait for.
+    p.once("error", () => {
+      if (p.pid === undefined) done();
+    });
+  });
 }

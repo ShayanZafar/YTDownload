@@ -4,13 +4,21 @@ import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
 import { Highlight, HistorySearch } from "@/components/history-search";
 import { SaveToSetting } from "@/components/save-to-setting";
+import { FolderPicker } from "@/components/folder-picker";
 import { RenameableTitle } from "@/components/renameable-title";
 import { useVideoInfo, useRecentDownloads, useSongSearch } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
-import { useSaveFolder } from "@/hooks/use-save-folder";
-import { asLink, formatDuration, isSpotifyLink, timeAgo, validDate } from "@/lib/format";
-import { ensureWriteAccess, formatBytes, saveToFolder, type SaveFolder } from "@/lib/save-folder";
+import { useSaveSettings } from "@/hooks/use-save-settings";
+import {
+  asLink,
+  formatBytes,
+  formatDuration,
+  isSpotifyLink,
+  timeAgo,
+  validDate,
+} from "@/lib/format";
+import { ApiError, folderName, saveOnServer } from "@/lib/save-to-folder";
 import { queryClient } from "@/lib/queryClient";
 import {
   filterHistory,
@@ -24,7 +32,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { api, buildDownloadUrl } from "@shared/routes";
+import { api, buildDownloadUrl, type DownloadFormat } from "@shared/routes";
 import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
 import {
   Search,
@@ -68,7 +76,9 @@ const HISTORY_POLL_MS = 3_000;
 const HISTORY_PAGE = 25;
 
 // A download being saved into the "Save to" folder, keyed by its download URL.
-type ActiveSave = { bytes: number; cancel: () => void };
+type ActiveSave = { bytes: number; folder: string; cancel: () => void };
+// What to download: a video, as MP3 or original audio, under a name (or its title).
+type DownloadRequest = { url: string; format: DownloadFormat; name?: string };
 
 export default function Home() {
   const [text, setText] = useState("");
@@ -83,8 +93,10 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLElement>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
-  const saveFolder = useSaveFolder();
+  const saveTo = useSaveSettings();
+  const [choosingFolder, setChoosingFolder] = useState(false);
   const [saves, setSaves] = useState<Record<string, ActiveSave>>({});
+  const isSaving = Object.keys(saves).length > 0;
 
   const {
     mutate: fetchInfo,
@@ -149,6 +161,18 @@ export default function Home() {
     const timer = setInterval(prune, 30_000);
     return () => clearInterval(timer);
   }, [recentDownloads, pending.length]);
+
+  // Leaving the page cancels saves into the folder (the app stops when the page
+  // goes away), so ask first — the browser shows its own "Leave site?" prompt.
+  useEffect(() => {
+    if (!isSaving) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = ""; // older browsers need this too
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [isSaving]);
 
   // After picking a search result, bring the preview card (with its Download
   // button) into view — it sits above the results list.
@@ -241,94 +265,76 @@ export default function Home() {
     inputRef.current?.focus();
   };
 
-  const chooseFolder = async () => {
-    try {
-      const picked = await saveFolder.choose();
-      if (picked) {
-        toast({
-          title: `Saving to "${picked.name}"`,
-          description: "Downloads from this page will go straight into that folder.",
-        });
-      }
-    } catch (err) {
-      toast({
-        title: "Couldn't use that folder",
-        description: err instanceof Error ? err.message : "Try a different folder.",
-        variant: "destructive",
-      });
-    }
+  // Picked in the folder browser. If the app can't use the folder, this
+  // rejects and the browser shows why, staying open.
+  const chooseFolder = async (folder: string) => {
+    const settings = await saveTo.setFolder(folder);
+    toast({
+      title: `Saving to “${folderName(settings.saveFolder ?? folder)}”`,
+      description: "Downloads from this page will go straight into that folder.",
+    });
   };
 
-  // Downloads into the "Save to" folder: fetched by the page and written to
-  // the folder, with progress shown on the button instead of the browser's
-  // download bar. Cancelling stops the server's work, as with a normal download.
-  const saveIntoFolder = async (folder: SaveFolder, href: string, videoUrl: string) => {
-    const allowed = await ensureWriteAccess(folder).catch(() => false);
-    if (!allowed) {
+  const switchToBrowserDownloads = () => {
+    saveTo.setFolder(null).catch((err: unknown) =>
       toast({
-        title: `Can't save to "${folder.name}"`,
-        description:
-          "The browser didn't allow access to that folder. Download again and choose Allow, or pick another folder.",
+        title: "Couldn't change where downloads go",
+        description: err instanceof Error ? err.message : "Try again.",
         variant: "destructive",
-      });
-      return;
-    }
+      }),
+    );
+  };
 
+  // Downloads into the "Save to" folder: the app saves the file itself, and
+  // the page shows progress on the button instead of the browser's download
+  // bar. Cancelling stops the app's work, as with a normal download.
+  const saveIntoFolder = async (href: string, request: DownloadRequest, folder: string) => {
     const controller = new AbortController();
     const cancel = () => controller.abort();
-    setSaves((current) => ({ ...current, [href]: { bytes: 0, cancel } }));
-    watchForDownload(videoUrl);
-
-    let lastUpdate = 0;
+    setSaves((current) => ({ ...current, [href]: { bytes: 0, folder, cancel } }));
     try {
-      const name = await saveToFolder(folder, href, {
+      const saved = await saveOnServer(request, {
         signal: controller.signal,
-        onProgress: (bytes) => {
-          if (Date.now() - lastUpdate < 250) return; // keep re-renders down
-          lastUpdate = Date.now();
+        onProgress: (bytes) =>
           setSaves((current) =>
             current[href] ? { ...current, [href]: { ...current[href], bytes } } : current,
-          );
-        },
+          ),
       });
-      toast({ title: "Saved", description: `"${name}" is in your "${folder.name}" folder.` });
+      toast({ title: `Saved to “${folderName(saved.folder)}”`, description: saved.path });
       void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] });
     } catch (err) {
       if (controller.signal.aborted) {
         toast({ title: "Download cancelled" });
-      } else if (err instanceof DOMException && err.name === "NotFoundError") {
-        toast({
-          title: `Can't find the "${folder.name}" folder`,
-          description: "It may have been moved or deleted. Choose a folder again.",
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Couldn't save the audio",
-          description: err instanceof Error ? err.message : "Something went wrong.",
-          variant: "destructive",
-        });
+        return;
       }
+      // The folder may be gone or off-limits now, or changed in another tab.
+      if (err instanceof ApiError && [403, 404, 409].includes(err.status)) void saveTo.refresh();
+      toast({
+        title: "Couldn't save the audio",
+        description: err instanceof Error ? err.message : "Something went wrong.",
+        variant: "destructive",
+      });
     } finally {
       setSaves(({ [href]: _done, ...rest }) => rest);
     }
   };
 
-  // Every download link goes through here: with a "Save to" folder the page
+  // Every download link goes through here: with a "Save to" folder the app
   // saves the file itself; otherwise the browser downloads it as usual.
-  const startDownload = (event: React.MouseEvent, href: string, videoUrl: string) => {
-    if (saveFolder.folder) {
+  const startDownload = (event: React.MouseEvent, href: string, request: DownloadRequest) => {
+    if (saveTo.folder) {
       event.preventDefault();
-      if (!saves[href]) void saveIntoFolder(saveFolder.folder, href, videoUrl);
+      if (!saves[href]) void saveIntoFolder(href, request, saveTo.folder);
       return false;
     }
-    watchForDownload(videoUrl);
+    watchForDownload(request.url);
     return true;
   };
 
   const handleDownload = (event: React.MouseEvent) => {
     if (!selected) return;
-    if (!startDownload(event, selectedHref, selected.url)) return;
+    const request = { url: selected.url, format, name: fileName ?? undefined };
+    if (!startDownload(event, selectedHref, request)) return;
 
     toast({
       title: "Download Started",
@@ -452,12 +458,14 @@ export default function Home() {
         {/* Where downloads go — visible before a video is opened, and used by Redownload too. */}
         <div className="w-full !mt-4">
           <SaveToSetting
-            supported={saveFolder.supported}
-            folderName={saveFolder.folder?.name}
-            onChoose={chooseFolder}
-            onClear={saveFolder.clear}
+            settings={saveTo.settings}
+            onChoose={() => setChoosingFolder(true)}
+            onClear={switchToBrowserDownloads}
           />
         </div>
+        {choosingFolder && (
+          <FolderPicker onChoose={chooseFolder} onClose={() => setChoosingFolder(false)} />
+        )}
       </section>
 
       {/* Result Section */}
@@ -525,7 +533,10 @@ export default function Home() {
                         <Loader2 className="w-5 h-5 shrink-0 animate-spin" />
                         <span className="truncate">
                           Saving
-                          <span className="hidden sm:inline"> to {saveFolder.folder?.name}</span>
+                          <span className="hidden sm:inline">
+                            {" "}
+                            to {folderName(selectedSave.folder)}
+                          </span>
                         </span>
                         <span className="shrink-0 font-normal opacity-70 tabular-nums">
                           {selectedSave.bytes > 0 ? formatBytes(selectedSave.bytes) : "starting…"}
@@ -898,12 +909,15 @@ export default function Home() {
                       href={buildDownloadUrl(item.url, format)}
                       download
                       onClick={(event) =>
-                        startDownload(event, buildDownloadUrl(item.url, format), item.url)
+                        startDownload(event, buildDownloadUrl(item.url, format), {
+                          url: item.url,
+                          format,
+                        })
                       }
                       aria-label={`Redownload ${item.title}`}
                       title={
-                        saveFolder.folder
-                          ? `Save again to "${saveFolder.folder.name}"`
+                        saveTo.folder
+                          ? `Save again to “${folderName(saveTo.folder)}”`
                           : isOriginal
                             ? "Redownload the original audio"
                             : "Redownload as MP3"

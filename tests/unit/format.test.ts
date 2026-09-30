@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { asLink, formatDuration, isSpotifyLink } from "../../client/src/lib/format";
+import { asLink, formatBytes, formatDuration, isSpotifyLink } from "../../client/src/lib/format";
 
 describe("formatDuration", () => {
   it("formats like a clock", () => {
@@ -54,5 +54,13 @@ describe("isSpotifyLink", () => {
     expect(isSpotifyLink("https://www.youtube.com/watch?v=jNQXAC9IVRw")).toBe(false);
     expect(isSpotifyLink("spotify top songs")).toBe(false);
     expect(isSpotifyLink("https://open.spotify.com.evil.example/track/x")).toBe(false);
+  });
+});
+
+describe("formatBytes", () => {
+  it("shows sizes the way people read them", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(150 * 1024)).toBe("150 KB");
+    expect(formatBytes(2_457_600)).toBe("2.3 MB");
   });
 });

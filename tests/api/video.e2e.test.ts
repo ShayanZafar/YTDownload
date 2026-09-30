@@ -19,10 +19,11 @@ let app: express.Express;
 let historyDir: string;
 
 beforeAll(async () => {
-  // Keep test downloads out of your real history: point the app's history
-  // file at a throwaway folder for this run.
+  // Keep test downloads out of your real history and settings: point the
+  // app's files at a throwaway folder for this run.
   historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-history-"));
   process.env.HISTORY_FILE = path.join(historyDir, "history.json");
+  process.env.SETTINGS_FILE = path.join(historyDir, "settings.json");
 
   // Mirror the minimum middleware stack that server/index.ts sets up,
   // so we can attach Supertest to the real route handlers without starting
@@ -38,6 +39,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.HISTORY_FILE;
+  delete process.env.SETTINGS_FILE;
   await fs.rm(historyDir, { recursive: true, force: true });
 });
 
@@ -255,5 +257,198 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     // Give the server time to notice and clean up, then check nothing was saved.
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     expect((await historyFor(TEST_VIDEO_URL)).length).toBe(before);
+  });
+});
+
+describe("Save to folder (API)", () => {
+  let saveDir: string;
+
+  beforeAll(async () => {
+    saveDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-"));
+  });
+
+  afterAll(async () => {
+    await fs.rm(saveDir, { recursive: true, force: true });
+  });
+
+  type SaveEvent = { type: string; [key: string]: unknown };
+
+  // POST /api/video/save: the progress lines it streams back, or its error.
+  const save = async (body: Record<string, unknown>) => {
+    const res = await request(app)
+      .post("/api/video/save")
+      .send(body)
+      .buffer(true)
+      .parse((response, callback) => {
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => (text += chunk));
+        response.on("end", () => callback(null, text));
+        response.on("error", (err) => callback(err, ""));
+      });
+    const text = String(res.body);
+    if (res.status !== 200) {
+      return { res, error: JSON.parse(text) as { message: string }, events: [], done: undefined };
+    }
+    const events: SaveEvent[] = text
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    return { res, error: undefined, events, done: events.at(-1) };
+  };
+
+  const setFolder = (saveFolder: unknown) => request(app).put("/api/settings").send({ saveFolder });
+
+  it("starts with downloads going to the browser, and won't save before a folder is chosen", async () => {
+    const settings = await request(app).get("/api/settings");
+    expect(settings.body).toEqual({ saveFolder: null, canSaveToFolder: true });
+
+    const { res, error } = await save({ url: TEST_VIDEO_URL });
+    expect(res.status).toBe(409);
+    expect(error?.message).toMatch(/choose a folder/i);
+  });
+
+  it("refuses a folder that doesn't exist, isn't a folder, or isn't a full path", async () => {
+    expect((await setFolder(path.join(saveDir, "missing"))).status).toBe(404);
+    expect((await setFolder("relative/folder")).status).toBe(400);
+    const file = path.join(saveDir, "not-a-folder.txt");
+    await fs.writeFile(file, "x");
+    expect((await setFolder(file)).status).toBe(400);
+    await fs.rm(file);
+    expect((await request(app).get("/api/settings")).body.saveFolder).toBeNull();
+  });
+
+  it("browses folders and makes new ones", async () => {
+    const made = await request(app)
+      .post("/api/folders")
+      .send({ parent: saveDir, name: "Mix: 2024" });
+    expect(made.status).toBe(201);
+    expect(made.body).toEqual({ name: "Mix - 2024", path: path.join(saveDir, "Mix - 2024") });
+
+    const listing = await request(app).get("/api/folders").query({ path: saveDir });
+    expect(listing.status).toBe(200);
+    expect(listing.body).toMatchObject({
+      path: saveDir,
+      parent: path.dirname(saveDir),
+      folders: [made.body],
+    });
+    expect(listing.body.places).toEqual(
+      expect.arrayContaining([{ name: "Home", path: os.homedir() }]),
+    );
+
+    const again = await request(app)
+      .post("/api/folders")
+      .send({ parent: saveDir, name: "Mix: 2024" });
+    expect(again.status).toBe(409);
+    await fs.rmdir(made.body.path);
+  });
+
+  it("saves the MP3 straight into the chosen folder, reporting progress", async () => {
+    const chosen = await setFolder(saveDir);
+    expect(chosen.status).toBe(200);
+    expect(chosen.body).toEqual({ saveFolder: saveDir, canSaveToFolder: true });
+    const before = (await historyFor(TEST_VIDEO_URL)).length;
+
+    const { res, events, done } = await save({ url: TEST_VIDEO_URL });
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/x-ndjson");
+    expect(events.slice(0, -1).length).toBeGreaterThan(0);
+    expect(events.slice(0, -1).every((e) => e.type === "progress")).toBe(true);
+    expect(done).toMatchObject({
+      type: "done",
+      folder: saveDir,
+      fileName: expect.stringMatching(/\.mp3$/),
+    });
+    expect(done!.path).toBe(path.join(saveDir, String(done!.fileName)));
+
+    const verdict = await verifyMp3File(String(done!.path));
+    expect(verdict.isValid, `Saved file is not a valid MP3: ${verdict.reason}`).toBe(true);
+    expect(verdict.size).toBe(done!.bytes);
+    // Nothing else in the folder: the unfinished .part file became the MP3.
+    expect(await fs.readdir(saveDir)).toEqual([done!.fileName]);
+    expect(await waitForHistory(TEST_VIDEO_URL, before + 1)).toHaveLength(before + 1);
+  });
+
+  it("never replaces a file: the same name again gets “(1)”, accents and all", async () => {
+    const first = await save({ url: TEST_VIDEO_URL, name: "Zoo: café 動物園" });
+    const second = await save({ url: TEST_VIDEO_URL, name: "Zoo: café 動物園" });
+    expect(first.done).toMatchObject({ type: "done", fileName: "Zoo - café 動物園.mp3" });
+    expect(second.done).toMatchObject({ type: "done", fileName: "Zoo - café 動物園 (1).mp3" });
+    for (const { done } of [first, second]) {
+      expect((await fs.stat(String(done!.path))).size).toBe(done!.bytes);
+    }
+  });
+
+  it("saves YouTube's original audio too", async () => {
+    const { done } = await save({ url: TEST_VIDEO_URL, format: "original" });
+    const ext = /\.(opus|m4a|mka)$/.exec(String(done?.fileName))?.[1];
+    expect(ext, `unexpected file: ${JSON.stringify(done)}`).toBeDefined();
+    const verdict = await verifyOriginalAudioFile(String(done!.path), ext!);
+    expect(verdict.isValid, `Not a valid .${ext}: ${verdict.reason}`).toBe(true);
+  });
+
+  it("explains a video that can't be downloaded, and leaves nothing behind", async () => {
+    const files = await fs.readdir(saveDir);
+    const { res, error } = await save({ url: "https://www.youtube.com/watch?v=ZZZZZZZZZZZ" });
+    expect(res.status).toBe(502);
+    expect(error?.message).toMatch(/^Couldn't download the audio: /);
+    expect(error?.message).not.toMatch(/command spawned/i);
+    expect(await fs.readdir(saveDir)).toEqual(files);
+  });
+
+  it("cancelling part-way leaves no file and adds nothing to the history", async () => {
+    const files = await fs.readdir(saveDir);
+    const before = (await historyFor(TEST_VIDEO_URL)).length;
+
+    // Start a real save and hang up as soon as the first progress arrives.
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const { port } = httpServer.address() as AddressInfo;
+    const gotProgress = await new Promise<boolean>((resolve, reject) => {
+      const req = http.request(
+        `http://127.0.0.1:${port}/api/video/save`,
+        { method: "POST", headers: { "Content-Type": "application/json" } },
+        (res) => {
+          res.once("data", () => {
+            req.destroy(); // like pressing Cancel
+            resolve(true);
+          });
+          res.once("end", () => resolve(false));
+        },
+      );
+      req.on("error", (err) =>
+        (err as NodeJS.ErrnoException).code === "ECONNRESET" ? null : reject(err),
+      );
+      req.end(JSON.stringify({ url: TEST_VIDEO_URL, name: "Cancelled" }));
+    });
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    expect(gotProgress).toBe(true);
+
+    // Give the app time to stop and tidy up, then check nothing was kept.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(await fs.readdir(saveDir)).toEqual(files);
+    expect((await historyFor(TEST_VIDEO_URL)).length).toBe(before);
+  });
+
+  it("only this app's own page can save or change the folder", async () => {
+    const crossSite = await request(app)
+      .post("/api/video/save")
+      .set("Sec-Fetch-Site", "cross-site")
+      .send({ url: TEST_VIDEO_URL });
+    expect(crossSite.status).toBe(403);
+
+    const otherSite = await request(app)
+      .put("/api/settings")
+      .set("Origin", "https://example.com")
+      .send({ saveFolder: os.tmpdir() });
+    expect(otherSite.status).toBe(403);
+
+    // A plain HTML form (not JSON) can't change anything either.
+    const form = await request(app)
+      .put("/api/settings")
+      .type("form")
+      .send({ saveFolder: os.tmpdir() });
+    expect(form.status).toBe(415);
+
+    expect((await request(app).get("/api/settings")).body.saveFolder).toBe(saveDir);
   });
 });

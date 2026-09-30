@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { z } from "zod";
 import { downloadSchema, type Download, type InsertDownload } from "@shared/schema";
+import { retryWhenBusy } from "./retry-when-busy";
 
 /**
  * Download history, kept as a small JSON file (newest first):
@@ -50,18 +51,7 @@ async function writeHistory(file: string, entries: Download[]): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(entries, null, 2) + "\n", "utf8");
-  // On Windows, antivirus or the search indexer can briefly lock the file;
-  // retry the swap a few times before giving up.
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await fs.rename(tmp, file);
-      return;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (attempt >= 5 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
-    }
-  }
+  await retryWhenBusy(() => fs.rename(tmp, file));
 }
 
 export class FileStorage implements IStorage {

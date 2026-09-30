@@ -5,7 +5,7 @@ server/public
 vite.config.ts.*
 *.tar.gz
 
-# Download history (see server/storage.ts)
+# Download history and settings (see server/storage.ts and server/settings.ts)
 data/
 
 # Local environment files — keep credentials out of git.
@@ -17,4 +17,4 @@ data/
 # Test artifacts
 test-results
 playwright-report
-.cache/ms-playwright
+.cache/ms-playwright

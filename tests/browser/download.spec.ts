@@ -17,6 +17,12 @@ const historyRows = (page: Page) =>
     .filter({ hasText: /me at the zoo/i });
 
 test.describe("YouTube → MP3 end-to-end (browser)", () => {
+  // Downloads go to the browser unless a test chooses a folder (the setting is
+  // kept by the app, so one test's choice would otherwise carry over).
+  test.beforeEach(async ({ request }) => {
+    await request.put("/api/settings", { data: { saveFolder: null } });
+  });
+
   test("user pastes a URL, previews the video, and downloads a valid MP3", async ({ page }) => {
     await page.goto("/");
 
@@ -184,89 +190,81 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     ).toBeVisible();
   });
 
-  test("Save to: a chosen folder gets the MP3 instead of the browser's downloads", async ({
+  test("Save to: pick a folder in the app's folder browser; downloads are saved into it", async ({
     page,
   }) => {
-    // The real folder picker is a native Windows dialog a test can't click
-    // through, so give the page a folder in the browser's private storage
-    // (OPFS) instead. It's a real folder handle, written to the same way.
-    await page.context().addInitScript(() => {
-      (window as unknown as { showDirectoryPicker: () => Promise<unknown> }).showDirectoryPicker =
-        async () => {
-          const root = await navigator.storage.getDirectory();
-          return root.getDirectoryHandle("Music", { create: true });
-        };
-    });
-    const readFolder = () =>
-      page.evaluate(async () => {
-        const root = await navigator.storage.getDirectory();
-        const music = await root.getDirectoryHandle("Music", { create: true });
-        const files: { name: string; base64: string }[] = [];
-        for await (const handle of (
-          music as unknown as { values(): AsyncIterable<FileSystemHandle> }
-        ).values()) {
-          if (handle.kind !== "file") continue;
-          const file = await (handle as FileSystemFileHandle).getFile();
-          const dataUrl = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.readAsDataURL(file);
-          });
-          files.push({ name: handle.name, base64: dataUrl.split(",")[1] ?? "" });
-        }
-        return files;
-      });
+    // A real folder on this computer: the app writes into it itself, so this
+    // works the same in every browser.
+    const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-"));
+    await fs.mkdir(path.join(folder, "Albums"));
+    const target = path.join(folder, "Test Music");
     let browserDownloads = 0;
     page.on("download", () => browserDownloads++);
 
     await page.goto("/");
     // The setting is right under the search box, before any video is opened.
     await page.getByRole("button", { name: /choose folder/i }).click();
-    await expect(page.getByTestId("save-folder-name")).toHaveText("Music");
+    const picker = page.getByRole("dialog", { name: /choose where to save/i });
+    await expect(picker).toBeVisible();
+
+    // Go to the folder by typing its path, make a new folder there, and use it.
+    const pathBox = picker.getByRole("textbox", { name: /folder path/i });
+    await pathBox.fill(folder);
+    await pathBox.press("Enter");
+    await expect(picker.getByRole("button", { name: "Albums", exact: true })).toBeVisible();
+    await picker.getByRole("button", { name: /new folder/i }).click();
+    await picker.getByRole("textbox", { name: /new folder name/i }).fill("Test Music");
+    await picker.getByRole("button", { name: /^create$/i }).click();
+    await expect(pathBox).toHaveValue(target);
+    await picker.getByRole("button", { name: /^use “test music”/i }).click();
+    await expect(picker).toBeHidden();
+    await expect(page.getByTestId("save-folder-name")).toHaveText("Test Music");
+    await expect(page.getByTestId("save-folder-name")).toHaveAttribute("title", target);
+
     await page.locator('input[type="url"]').fill(TEST_VIDEO_URL);
     await page.getByRole("button", { name: /extract/i }).click();
-
     const downloadLink = page.locator('a[href^="/api/video/download"]', {
       hasText: /download audio/i,
     });
+    await expect(downloadLink).toBeVisible({ timeout: 60_000 });
     const rowsBefore = await historyRows(page).count();
 
     // Cancelling part-way leaves nothing in the folder and nothing in the history.
     await downloadLink.click();
     await page.getByRole("button", { name: /^cancel$/i }).click();
     await expect(page.getByText(/download cancelled/i).first()).toBeVisible();
-    expect(await readFolder()).toEqual([]);
+    await expect.poll(() => fs.readdir(target), { timeout: 10_000 }).toEqual([]);
 
     // A full download lands in the folder as a real MP3.
     await downloadLink.click();
-    await expect(page.getByText(/is in your "Music" folder/i).first()).toBeVisible({
+    await expect(page.getByText(/saved to “test music”/i).first()).toBeVisible({
       timeout: 90_000,
     });
-    const files = await readFolder();
-    expect(files.map((f) => f.name)).toEqual([expect.stringMatching(/\.mp3$/)]);
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-folder-test-"));
-    const savedPath = path.join(tmpDir, files[0].name);
-    await fs.writeFile(savedPath, Buffer.from(files[0].base64, "base64"));
-    const verdict = await verifyMp3File(savedPath);
+    const files = await fs.readdir(target);
+    expect(files).toEqual([expect.stringMatching(/^Me at the zoo.*\.mp3$/i)]);
+    const verdict = await verifyMp3File(path.join(target, files[0]));
     expect(verdict.isValid, `Saved file is not a valid MP3: ${verdict.reason}`).toBe(true);
-    await fs.rm(tmpDir, { recursive: true, force: true });
-
     expect(browserDownloads).toBe(0);
     await expect(historyRows(page)).toHaveCount(rowsBefore + 1, { timeout: 20_000 });
 
-    // The folder is remembered after a reload (restored from IndexedDB).
+    // The app remembers the folder (for every browser on this computer).
     await page.reload();
-    await expect(page.getByTestId("save-folder-name")).toHaveText("Music");
+    await expect(page.getByTestId("save-folder-name")).toHaveText("Test Music");
+
+    // Back to the browser's own downloads.
+    await page.getByRole("button", { name: /use the browser's downloads folder instead/i }).click();
+    await expect(page.getByText(/your browser's downloads folder/i)).toBeVisible();
+    await fs.rm(folder, { recursive: true, force: true });
   });
 
-  test("browsers that can't save into a folder say where downloads go", async ({ page }) => {
-    // Like Firefox or Safari, which have no folder picker.
-    await page.addInitScript(() => {
-      delete (Window.prototype as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker;
-      delete (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker;
-    });
+  test("another device (like a phone) is told where its downloads go", async ({ page }) => {
+    // What the app answers a browser on another device: it can't save into a
+    // folder on this computer, so downloads go to that device.
+    await page.route("**/api/settings", (route) =>
+      route.fulfill({ json: { saveFolder: null, canSaveToFolder: false } }),
+    );
     await page.goto("/");
-    await expect(page.getByText(/downloads go to this browser's downloads folder/i)).toBeVisible();
+    await expect(page.getByText(/downloads go to this device's downloads folder/i)).toBeVisible();
     await expect(page.getByRole("button", { name: /choose folder/i })).toHaveCount(0);
   });
 

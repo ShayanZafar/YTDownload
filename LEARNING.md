@@ -140,6 +140,15 @@ That's exactly the .NET pattern. The difference: we don't run it through a DI co
 
 This is the most jarring thing for a .NET dev. There's no `IServiceCollection`, no `services.AddScoped<...>()`, no `[Inject]`. Modules export values; consumers `import` them. When you need testability, you depend on an interface (like `IStorage`) and pass implementations explicitly. It's a smaller hammer, and for most Node apps it's enough.
 
+### Guards and long-running responses: the "Save to" routes
+
+The routes that touch your disk (`server/save.ts`, `server/folders.ts`) show a few more patterns you already know under other names:
+
+- **`localOnly()` is an endpoint filter.** Express middleware placed before the handler — `app.post(path, localOnly(), saveIntoFolder)` — is the equivalent of an `[Authorize]`-style filter or `.AddEndpointFilter(...)`: it can end the request (`403`) or call `next()`.
+- **Streaming progress** is like writing to `HttpContext.Response` in a loop and calling `FlushAsync()` after each JSON line — or returning an `IAsyncEnumerable<T>`. The page reads it line by line.
+- **Cancellation** comes from the connection: `res.on("close")` plays the role of `HttpContext.RequestAborted`. There's no `CancellationToken` to pass around, so the handler keeps a `stop()` function and a `clientGone` flag.
+- **File handling:** `fs.open(path, "wx")` is `new FileStream(path, FileMode.CreateNew)` (fails if the file exists), and writing to `Song.mp3.part` then renaming is the usual write-then-`File.Move` pattern — with the name picked so an existing file is never replaced (`File.Move(..., overwrite: false)`).
+
 ---
 
 ## 5. Storage: a JSON file instead of Entity Framework Core
