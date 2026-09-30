@@ -8,11 +8,12 @@ import { downloadSchema, type Download, type InsertDownload } from "@shared/sche
  * data/history.json in the project folder, or wherever HISTORY_FILE points.
  *
  * It's only a convenience list, so it stays deliberately simple: the newest
- * MAX_HISTORY entries are kept, writes go through a temp file + rename so a
- * crash can't leave half a file behind, and writes are queued one at a time so
- * two downloads finishing together can't overwrite each other's entry.
+ * MAX_HISTORY entries are kept (plenty to search back through, and still only
+ * a couple of hundred KB), writes go through a temp file + rename so a crash
+ * can't leave half a file behind, and writes are queued one at a time so two
+ * downloads finishing together can't overwrite each other's entry.
  */
-export const MAX_HISTORY = 100;
+export const MAX_HISTORY = 1000;
 
 export function historyFilePath(): string {
   return path.resolve(process.env.HISTORY_FILE || path.join(process.cwd(), "data", "history.json"));

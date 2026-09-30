@@ -1,20 +1,29 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
+import { Highlight, HistorySearch } from "@/components/history-search";
 import { useVideoInfo, useRecentDownloads, useSongSearch } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { useSaveFolder } from "@/hooks/use-save-folder";
-import { asLink, formatDuration, isSpotifyLink } from "@/lib/format";
+import { asLink, formatDuration, isSpotifyLink, timeAgo, validDate } from "@/lib/format";
 import { ensureWriteAccess, formatBytes, saveToFolder, type SaveFolder } from "@/lib/save-folder";
 import { queryClient } from "@/lib/queryClient";
+import {
+  filterHistory,
+  filterHistoryByTitle,
+  historyRangeHints,
+  historyRangeLabels,
+  historyRangePhrases,
+  historyRanges,
+  type HistoryRange,
+} from "@/lib/history-filter";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { api, buildDownloadUrl } from "@shared/routes";
 import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
-import { formatDistanceToNow } from "date-fns";
 import {
   Search,
   ArrowRight,
@@ -54,20 +63,11 @@ type PendingDownload = { url: string; afterId: number; startedAt: number };
 const PENDING_TIMEOUT_MS = 15 * 60_000;
 const HISTORY_POLL_MS = 3_000;
 
+// Recent Extractions shows this many at first, and this many more per "Show more".
+const HISTORY_PAGE = 25;
+
 // A download being saved into the "Save to" folder, keyed by its download URL.
 type ActiveSave = { bytes: number; cancel: () => void };
-
-// The history file is plain JSON on disk, so don't trust its dates blindly:
-// an unreadable one shows as "Recently" instead of crashing the list.
-function validDate(iso: string): Date | undefined {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
-
-function timeAgo(iso: string): string {
-  const date = validDate(iso);
-  return date ? formatDistanceToNow(date, { addSuffix: true }) : "Recently";
-}
 
 export default function Home() {
   const [text, setText] = useState("");
@@ -103,6 +103,32 @@ export default function Home() {
   const results = searchData?.results;
   const spotify = searchData?.spotify;
   const isBusy = isFetchingInfo || isSearching;
+
+  // Searching and filtering Recent Extractions (all in the browser).
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyExact, setHistoryExact] = useState(false); // a suggestion was picked
+  const [historyRange, setHistoryRange] = useState<HistoryRange>("all");
+  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE);
+  const allHistory = useMemo(() => recentDownloads ?? [], [recentDownloads]);
+  const historyInRange = useMemo(
+    () => filterHistory(allHistory, "", historyRange),
+    [allHistory, historyRange],
+  );
+  const matchingHistory = useMemo(
+    () =>
+      historyExact
+        ? filterHistoryByTitle(historyInRange, historyQuery, "all")
+        : filterHistory(historyInRange, historyQuery, "all"),
+    [historyInRange, historyQuery, historyExact],
+  );
+  const shownHistory = matchingHistory.slice(0, historyLimit);
+  const isFilteringHistory = historyQuery.trim() !== "" || historyRange !== "all";
+  const clearHistoryFilters = () => {
+    setHistoryQuery("");
+    setHistoryExact(false);
+    setHistoryRange("all");
+    setHistoryLimit(HISTORY_PAGE);
+  };
   const error = infoError ?? searchError;
 
   // Stop waiting for a download once it's in the history (or has timed out).
@@ -737,11 +763,81 @@ export default function Home() {
       )}
 
       {/* Recent History */}
-      <section className="mt-12 max-w-4xl mx-auto w-full space-y-6">
+      <section className="mt-12 max-w-4xl mx-auto w-full space-y-4">
         <div className="flex items-center gap-2 px-2">
           <History className="w-5 h-5 text-muted-foreground" />
           <h2 className="text-xl font-display font-semibold">Recent Extractions</h2>
+          {allHistory.length > 0 && (
+            <span className="ml-auto text-sm text-muted-foreground tabular-nums" aria-live="polite">
+              {isFilteringHistory
+                ? `${matchingHistory.length} of ${allHistory.length}`
+                : `${allHistory.length} ${allHistory.length === 1 ? "download" : "downloads"}`}
+            </span>
+          )}
         </div>
+
+        {allHistory.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <HistorySearch
+                entries={historyInRange}
+                value={historyQuery}
+                exact={historyExact}
+                onChange={(value) => {
+                  setHistoryQuery(value);
+                  setHistoryExact(false);
+                  setHistoryLimit(HISTORY_PAGE);
+                }}
+                onPick={(title) => {
+                  setHistoryQuery(title);
+                  setHistoryExact(true);
+                  setHistoryLimit(HISTORY_PAGE);
+                }}
+              />
+              <div
+                role="group"
+                aria-label="Show downloads from"
+                className="inline-flex shrink-0 self-start rounded-full border border-border bg-secondary/60 p-1 sm:self-auto"
+              >
+                {historyRanges.map((range) => (
+                  <button
+                    key={range}
+                    type="button"
+                    aria-pressed={historyRange === range}
+                    onClick={() => {
+                      setHistoryRange(range);
+                      setHistoryLimit(HISTORY_PAGE);
+                    }}
+                    title={historyRangeHints[range]}
+                    className={cn(
+                      "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                      historyRange === range
+                        ? "bg-card text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {historyRangeLabels[range]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {historyExact && (
+              <p className="px-2 text-xs text-muted-foreground">
+                Showing only “{historyQuery}”.{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setHistoryQuery("");
+                    setHistoryExact(false);
+                  }}
+                  className="font-medium text-foreground underline underline-offset-2"
+                >
+                  Show everything
+                </button>
+              </p>
+            )}
+          </div>
+        )}
 
         {isLoadingHistory ? (
           <div className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
@@ -755,67 +851,99 @@ export default function Home() {
               </div>
             ))}
           </div>
-        ) : recentDownloads && recentDownloads.length > 0 ? (
-          <ul className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
-            {recentDownloads.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center gap-4 px-4 py-3 hover:bg-secondary/40 transition-colors"
+        ) : shownHistory.length > 0 ? (
+          <>
+            <ul className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
+              {shownHistory.map((item) => (
+                <li
+                  key={item.id}
+                  className="flex items-center gap-4 px-4 py-3 hover:bg-secondary/40 transition-colors"
+                >
+                  <div className="w-9 h-9 shrink-0 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+                    <FileAudio className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground truncate" title={item.title}>
+                      <Highlight text={item.title} query={historyExact ? "" : historyQuery} />
+                    </p>
+                    <p
+                      className="text-xs text-muted-foreground"
+                      title={validDate(item.downloadedAt)?.toLocaleString()}
+                    >
+                      {timeAgo(item.downloadedAt)}
+                    </p>
+                  </div>
+                  {saves[buildDownloadUrl(item.url, format)] ? (
+                    <button
+                      type="button"
+                      onClick={saves[buildDownloadUrl(item.url, format)].cancel}
+                      aria-label={`Cancel saving ${item.title}`}
+                      title="Cancel"
+                      className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                    >
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      {saves[buildDownloadUrl(item.url, format)].bytes > 0 && (
+                        <span className="tabular-nums">
+                          {formatBytes(saves[buildDownloadUrl(item.url, format)].bytes)}
+                        </span>
+                      )}
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  ) : (
+                    <a
+                      href={buildDownloadUrl(item.url, format)}
+                      download
+                      onClick={(event) =>
+                        startDownload(event, buildDownloadUrl(item.url, format), item.url)
+                      }
+                      aria-label={`Redownload ${item.title}`}
+                      title={
+                        saveFolder.folder
+                          ? `Save again to "${saveFolder.folder.name}"`
+                          : isOriginal
+                            ? "Redownload the original audio"
+                            : "Redownload as MP3"
+                      }
+                      className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Redownload</span>
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {matchingHistory.length > shownHistory.length && (
+              <button
+                type="button"
+                onClick={() => setHistoryLimit((n) => n + HISTORY_PAGE)}
+                className="w-full rounded-xl border border-border py-2.5 text-sm font-medium text-foreground hover:bg-secondary transition-colors"
               >
-                <div className="w-9 h-9 shrink-0 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
-                  <FileAudio className="w-4 h-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-foreground truncate" title={item.title}>
-                    {item.title}
-                  </p>
-                  <p
-                    className="text-xs text-muted-foreground"
-                    title={validDate(item.downloadedAt)?.toLocaleString()}
-                  >
-                    {timeAgo(item.downloadedAt)}
-                  </p>
-                </div>
-                {saves[buildDownloadUrl(item.url, format)] ? (
-                  <button
-                    type="button"
-                    onClick={saves[buildDownloadUrl(item.url, format)].cancel}
-                    aria-label={`Cancel saving ${item.title}`}
-                    title="Cancel"
-                    className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                  >
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    {saves[buildDownloadUrl(item.url, format)].bytes > 0 && (
-                      <span className="tabular-nums">
-                        {formatBytes(saves[buildDownloadUrl(item.url, format)].bytes)}
-                      </span>
-                    )}
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                ) : (
-                  <a
-                    href={buildDownloadUrl(item.url, format)}
-                    download
-                    onClick={(event) =>
-                      startDownload(event, buildDownloadUrl(item.url, format), item.url)
-                    }
-                    aria-label={`Redownload ${item.title}`}
-                    title={
-                      saveFolder.folder
-                        ? `Save again to "${saveFolder.folder.name}"`
-                        : isOriginal
-                          ? "Redownload the original audio"
-                          : "Redownload as MP3"
-                    }
-                    className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline">Redownload</span>
-                  </a>
-                )}
-              </li>
-            ))}
-          </ul>
+                Show more ({matchingHistory.length - shownHistory.length} more)
+              </button>
+            )}
+          </>
+        ) : allHistory.length > 0 ? (
+          <div className="text-center py-10 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20">
+            <p className="text-sm font-medium text-foreground">Nothing found</p>
+            <p className="text-sm text-muted-foreground mt-1">
+              No extractions{" "}
+              {[
+                historyRangePhrases[historyRange],
+                historyQuery.trim() && `match “${historyQuery.trim()}”`,
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              .
+            </p>
+            <button
+              type="button"
+              onClick={clearHistoryFilters}
+              className="mt-3 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+            >
+              Clear search and filters
+            </button>
+          </div>
         ) : (
           <div className="text-center py-16 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20 flex flex-col items-center">
             <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center mb-4">

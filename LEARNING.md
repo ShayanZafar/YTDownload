@@ -144,7 +144,7 @@ This is the most jarring thing for a .NET dev. There's no `IServiceCollection`, 
 
 ## 5. Storage: a JSON file instead of Entity Framework Core
 
-The only thing this app persists is the "Recent Extractions" list: at most 100 small entries, for one user. A database (it used to be Postgres, via Drizzle) meant Docker, a connection string and a schema-push step just to show that list. So it's a JSON file, `data/history.json`, and there's no ORM at all.
+The only thing this app persists is the "Recent Extractions" list: at most 1,000 small entries (about 200 KB), for one user. A database (it used to be Postgres, via Drizzle) meant Docker, a connection string and a schema-push step just to show that list. So it's a JSON file, `data/history.json`, and there's no ORM at all.
 
 ### Defining the shape
 

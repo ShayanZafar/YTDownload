@@ -54,7 +54,10 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        // A taste of the response, not all of it — the history alone can be
+        // hundreds of KB, and the page refreshes it every few seconds.
+        const body = JSON.stringify(capturedJsonResponse);
+        logLine += ` :: ${body.length > 200 ? `${body.slice(0, 199)}…` : body}`;
       }
 
       log(logLine);

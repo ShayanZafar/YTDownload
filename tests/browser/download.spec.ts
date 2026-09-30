@@ -109,7 +109,7 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await searchMode.click();
     await expect(searchMode).toHaveAttribute("aria-pressed", "true");
 
-    await page.getByRole("searchbox").fill("me at the zoo jawed");
+    await page.getByRole("searchbox", { name: /song search/i }).fill("me at the zoo jawed");
     await page.getByRole("button", { name: /^search$/i }).click();
 
     const results = page.getByRole("region", { name: /search results/i });
@@ -133,7 +133,7 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     );
 
     // A link typed into the search box is opened instead of searched for.
-    await page.getByRole("searchbox").fill(TEST_VIDEO_URL);
+    await page.getByRole("searchbox", { name: /song search/i }).fill(TEST_VIDEO_URL);
     await page.getByRole("button", { name: /^search$/i }).click();
     await expect(page.getByRole("button", { name: /paste a link/i })).toHaveAttribute(
       "aria-pressed",
@@ -242,6 +242,70 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await page.locator('input[type="url"]').fill(TEST_VIDEO_URL);
     await page.getByRole("button", { name: /extract/i }).click();
     await expect(page.getByTestId("save-folder-name")).toHaveText("Music", { timeout: 60_000 });
+  });
+
+  test("Recent Extractions can be searched, with suggestions and date filters", async ({
+    page,
+  }) => {
+    // A made-up history, so the test doesn't depend on what's been downloaded.
+    const day = 24 * 60 * 60 * 1000;
+    const songs: [string, number][] = [
+      ["Progression - Ocean Green (2004)", 0.1],
+      ["Progression - Ocean Green (2004)", 0.2], // downloaded twice
+      ["Ocean Eyes - Billie Eilish", 2],
+      ["Queen - Bohemian Rhapsody", 10],
+      ...Array.from({ length: 30 }, (_, i): [string, number] => [`Old song ${i + 1}`, 40 + i]),
+    ];
+    const history = songs.map(([title, daysAgo], i) => ({
+      id: songs.length - i,
+      url: `https://www.youtube.com/watch?v=test${String(i).padStart(7, "0")}`,
+      title,
+      downloadedAt: new Date(Date.now() - daysAgo * day).toISOString(),
+    }));
+    await page.route("**/api/downloads", (route) => route.fulfill({ json: history }));
+    await page.goto("/");
+
+    const section = page.locator("section", {
+      has: page.getByRole("heading", { name: /recent extractions/i }),
+    });
+    const rows = section.getByRole("listitem");
+    const search = section.getByRole("combobox", { name: /search your extractions/i });
+    const suggestions = page.getByRole("option");
+
+    // A long history shows a page at a time.
+    await expect(rows).toHaveCount(25);
+    await section.getByRole("button", { name: /show more/i }).click();
+    await expect(rows).toHaveCount(history.length);
+
+    // Every word typed must match, and partial words count.
+    await search.fill("ocea gre");
+    await expect(rows).toHaveCount(2);
+    // Suggestions list each song once, with how many times it was downloaded.
+    await expect(suggestions).toHaveCount(1);
+    await expect(suggestions.first()).toContainText("2×");
+
+    // Picking a suggestion (keyboard) shows exactly that song.
+    await search.fill("ocean");
+    await expect(suggestions).toHaveCount(2);
+    await search.press("ArrowDown");
+    await search.press("Enter");
+    await expect(search).toHaveValue("Ocean Eyes - Billie Eilish");
+    await expect(suggestions).toHaveCount(0);
+    await expect(rows).toHaveCount(1);
+    await expect(section.getByText(/showing only/i)).toBeVisible();
+
+    // Date filters, alone and with a search.
+    await section.getByRole("button", { name: /show everything/i }).click();
+    await section.getByRole("button", { name: /^older$/i }).click();
+    await expect(rows).toHaveCount(25);
+    await expect(section.getByText("30 of 34")).toBeVisible();
+    await section.getByRole("button", { name: /^past week$/i }).click();
+    await expect(rows).toHaveCount(3);
+    await search.fill("queen");
+    await expect(section.getByText(/nothing found/i)).toBeVisible();
+    await section.getByRole("button", { name: /clear search and filters/i }).click();
+    await expect(search).toHaveValue("");
+    await expect(rows).toHaveCount(25);
   });
 
   test("invalid URL surfaces a friendly error toast", async ({ page }) => {

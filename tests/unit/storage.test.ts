@@ -37,12 +37,25 @@ describe("FileStorage (download history)", () => {
   });
 
   it(`keeps only the newest ${MAX_HISTORY} entries`, async () => {
-    for (let i = 1; i <= MAX_HISTORY + 5; i++) {
-      await store.createDownload({ url: `https://youtu.be/${i}`, title: `Song ${i}` });
+    // Start from a full history (newest first), then add five more.
+    const full = Array.from({ length: MAX_HISTORY }, (_, i) => {
+      const n = MAX_HISTORY - i;
+      return {
+        id: n,
+        url: `https://youtu.be/${n}`,
+        title: `Song ${n}`,
+        downloadedAt: new Date(Date.UTC(2026, 0, 1) + n * 60_000).toISOString(),
+      };
+    });
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(full), "utf8");
+
+    for (let i = 1; i <= 5; i++) {
+      await store.createDownload({ url: `https://youtu.be/new${i}`, title: `New ${i}` });
     }
     const list = await store.getDownloads();
     expect(list).toHaveLength(MAX_HISTORY);
-    expect(list[0].title).toBe(`Song ${MAX_HISTORY + 5}`);
+    expect(list[0]).toMatchObject({ id: MAX_HISTORY + 5, title: "New 5" });
     expect(list.at(-1)!.title).toBe("Song 6");
   });
 

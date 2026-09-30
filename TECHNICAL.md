@@ -123,9 +123,20 @@ Browsers always put downloads in their own downloads folder; a page can't change
 
 Browsers without `showDirectoryPicker` (Firefox, Safari, phones) don't show the setting, and downloads stay plain `<a download>` links. The Playwright test can't click through a native folder dialog, so it replaces `showDirectoryPicker` with one that returns a folder in the browser's private storage (OPFS) — a real folder handle, written to the same way — and reads the saved MP3 back out of it.
 
+### Searching the history
+
+Recent Extractions is searched and filtered entirely in the browser — the whole history (at most 1,000 entries) is already on the page, so there's no search endpoint. The logic is in `client/src/lib/history-filter.ts` (unit-tested); `client/src/components/history-search.tsx` is the search box.
+
+- **Search:** every word typed must appear in the title (or the video's link), in any order, and partial words count, so the list narrows as you type. Case, accents and punctuation are ignored, and non-Latin titles work (the text is compared by Unicode letters and digits).
+- **Autocomplete:** matching songs are suggested below the box, each title once with how often it was downloaded — titles starting with what was typed first, then titles where every typed word starts a word, then other matches, newest first among equals. Picking one switches to an exact-title filter (every download of exactly that song). The box follows the ARIA combobox pattern (arrow keys, Enter, Escape; screen readers announce the options).
+- **Date filters:** All, Past week (last 7 days), Past month (last 30 days) and Older (more than 30 days ago), combined with the search. An entry with an unreadable date only shows under All.
+- The list shows 25 entries at a time with **Show more**, and matched words are highlighted in the titles.
+
+The request log (`server/index.ts`) prints at most 200 characters of each JSON response, since the history is refreshed every few seconds while a download is running.
+
 ### Storage abstraction
 
-The download history goes through the `IStorage` interface in `server/storage.ts`; routes only call `storage.getDownloads()` and `storage.createDownload(...)`. The implementation, `FileStorage`, keeps the newest 100 entries in `data/history.json` (or wherever `HISTORY_FILE` points). Writes are queued one at a time and go through a temp file + rename, so simultaneous downloads can't clobber each other and a crash can't leave half a file. If the file is ever unreadable, it's copied aside as `history.json.broken-<timestamp>` and a fresh list starts — the history is a convenience, so it should never break downloads.
+The download history goes through the `IStorage` interface in `server/storage.ts`; routes only call `storage.getDownloads()` and `storage.createDownload(...)`. The implementation, `FileStorage`, keeps the newest 1,000 entries (about 200 KB) in `data/history.json` (or wherever `HISTORY_FILE` points). Writes are queued one at a time and go through a temp file + rename, so simultaneous downloads can't clobber each other and a crash can't leave half a file. If the file is ever unreadable, it's copied aside as `history.json.broken-<timestamp>` and a fresh list starts — the history is a convenience, so it should never break downloads.
 
 ### Shared types & routes
 
@@ -321,7 +332,7 @@ This stack is designed for a small-to-medium audience. Here's where it would cra
 | Single Node process            | Sustained concurrent downloads, since each one occupies an event-loop slot for the duration of the stream | Run multiple Node instances behind a load balancer.                                                               |
 | Subprocess fan-out             | Each download runs a `yt-dlp` + `ffmpeg` pair; MP3 encoding is the main CPU cost                          | Add a per-instance concurrency cap (e.g., a small `p-limit` queue around the download pipeline).                  |
 | Outbound bandwidth from server | Every byte of audio flows server → client                                                                 | Move to a presigned-URL or proxy-and-cache model, where popular videos hit a CDN instead of `yt-dlp` per request. |
-| History in a JSON file         | Multiple server instances, or a history far longer than the 100-entry cap                                 | Swap `FileStorage` for a database-backed `IStorage` (SQLite or Postgres); routes don't need to change.            |
+| History in a JSON file         | Multiple server instances, or a history far longer than the 1,000-entry cap                               | Swap `FileStorage` for a database-backed `IStorage` (SQLite or Postgres); routes don't need to change.            |
 | `yt-dlp` extractor rot         | YouTube periodically changes its players and `yt-dlp` ships a fix                                         | Bump the `youtube-dl-exec` dependency on a cadence (or pin a specific `yt-dlp` binary release).                   |
 | No background job queue        | If a future feature needs work to outlive the request (e.g., batch playlist downloads)                    | Introduce a queue (BullMQ + Redis is the conventional pick) and a worker process.                                 |
 | No caching of metadata         | Same URL fetched repeatedly costs a `yt-dlp` spawn each time                                              | Add a short TTL cache (in-memory `lru-cache` or Redis) keyed by canonical video ID.                               |
@@ -332,7 +343,7 @@ None of these are problems today. They're listed here so the next person doesn't
 
 ## History File
 
-`data/history.json` (git-ignored) holds the newest 100 downloads, newest first:
+`data/history.json` (git-ignored) holds the newest 1,000 downloads, newest first:
 
 ```json
 [
@@ -502,6 +513,7 @@ tests/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
 │   ├── audio.test.ts            # yt-dlp / ffmpeg argument builders
 │   ├── search.test.ts           # search ranking + "official" detection
+│   ├── history-filter.test.ts   # history search, suggestions, date filters, highlighting
 │   ├── spotify.test.ts          # Spotify links, embed-page parsing, title clean-up, same-length ranking
 │   ├── format.test.ts           # durations + link-vs-search detection
 │   ├── storage.test.ts          # history file
@@ -547,7 +559,8 @@ What it checks:
 4. Switching to **Search by song**, searching for the test video and picking it shows the preview with a download link for that video; the mode survives a reload, and a link typed into the search box is opened (the switch flips back to **Paste a link**).
 5. Pasting a Spotify song link into the link box switches to **Search by song**, shows the song from Spotify, and picks the best YouTube match with a download link ready.
 6. With **Save to** set to a folder (backed by OPFS in the test), cancelling a download leaves the folder empty; a full download lands there as a valid MP3, not through the browser's download manager, appears in the history, and the folder is still chosen after a reload.
-7. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+7. Recent Extractions (with a made-up history served in place of `/api/downloads`): 25 entries at a time with **Show more**; typing narrows the list word by word; suggestions list each song once with its download count; picking one with the keyboard shows exactly that song; the date filters work alone and with a search; and "Clear search and filters" resets everything.
+8. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
 The tests run in your installed Google Chrome, in headless mode (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in. Playwright's own lightweight "headless shell" can't be used: it crashes when a page restores a saved **Save to** folder from IndexedDB (real Chrome and Edge are fine). If Chrome isn't installed:
 

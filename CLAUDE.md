@@ -29,7 +29,8 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
   then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first)
 - `server/audio.ts` — yt-dlp and ffmpeg arguments/spawning for the MP3 pipeline (unit-tested)
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
-- `server/storage.ts` — `FileStorage`: newest 100 entries, queued writes, temp-file + rename
+- `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
+  temp-file + rename
 - `shared/` — schema and API contracts shared by client and server
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
   components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
@@ -40,6 +41,9 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `client/src/lib/save-folder.ts` + `hooks/use-save-folder.ts` — the "Save to" folder (File System
   Access API, Chrome/Edge desktop only): picked folder handle kept in IndexedDB, downloads fetched
   and streamed into it (`saveToFolder()`); unsupported browsers keep plain `<a download>` links
+- `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
+  Extractions in the browser: word/partial matching, autocomplete suggestions (combobox; picking one
+  filters to that exact title), date ranges, highlighting; the list pages 25 at a time
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser` (Playwright)
 
 ## Commands
@@ -77,6 +81,8 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
   (Ogg) for Opus, fragmented `.m4a` for AAC, `.mka` otherwise. The metadata pass uses the same
   `bestaudio` selector and the stream is pinned to its `format_id`, so container and codec match.
   The format enum and `buildDownloadUrl()` live in `shared/routes.ts`.
+- The history search has no API: the page filters what `/api/downloads` returns. Keep that endpoint
+  cheap (it's polled while a download runs) — the request log truncates JSON bodies to 200 chars.
 - A download is added to the history only after it fully succeeds (both processes exit 0 and the
   response `finish`es) — never on cancel or failure. The page polls `/api/downloads` until it appears.
 - Headers go out with the first chunk of audio, so failures before any audio become a `502`; don't
