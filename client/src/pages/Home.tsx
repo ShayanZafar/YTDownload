@@ -5,11 +5,14 @@ import { Layout } from "@/components/layout";
 import { useVideoInfo, useRecentDownloads, useSongSearch } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
+import { useSaveFolder } from "@/hooks/use-save-folder";
 import { asLink, formatDuration, isSpotifyLink } from "@/lib/format";
+import { ensureWriteAccess, formatBytes, saveToFolder, type SaveFolder } from "@/lib/save-folder";
+import { queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { buildDownloadUrl } from "@shared/routes";
+import { api, buildDownloadUrl } from "@shared/routes";
 import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -25,6 +28,8 @@ import {
   BadgeCheck,
   Check,
   Timer,
+  FolderOpen,
+  X,
 } from "lucide-react";
 
 // Paste a link, or search by song title. The last one used is remembered.
@@ -49,6 +54,9 @@ type PendingDownload = { url: string; afterId: number; startedAt: number };
 const PENDING_TIMEOUT_MS = 15 * 60_000;
 const HISTORY_POLL_MS = 3_000;
 
+// A download being saved into the "Save to" folder, keyed by its download URL.
+type ActiveSave = { bytes: number; cancel: () => void };
+
 // The history file is plain JSON on disk, so don't trust its dates blindly:
 // an unreadable one shows as "Recently" instead of crashing the list.
 function validDate(iso: string): Date | undefined {
@@ -72,6 +80,8 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLElement>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
+  const saveFolder = useSaveFolder();
+  const [saves, setSaves] = useState<Record<string, ActiveSave>>({});
 
   const {
     mutate: fetchInfo,
@@ -196,8 +206,94 @@ export default function Home() {
     inputRef.current?.focus();
   };
 
-  const handleDownload = () => {
+  const chooseFolder = async () => {
+    try {
+      const picked = await saveFolder.choose();
+      if (picked) {
+        toast({
+          title: `Saving to "${picked.name}"`,
+          description: "Downloads from this page will go straight into that folder.",
+        });
+      }
+    } catch (err) {
+      toast({
+        title: "Couldn't use that folder",
+        description: err instanceof Error ? err.message : "Try a different folder.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Downloads into the "Save to" folder: fetched by the page and written to
+  // the folder, with progress shown on the button instead of the browser's
+  // download bar. Cancelling stops the server's work, as with a normal download.
+  const saveIntoFolder = async (folder: SaveFolder, href: string, videoUrl: string) => {
+    const allowed = await ensureWriteAccess(folder).catch(() => false);
+    if (!allowed) {
+      toast({
+        title: `Can't save to "${folder.name}"`,
+        description:
+          "The browser didn't allow access to that folder. Download again and choose Allow, or pick another folder.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    setSaves((current) => ({ ...current, [href]: { bytes: 0, cancel } }));
+    watchForDownload(videoUrl);
+
+    let lastUpdate = 0;
+    try {
+      const name = await saveToFolder(folder, href, {
+        signal: controller.signal,
+        onProgress: (bytes) => {
+          if (Date.now() - lastUpdate < 250) return; // keep re-renders down
+          lastUpdate = Date.now();
+          setSaves((current) =>
+            current[href] ? { ...current, [href]: { ...current[href], bytes } } : current,
+          );
+        },
+      });
+      toast({ title: "Saved", description: `"${name}" is in your "${folder.name}" folder.` });
+      void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        toast({ title: "Download cancelled" });
+      } else if (err instanceof DOMException && err.name === "NotFoundError") {
+        toast({
+          title: `Can't find the "${folder.name}" folder`,
+          description: "It may have been moved or deleted. Choose a folder again.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Couldn't save the audio",
+          description: err instanceof Error ? err.message : "Something went wrong.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setSaves(({ [href]: _done, ...rest }) => rest);
+    }
+  };
+
+  // Every download link goes through here: with a "Save to" folder the page
+  // saves the file itself; otherwise the browser downloads it as usual.
+  const startDownload = (event: React.MouseEvent, href: string, videoUrl: string) => {
+    if (saveFolder.folder) {
+      event.preventDefault();
+      if (!saves[href]) void saveIntoFolder(saveFolder.folder, href, videoUrl);
+      return false;
+    }
+    watchForDownload(videoUrl);
+    return true;
+  };
+
+  const handleDownload = (event: React.MouseEvent) => {
     if (!selected) return;
+    if (!startDownload(event, buildDownloadUrl(selected.url, format), selected.url)) return;
 
     toast({
       title: "Download Started",
@@ -205,8 +301,10 @@ export default function Home() {
         ? "Fetching the original audio from YouTube. It'll appear in Recent Extractions once it finishes."
         : "Converting to MP3. It'll appear in Recent Extractions once it finishes.",
     });
-    watchForDownload(selected.url);
   };
+
+  const selectedHref = selected ? buildDownloadUrl(selected.url, format) : "";
+  const selectedSave = saves[selectedHref];
 
   return (
     <Layout>
@@ -362,18 +460,43 @@ export default function Home() {
                 </p>
 
                 <div className="mt-2 w-full">
-                  <a
-                    href={buildDownloadUrl(selected.url, format)}
-                    download
-                    onClick={handleDownload}
-                    className="w-full flex items-center justify-center gap-2 h-14 rounded-xl bg-foreground text-background font-semibold hover-elevate active-elevate-2 transition-all shadow-xl shadow-foreground/20"
-                  >
-                    <Download className="w-5 h-5" />
-                    Download Audio
-                    <span className="font-normal opacity-60">
-                      · {isOriginal ? "Original" : "MP3"}
-                    </span>
-                  </a>
+                  {selectedSave ? (
+                    <div className="flex gap-2">
+                      <div
+                        role="status"
+                        className="flex-1 min-w-0 flex items-center justify-center gap-2 h-14 px-3 rounded-xl bg-foreground/90 text-background font-semibold"
+                      >
+                        <Loader2 className="w-5 h-5 shrink-0 animate-spin" />
+                        <span className="truncate">
+                          Saving
+                          <span className="hidden sm:inline"> to {saveFolder.folder?.name}</span>
+                        </span>
+                        <span className="shrink-0 font-normal opacity-70 tabular-nums">
+                          {selectedSave.bytes > 0 ? formatBytes(selectedSave.bytes) : "starting…"}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={selectedSave.cancel}
+                        className="h-14 px-4 rounded-xl border border-border text-sm font-medium text-foreground hover:bg-secondary transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <a
+                      href={selectedHref}
+                      download
+                      onClick={handleDownload}
+                      className="w-full flex items-center justify-center gap-2 h-14 rounded-xl bg-foreground text-background font-semibold hover-elevate active-elevate-2 transition-all shadow-xl shadow-foreground/20"
+                    >
+                      <Download className="w-5 h-5" />
+                      Download Audio
+                      <span className="font-normal opacity-60">
+                        · {isOriginal ? "Original" : "MP3"}
+                      </span>
+                    </a>
+                  )}
 
                   <div className="mt-3 flex items-start justify-between gap-4 rounded-xl border border-border px-4 py-3 text-left">
                     <div>
@@ -395,6 +518,46 @@ export default function Home() {
                       className="mt-0.5"
                     />
                   </div>
+
+                  {saveFolder.supported && (
+                    <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 text-left">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground">Save to</p>
+                        <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 min-w-0">
+                          {saveFolder.folder ? (
+                            <>
+                              <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate" data-testid="save-folder-name">
+                                {saveFolder.folder.name}
+                              </span>
+                            </>
+                          ) : (
+                            "Your browser's downloads folder"
+                          )}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={chooseFolder}
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                        >
+                          {saveFolder.folder ? "Change" : "Choose folder"}
+                        </button>
+                        {saveFolder.folder && (
+                          <button
+                            type="button"
+                            onClick={saveFolder.clear}
+                            aria-label="Use the browser's downloads folder instead"
+                            title="Use the browser's downloads folder instead"
+                            className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   <button
                     onClick={clear}
@@ -613,17 +776,43 @@ export default function Home() {
                     {timeAgo(item.downloadedAt)}
                   </p>
                 </div>
-                <a
-                  href={buildDownloadUrl(item.url, format)}
-                  download
-                  onClick={() => watchForDownload(item.url)}
-                  aria-label={`Redownload ${item.title}`}
-                  title={isOriginal ? "Redownload the original audio" : "Redownload as MP3"}
-                  className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Redownload</span>
-                </a>
+                {saves[buildDownloadUrl(item.url, format)] ? (
+                  <button
+                    type="button"
+                    onClick={saves[buildDownloadUrl(item.url, format)].cancel}
+                    aria-label={`Cancel saving ${item.title}`}
+                    title="Cancel"
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                  >
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    {saves[buildDownloadUrl(item.url, format)].bytes > 0 && (
+                      <span className="tabular-nums">
+                        {formatBytes(saves[buildDownloadUrl(item.url, format)].bytes)}
+                      </span>
+                    )}
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <a
+                    href={buildDownloadUrl(item.url, format)}
+                    download
+                    onClick={(event) =>
+                      startDownload(event, buildDownloadUrl(item.url, format), item.url)
+                    }
+                    aria-label={`Redownload ${item.title}`}
+                    title={
+                      saveFolder.folder
+                        ? `Save again to "${saveFolder.folder.name}"`
+                        : isOriginal
+                          ? "Redownload the original audio"
+                          : "Redownload as MP3"
+                    }
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Redownload</span>
+                  </a>
+                )}
               </li>
             ))}
           </ul>

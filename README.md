@@ -13,17 +13,18 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 
 ## Key Features
 
-| Feature               | Description                                                                                                  |
-| --------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Instant video preview | Title and thumbnail load before you commit to downloading.                                                   |
-| Song search           | Search YouTube by artist and title; official uploads first, live/cover/remix versions last unless you ask.   |
-| Spotify song links    | Paste a Spotify song link to get the same recording from YouTube, matched by artist, title and length.       |
-| High-quality audio    | Pulls the best available audio stream from the source video.                                                 |
-| MP3 download          | Real MP3 files (320 kbps) named after the video, with title and artist tags that music players show.         |
-| Original audio option | A toggle to get YouTube's own audio stream instead — not converted, smaller (usually `.opus`). Great in VLC. |
-| Download history      | A persistent list of recent extractions with one-click redownload.                                           |
-| Friendly errors       | Clear messages when a URL is invalid, the video can't be fetched, or the network fails.                      |
-| Responsive design     | Works on desktop and mobile, with a polished hero section, animated result card, and history grid.           |
+| Feature               | Description                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Instant video preview | Title and thumbnail load before you commit to downloading.                                                                     |
+| Song search           | Search YouTube by artist and title; official uploads first, live/cover/remix versions last unless you ask.                     |
+| Spotify song links    | Paste a Spotify song link to get the same recording from YouTube, matched by artist, title and length.                         |
+| High-quality audio    | Pulls the best available audio stream from the source video.                                                                   |
+| MP3 download          | Real MP3 files (320 kbps) named after the video, with title and artist tags that music players show.                           |
+| Original audio option | A toggle to get YouTube's own audio stream instead — not converted, smaller (usually `.opus`). Great in VLC.                   |
+| Save to a folder      | Pick a folder once (Chrome or Edge on a computer) and downloads go straight into it instead of the browser's downloads folder. |
+| Download history      | A persistent list of recent extractions with one-click redownload.                                                             |
+| Friendly errors       | Clear messages when a URL is invalid, the video can't be fetched, or the network fails.                                        |
+| Responsive design     | Works on desktop and mobile, with a polished hero section, animated result card, and history grid.                             |
 
 ## How To Use It
 
@@ -31,11 +32,13 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 2. Either paste a YouTube URL into the input box (for example, `https://www.youtube.com/watch?v=...`) and click **Extract**, or switch to **Search by song**, type the artist and song title, click **Search**, and pick a result. Either way, a preview card appears with the video's title and thumbnail. (The app remembers which one you used last, and it works out what you meant: a link typed into the search box is opened, and plain words typed into the link box are searched for.) You can also paste a Spotify song link (in Spotify: **Share → Copy Song Link**) into either box — the best YouTube match is picked for you, and uploads the same length as the Spotify song are marked **Same length**.
 3. Not the right video? Pick a different search result, or click **Clear and start over**.
 4. Click **Download Audio** to save the MP3 to your device. Prefer the untouched original? Turn on **Original audio** first — the app remembers your choice, and it also applies to redownloads.
+   - Want the files somewhere other than your browser's downloads folder? Under **Save to**, click **Choose folder** and pick one (say, your Music folder). From then on, downloads go straight into it, with progress and a **Cancel** button on the page. The app remembers the folder; the browser asks once per visit before writing there again (choose **Allow on every visit** to skip that). Click the **×** next to the folder name to go back to your browser's downloads folder. A file that already exists is never overwritten — the new one is saved as "Song (1).mp3".
 5. Scroll down to **Recent Extractions** to redownload any audio file you've previously fetched.
 
 ## Notes & Limitations
 
 - The app extracts audio only — video downloads are not supported.
+- **Save to** needs Chrome or Edge on a computer; Firefox, Safari and phones don't let web pages save into a folder, so the setting doesn't appear there and downloads go to the browser's downloads folder as usual. Windows won't let browsers use a few system folders (like the Windows folder or the top of your user folder) — pick a folder inside one, like Music.
 - Spotify: only song links work, not albums, playlists or podcasts, and not `spotify.link` short links (open one and copy the `open.spotify.com` address instead). No Spotify account is needed.
 - Every YouTube upload of a song has the same audio quality ceiling for free (about 130 kbps Opus), so for music, the artist's or label's own upload — the ones marked **Official** — is usually the cleanest source.
 - The source video must be publicly accessible on YouTube (age-restricted, private, or members-only videos may fail).

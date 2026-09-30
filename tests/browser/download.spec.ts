@@ -168,6 +168,82 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     ).toBeVisible();
   });
 
+  test("Save to: a chosen folder gets the MP3 instead of the browser's downloads", async ({
+    page,
+  }) => {
+    // The real folder picker is a native Windows dialog a test can't click
+    // through, so give the page a folder in the browser's private storage
+    // (OPFS) instead. It's a real folder handle, written to the same way.
+    await page.context().addInitScript(() => {
+      (window as unknown as { showDirectoryPicker: () => Promise<unknown> }).showDirectoryPicker =
+        async () => {
+          const root = await navigator.storage.getDirectory();
+          return root.getDirectoryHandle("Music", { create: true });
+        };
+    });
+    const readFolder = () =>
+      page.evaluate(async () => {
+        const root = await navigator.storage.getDirectory();
+        const music = await root.getDirectoryHandle("Music", { create: true });
+        const files: { name: string; base64: string }[] = [];
+        for await (const handle of (
+          music as unknown as { values(): AsyncIterable<FileSystemHandle> }
+        ).values()) {
+          if (handle.kind !== "file") continue;
+          const file = await (handle as FileSystemFileHandle).getFile();
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.readAsDataURL(file);
+          });
+          files.push({ name: handle.name, base64: dataUrl.split(",")[1] ?? "" });
+        }
+        return files;
+      });
+    let browserDownloads = 0;
+    page.on("download", () => browserDownloads++);
+
+    await page.goto("/");
+    await page.locator('input[type="url"]').fill(TEST_VIDEO_URL);
+    await page.getByRole("button", { name: /extract/i }).click();
+    await page.getByRole("button", { name: /choose folder/i }).click({ timeout: 60_000 });
+    await expect(page.getByTestId("save-folder-name")).toHaveText("Music");
+
+    const downloadLink = page.locator('a[href^="/api/video/download"]', {
+      hasText: /download audio/i,
+    });
+    const rowsBefore = await historyRows(page).count();
+
+    // Cancelling part-way leaves nothing in the folder and nothing in the history.
+    await downloadLink.click();
+    await page.getByRole("button", { name: /^cancel$/i }).click();
+    await expect(page.getByText(/download cancelled/i).first()).toBeVisible();
+    expect(await readFolder()).toEqual([]);
+
+    // A full download lands in the folder as a real MP3.
+    await downloadLink.click();
+    await expect(page.getByText(/is in your "Music" folder/i).first()).toBeVisible({
+      timeout: 90_000,
+    });
+    const files = await readFolder();
+    expect(files.map((f) => f.name)).toEqual([expect.stringMatching(/\.mp3$/)]);
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-folder-test-"));
+    const savedPath = path.join(tmpDir, files[0].name);
+    await fs.writeFile(savedPath, Buffer.from(files[0].base64, "base64"));
+    const verdict = await verifyMp3File(savedPath);
+    expect(verdict.isValid, `Saved file is not a valid MP3: ${verdict.reason}`).toBe(true);
+    await fs.rm(tmpDir, { recursive: true, force: true });
+
+    expect(browserDownloads).toBe(0);
+    await expect(historyRows(page)).toHaveCount(rowsBefore + 1, { timeout: 20_000 });
+
+    // The folder is remembered after a reload (restored from IndexedDB).
+    await page.reload();
+    await page.locator('input[type="url"]').fill(TEST_VIDEO_URL);
+    await page.getByRole("button", { name: /extract/i }).click();
+    await expect(page.getByTestId("save-folder-name")).toHaveText("Music", { timeout: 60_000 });
+  });
+
   test("invalid URL surfaces a friendly error toast", async ({ page }) => {
     await page.goto("/");
 

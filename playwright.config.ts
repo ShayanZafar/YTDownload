@@ -29,7 +29,11 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      // Your installed Google Chrome (in headless mode) — the browser the app
+      // is used in. Playwright's own lightweight "headless shell" crashes when
+      // a page restores a saved folder from IndexedDB, which the "Save to"
+      // setting does on every visit. No Chrome? `npx playwright install chrome`.
+      use: { ...devices["Desktop Chrome"], channel: "chrome" },
     },
   ],
 

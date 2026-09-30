@@ -86,6 +86,7 @@ The Express server and the Vite dev server are mounted on a single port (default
 3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies YouTube's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
 4. Only when the download has fully succeeded — `yt-dlp` and `ffmpeg` both exited cleanly and the whole file was handed to the browser — does the server add it to the history. A cancelled or failed download is never recorded.
 5. Meanwhile the page polls `/api/downloads` every few seconds until the new entry appears, so the Recent Extractions list updates by itself (it gives up after 15 minutes, since a cancelled download never shows up).
+6. With a **Save to** folder chosen, step 3 happens in the page instead of the browser's download manager — see [Save to a folder](#save-to-a-folder).
 
 The visual versions of these flows live in [System Design](#system-design) below.
 
@@ -109,6 +110,18 @@ Spotify's audio is DRM-protected and can't be downloaded, but finding the same r
 4. The results are ranked as usual plus the song's length: uploads within 5 seconds of the Spotify length (`SAME_LENGTH_SECONDS` in `shared/schema.ts`) that match the search move to the top — "Official Audio" and label uploads of the same master match to within a few seconds, while music videos add intros and radio edits or extended mixes differ by much more. So a Spotify link to the 6-minute album version of a song finds the album version, not the 4-minute radio edit.
 
 The response adds `spotify: { id, url, title, artists, duration, thumbnail }`; the page shows it above the matches, marks same-length uploads, and picks the best match straight away.
+
+### Save to a folder
+
+Browsers always put downloads in their own downloads folder; a page can't change that. What Chrome and Edge (desktop) do offer is the File System Access API, so `client/src/lib/save-folder.ts` saves into a folder you pick instead:
+
+1. **Choose folder** calls `showDirectoryPicker({ mode: "readwrite", startIn: "music" })` — the normal Windows folder dialog. The page only ever sees the folder's name, never its path.
+2. The folder handle is kept in IndexedDB (`yt-audio` → `settings` → `save-folder`; a handle can't go in `localStorage`) and restored on the next visit. Before writing, `ensureWriteAccess()` checks permission and, if needed, asks — which must happen straight from a click, so it's the first thing the Download click does. Chrome asks once per visit, or never again if you pick **Allow on every visit**.
+3. Download clicks are intercepted (`startDownload()` in `Home.tsx`): the page `fetch`es the same `/api/video/download` URL and streams the body through a byte counter into `FileSystemFileHandle.createWritable()`. The name comes from the response's `Content-Disposition`, made safe for Windows, and an existing file is never overwritten (`Song (1).mp3`, like browsers do).
+4. **Cancel** aborts the `fetch`, which closes the connection — the server sees the same "close" as a cancelled browser download, kills `yt-dlp`/`ffmpeg`, and records nothing. The browser writes to a temporary file and only swaps it in when the stream closes cleanly, and `saveToFolder()` removes the empty placeholder file, so a cancelled or failed download leaves nothing behind.
+5. The server needs no changes: it records the history entry when the response finishes, exactly as for a normal download.
+
+Browsers without `showDirectoryPicker` (Firefox, Safari, phones) don't show the setting, and downloads stay plain `<a download>` links. The Playwright test can't click through a native folder dialog, so it replaces `showDirectoryPicker` with one that returns a folder in the browser's private storage (OPFS) — a real folder handle, written to the same way — and reads the saved MP3 back out of it.
 
 ### Storage abstraction
 
@@ -484,7 +497,7 @@ tests/
 ├── api/
 │   └── video.e2e.test.ts        # Vitest + Supertest, hits Express directly
 ├── browser/
-│   └── download.spec.ts         # Playwright, drives the real UI in Chromium
+│   └── download.spec.ts         # Playwright, drives the real UI in headless Google Chrome
 ├── unit/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
 │   ├── audio.test.ts            # yt-dlp / ffmpeg argument builders
@@ -524,7 +537,7 @@ The tests point `HISTORY_FILE` at a temporary folder, so they never add entries 
 
 ### Browser end-to-end (Playwright)
 
-Drives Chromium against the app. `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 and a throwaway `HISTORY_FILE`, so the tests never add entries to your real history and can run while your own copy is up on port 5000. Set `E2E_BASE_URL` to test an already-running server instead.
+Drives headless Google Chrome against the app. `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 and a throwaway `HISTORY_FILE`, so the tests never add entries to your real history and can run while your own copy is up on port 5000. Set `E2E_BASE_URL` to test an already-running server instead.
 
 What it checks:
 
@@ -533,12 +546,13 @@ What it checks:
 3. Turning on **Original audio** switches the link to `format=original`, and the download is a valid `.opus` (or `.m4a`/`.mka`) file.
 4. Switching to **Search by song**, searching for the test video and picking it shows the preview with a download link for that video; the mode survives a reload, and a link typed into the search box is opened (the switch flips back to **Paste a link**).
 5. Pasting a Spotify song link into the link box switches to **Search by song**, shows the song from Spotify, and picks the best YouTube match with a download link ready.
-6. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+6. With **Save to** set to a folder (backed by OPFS in the test), cancelling a download leaves the folder empty; a full download lands there as a valid MP3, not through the browser's download manager, appears in the history, and the folder is still chosen after a reload.
+7. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
-One-time browser install (already done if you've run the suite before):
+The tests run in your installed Google Chrome, in headless mode (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in. Playwright's own lightweight "headless shell" can't be used: it crashes when a page restores a saved **Save to** folder from IndexedDB (real Chrome and Edge are fine). If Chrome isn't installed:
 
 ```bash
-npx playwright install chromium
+npx playwright install chrome
 ```
 
 Run it:

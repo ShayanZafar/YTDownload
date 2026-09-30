@@ -1,9 +1,9 @@
 # YouTube → audio extractor
 
 Small full-stack app: paste a YouTube URL (or search for a song, or paste a Spotify song link),
-preview it, download the audio track. Developed and run locally on Windows (it also works on macOS/Linux). `README.md` is the user
-guide, `TECHNICAL.md` has architecture, setup and deployment details, and `LEARNING.md` maps the
-stack onto .NET concepts.
+preview it, download the audio track. Developed and run locally on Windows (it also works on
+macOS/Linux). `README.md` is the user guide, `TECHNICAL.md` has architecture, setup and
+deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 
 ## Stack
 
@@ -37,6 +37,9 @@ stack onto .NET concepts.
   Original audio toggle (`use-download-format.ts`) and the Paste a link / Search by song switch
 - `client/src/lib/format.ts` — `formatDuration()`, `isSpotifyLink()` and `asLink()` (a YouTube link
   is opened; a Spotify link or anything else is searched)
+- `client/src/lib/save-folder.ts` + `hooks/use-save-folder.ts` — the "Save to" folder (File System
+  Access API, Chrome/Edge desktop only): picked folder handle kept in IndexedDB, downloads fetched
+  and streamed into it (`saveToFolder()`); unsupported browsers keep plain `<a download>` links
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser` (Playwright)
 
 ## Commands
@@ -45,7 +48,7 @@ stack onto .NET concepts.
 - `npm run check` — type-check
 - `npx vitest run tests/unit` — fast unit tests
 - `npx vitest run tests/api` — end-to-end API tests (needs internet)
-- `npx playwright test` — browser tests (starts `npm run dev` if nothing is on port 5000)
+- `npx playwright test` — browser tests in the installed Google Chrome (starts its own server on port 5099)
 - `npx eslint .` and `npx prettier --check .`
 - `npm run build`, then `npm start` — production bundle
 
@@ -84,6 +87,13 @@ stack onto .NET concepts.
 - Spotify: only the validated 22-character track id goes into the one embed URL we fetch (no
   user-controlled URLs are ever fetched). If Spotify links break, check the embed page's
   `__NEXT_DATA__` shape first (`parseEmbedPage()`); the cloud workspace can't reach Spotify.
+- "Save to" folder: `ensureWriteAccess()` must run straight from the click (permission prompts need
+  a user gesture). Download links stay real `<a href download>` elements — `startDownload()` only
+  calls `preventDefault()` when a folder is set — so the default path and its tests are unchanged.
+  The Playwright test fakes `showDirectoryPicker` with an OPFS folder (native dialogs can't be driven)
+  and runs in the installed Google Chrome (`channel: "chrome"`): Playwright's headless shell crashes
+  restoring a folder handle from IndexedDB, and on Windows 10 the downloaded full Chromium (Chrome for
+  Testing) fails to start with a side-by-side configuration error.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
   (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).
