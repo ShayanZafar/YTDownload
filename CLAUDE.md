@@ -43,7 +43,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 
 - No setup beyond `npm install`. `.env` is optional (`PORT`, `HOST`, `HISTORY_FILE`, `FFMPEG_BIN`);
   shell variables override it. Delete `data/history.json` to clear the history.
-- The API tests point `HISTORY_FILE` at a temp folder, so they never touch the real history.
+- The API tests point `HISTORY_FILE` at a temp folder, and the Playwright config starts its own server on
+  port 5099 with a temp history, so tests never touch the real history.
 - In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
 - `npm install` / `npm rebuild youtube-dl-exec` need `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment:
   the package's installer demands Python 3.9+ even though Windows' `yt-dlp.exe` doesn't use it.
@@ -63,6 +64,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   (Ogg) for Opus, fragmented `.m4a` for AAC, `.mka` otherwise. The metadata pass uses the same
   `bestaudio` selector and the stream is pinned to its `format_id`, so container and codec match.
   The format enum and `buildDownloadUrl()` live in `shared/routes.ts`.
+- A download is added to the history only after it fully succeeds (both processes exit 0 and the
+  response `finish`es) — never on cancel or failure. The page polls `/api/downloads` until it appears.
 - Headers go out with the first chunk of audio, so failures before any audio become a `502`; don't
   write to `res` before the pipeline produces output.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.

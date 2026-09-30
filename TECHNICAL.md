@@ -78,8 +78,9 @@ The Express server and the Vite dev server are mounted on a single port (default
 
 1. The frontend calls `POST /api/video/info` with a YouTube URL.
 2. The backend validates the body with Zod, extracts the canonical video ID (`server/youtube-url.ts`), shells out to `yt-dlp` for metadata, and returns `{ title, thumbnail, url }`.
-3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), inserts a `downloads` row, then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies YouTube's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
-4. The frontend re-fetches `/api/downloads` to refresh the recent-extractions list.
+3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies YouTube's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
+4. Only when the download has fully succeeded — `yt-dlp` and `ffmpeg` both exited cleanly and the whole file was handed to the browser — does the server add it to the history. A cancelled or failed download is never recorded.
+5. Meanwhile the page polls `/api/downloads` every few seconds until the new entry appears, so the Recent Extractions list updates by itself (it gives up after 15 minutes, since a cancelled download never shows up).
 
 The visual versions of these flows live in [System Design](#system-design) below.
 
@@ -174,8 +175,6 @@ sequenceDiagram
   Y->>YT: HTTPS
   YT-->>Y: JSON
   Y-->>S: { title, uploader }
-  S->>H: add entry (url, title)
-  Note over S,H: A failure here is logged but swallowed —<br/>download still proceeds
   S->>F: spawn ffmpeg (stdin → libmp3lame 320k → stdout)
   S->>Y: spawn yt-dlp (bestaudio, output=-)
   Y->>YT: HTTPS audio stream
@@ -185,10 +184,14 @@ sequenceDiagram
     F-->>S: MP3 frames
     S-->>C: 200 + audio/mpeg (headers with first chunk), then chunks
   end
-  alt client cancels (at any point, even during the metadata pass)
+  alt download completes (both processes exit 0, response finished)
+    S->>H: add entry (url, title)
+    Note over S,H: A failure to save is logged but swallowed —<br/>the file has already been delivered
+  else client cancels (at any point, even during the metadata pass)
     C->>S: response "close"
     S->>Y: kill
     S->>F: kill
+    Note over S,H: nothing recorded
   else yt-dlp fails before any audio
     F-->>S: exits, no output
     S-->>C: 502 + yt-dlp's error message
@@ -228,7 +231,7 @@ The interesting failures are at the boundaries with `yt-dlp`, YouTube, and the h
 | Invalid / non-YouTube URL          | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                    |
 | Zod body validation fails (info)   | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                     |
 | `yt-dlp` metadata throws           | `youtubedl(...)` rejection      | Caught in handler                                                                                               | `500 { message }` (info) or `500` text (download)            |
-| Saving the history entry fails     | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error`, download proceeds                                                   | Nothing — file still downloads, history just won't show it   |
+| Saving the history entry fails     | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error` (the file was already delivered)                                     | Nothing — file still downloads, history just won't show it   |
 | `yt-dlp` / `ffmpeg` fails to start | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`         |
 | `yt-dlp` fails before any audio    | `ffmpeg` exits with no output   | Headers not sent yet, so the handler can still answer with an error                                             | `502` with yt-dlp's error message (browser: failed download) |
 | `yt-dlp` exits non-zero mid-stream | `ytdlp.on("close")`             | stderr logged; `ffmpeg` sees end-of-input, flushes and exits; response ended                                    | Shorter but valid MP3                                        |
@@ -456,7 +459,7 @@ The tests point `HISTORY_FILE` at a temporary folder, so they never add entries 
 
 ### Browser end-to-end (Playwright)
 
-Drives Chromium against the live app (using the `webServer` block in `playwright.config.ts`, which reuses your dev server if it's already running on port 5000, or starts `npm run dev` itself otherwise).
+Drives Chromium against the app. `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 and a throwaway `HISTORY_FILE`, so the tests never add entries to your real history and can run while your own copy is up on port 5000. Set `E2E_BASE_URL` to test an already-running server instead.
 
 What it checks:
 

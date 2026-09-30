@@ -7,7 +7,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 - **Paste a YouTube URL** — Drop in any standard YouTube video link.
 - **Preview the video** — See the title and thumbnail before downloading, so you can confirm you've got the right one.
 - **Extract high-quality audio** — One-click download of the audio track as a 320 kbps MP3 (the highest MP3 quality), converted from the best audio stream YouTube offers for free.
-- **Browse recent extractions** — Every download is saved to a history list so you can quickly grab a file again later without re-pasting the URL.
+- **Browse recent extractions** — Every completed download is saved to a history list so you can quickly grab a file again later without re-pasting the URL. Cancelled or failed downloads aren't added.
 
 ## Key Features
 

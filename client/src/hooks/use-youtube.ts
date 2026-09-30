@@ -15,9 +15,11 @@ function parseWithLogging<T>(schema: z.ZodSchema<T>, data: unknown, label: strin
   return result.data;
 }
 
-export function useRecentDownloads() {
+/** The download history. Pass a poll interval (ms) to keep it refreshing. */
+export function useRecentDownloads(pollEveryMs: number | false = false) {
   return useQuery({
     queryKey: [api.downloads.list.path],
+    refetchInterval: pollEveryMs,
     queryFn: async () => {
       const res = await fetch(api.downloads.list.path, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch recent downloads");

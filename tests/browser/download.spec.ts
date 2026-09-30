@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
@@ -8,6 +8,13 @@ import { verifyOriginalAudioFile } from "../utils/original-audio";
 // Stable, public, non-restricted test video:
 // "Me at the zoo" - the very first video uploaded to YouTube (April 2005).
 const TEST_VIDEO_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+
+// History rows for the test video in the "Recent Extractions" list.
+const historyRows = (page: Page) =>
+  page
+    .locator("section", { has: page.getByRole("heading", { name: /recent extractions/i }) })
+    .getByRole("listitem")
+    .filter({ hasText: /me at the zoo/i });
 
 test.describe("YouTube → MP3 end-to-end (browser)", () => {
   test("user pastes a URL, previews the video, and downloads a valid MP3", async ({ page }) => {
@@ -34,6 +41,8 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await expect(page.locator("img[alt]").first()).toBeVisible();
 
     // 4. Click the download link and capture the file the browser saves.
+    await expect(page.getByText(/recent extractions/i)).toBeVisible();
+    const rowsBefore = await historyRows(page).count();
     const downloadPromise = page.waitForEvent("download", { timeout: 90_000 });
     await downloadLink.click();
     const download = await downloadPromise;
@@ -52,6 +61,9 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
       `Downloaded file is not a valid MP3: ${verdict.reason} (size=${verdict.size})`,
     ).toBe(true);
     expect(verdict.size).toBeGreaterThan(10_000);
+
+    // 6. Once the download has finished, it shows up in Recent Extractions by itself.
+    await expect(historyRows(page)).toHaveCount(rowsBefore + 1, { timeout: 20_000 });
 
     await fs.rm(tmpDir, { recursive: true, force: true });
   });

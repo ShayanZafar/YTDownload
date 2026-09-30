@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import express from "express";
-import { createServer, type Server } from "http";
+import http, { createServer, type Server } from "http";
+import type { AddressInfo } from "net";
 import request from "supertest";
 import { promises as fs } from "fs";
 import path from "path";
@@ -39,6 +40,25 @@ afterAll(async () => {
   delete process.env.HISTORY_FILE;
   await fs.rm(historyDir, { recursive: true, force: true });
 });
+
+type HistoryRow = { id: number; url: string; title: string };
+
+const historyFor = async (url: string): Promise<HistoryRow[]> => {
+  const res = await request(app).get("/api/downloads");
+  expect(res.status).toBe(200);
+  return (res.body as HistoryRow[]).filter((row) => row.url === url);
+};
+
+// The history entry is saved just after the file finishes sending, so give it a moment.
+const waitForHistory = async (url: string, count: number, timeoutMs = 10_000) => {
+  const deadline = Date.now() + timeoutMs;
+  let rows = await historyFor(url);
+  while (rows.length < count && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    rows = await historyFor(url);
+  }
+  return rows;
+};
 
 describe("YouTube → MP3 end-to-end (API)", () => {
   it("rejects an invalid YouTube URL on /api/video/info", async () => {
@@ -133,15 +153,39 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(res.text).toMatch(/mp3.*original/);
   });
 
-  it("logs the download in /api/downloads after a successful extraction", async () => {
-    const res = await request(app).get("/api/downloads");
-    expect(res.status).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
+  it("logs completed downloads in /api/downloads", async () => {
+    // The two download tests above (MP3 and original) both completed.
+    const rows = await waitForHistory(TEST_VIDEO_URL, 2);
+    expect(rows).toHaveLength(2);
+    expect(rows[0].title.length).toBeGreaterThan(0);
+  });
 
-    // The previous test downloaded TEST_VIDEO_URL, so it should appear here.
-    const found = (res.body as Array<{ url: string; title: string }>).some(
-      (row) => row.url === TEST_VIDEO_URL,
-    );
-    expect(found).toBe(true);
+  it("does not log a download the browser cancels part-way through", async () => {
+    const before = (await historyFor(TEST_VIDEO_URL)).length;
+
+    // Start a real download and hang up as soon as the first audio arrives.
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const { port } = httpServer.address() as AddressInfo;
+    const gotAudio = await new Promise<boolean>((resolve, reject) => {
+      const req = http.get(
+        `http://127.0.0.1:${port}/api/video/download?url=${encodeURIComponent(TEST_VIDEO_URL)}`,
+        (res) => {
+          res.once("data", () => {
+            req.destroy(); // like cancelling in the browser
+            resolve(true);
+          });
+          res.once("end", () => resolve(false));
+        },
+      );
+      req.on("error", (err) =>
+        (err as NodeJS.ErrnoException).code === "ECONNRESET" ? null : reject(err),
+      );
+    });
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    expect(gotAudio).toBe(true);
+
+    // Give the server time to notice and clean up, then check nothing was saved.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect((await historyFor(TEST_VIDEO_URL)).length).toBe(before);
   });
 });

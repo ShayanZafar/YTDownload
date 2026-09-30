@@ -112,14 +112,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const title = info.title ?? "audio";
       const safeTitle = title.replace(/[^\w\s-]/g, "").trim() || "audio";
 
-      // Cancelled while we were looking up the video: don't log it or start work.
-      if (clientGone) return;
-
-      try {
-        await storage.createDownload({ url, title });
-      } catch (dbError) {
-        console.error("Failed to log download", dbError);
-      }
+      // Cancelled while we were looking up the video: don't start any work.
       if (clientGone) return;
 
       // These only go out with the first chunk of audio, so a failure before
@@ -161,14 +154,36 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       ytdlp.stdout.pipe(ffmpeg.stdin);
       ffmpeg.stdout.pipe(res, { end: false });
 
+      // Download history: only record a download that fully succeeded — both
+      // processes exited cleanly and the whole file was handed to the browser.
+      // A cancel or a failure part-way through leaves no entry.
+      let ytdlpExit: number | null | undefined; // undefined = still running
+      let ffmpegExit: number | null | undefined;
+      let delivered = false;
+      let recorded = false;
+      const recordIfComplete = () => {
+        if (recorded || clientGone || !delivered || ytdlpExit !== 0 || ffmpegExit !== 0) return;
+        recorded = true;
+        storage
+          .createDownload({ url, title })
+          .catch((err) => console.error("Failed to save download history", err));
+      };
+      res.once("finish", () => {
+        delivered = true;
+        recordIfComplete();
+      });
+
       ytdlp.on("close", (code) => {
+        ytdlpExit = code;
         // ffmpeg sees end-of-input and finishes on its own; just record why.
         if (code !== 0 && !clientGone) {
           console.error(`yt-dlp exited with code ${code}: ${lastLine(ytdlpErr)}`);
         }
+        recordIfComplete();
       });
 
       ffmpeg.on("close", (code) => {
+        ffmpegExit = code;
         stopPipeline?.(); // make sure yt-dlp isn't left running
         if (clientGone) return;
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
@@ -6,8 +6,7 @@ import { useVideoInfo, useRecentDownloads } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { useQueryClient } from "@tanstack/react-query";
-import { api, buildDownloadUrl } from "@shared/routes";
+import { buildDownloadUrl } from "@shared/routes";
 import { formatDistanceToNow } from "date-fns";
 import {
   Search,
@@ -19,6 +18,14 @@ import {
   FileAudio,
   History,
 } from "lucide-react";
+
+// A download started from this page that hasn't shown up in the history yet.
+// The server only records a download once it has fully completed, so we keep
+// refreshing the history until it appears — or give up after a while, since
+// a cancelled download never will.
+type PendingDownload = { url: string; afterId: number; startedAt: number };
+const PENDING_TIMEOUT_MS = 15 * 60_000;
+const HISTORY_POLL_MS = 3_000;
 
 // The history file is plain JSON on disk, so don't trust its dates blindly:
 // an unreadable one shows as "Recently" instead of crashing the list.
@@ -37,10 +44,33 @@ export default function Home() {
   const [format, setFormat] = useDownloadFormat();
   const isOriginal = format === "original";
   const { toast } = useToast();
-  const queryClient = useQueryClient();
+  const [pending, setPending] = useState<PendingDownload[]>([]);
 
   const { mutate: fetchInfo, isPending, data: videoInfo, error, reset } = useVideoInfo();
-  const { data: recentDownloads, isLoading: isLoadingHistory } = useRecentDownloads();
+  const { data: recentDownloads, isLoading: isLoadingHistory } = useRecentDownloads(
+    pending.length > 0 ? HISTORY_POLL_MS : false,
+  );
+
+  // Stop waiting for a download once it's in the history (or has timed out).
+  useEffect(() => {
+    if (pending.length === 0) return;
+    const prune = () =>
+      setPending((current) =>
+        current.filter(
+          (p) =>
+            Date.now() - p.startedAt < PENDING_TIMEOUT_MS &&
+            !recentDownloads?.some((d) => d.url === p.url && d.id > p.afterId),
+        ),
+      );
+    prune();
+    const timer = setInterval(prune, 30_000);
+    return () => clearInterval(timer);
+  }, [recentDownloads, pending.length]);
+
+  const watchForDownload = (downloadUrl: string) => {
+    const afterId = Math.max(0, ...(recentDownloads ?? []).map((d) => d.id));
+    setPending((current) => [...current, { url: downloadUrl, afterId, startedAt: Date.now() }]);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,14 +105,10 @@ export default function Home() {
     toast({
       title: "Download Started",
       description: isOriginal
-        ? "Fetching the original audio from YouTube."
-        : "Converting to MP3 — the file will save as it's ready.",
+        ? "Fetching the original audio from YouTube. It'll appear in Recent Extractions once it finishes."
+        : "Converting to MP3. It'll appear in Recent Extractions once it finishes.",
     });
-
-    // Invalidate history after a brief delay assuming the download successfully registered
-    setTimeout(() => {
-      queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] });
-    }, 2000);
+    watchForDownload(videoInfo.url);
   };
 
   return (
@@ -287,6 +313,7 @@ export default function Home() {
                 <a
                   href={buildDownloadUrl(item.url, format)}
                   download
+                  onClick={() => watchForDownload(item.url)}
                   aria-label={`Redownload ${item.title}`}
                   title={isOriginal ? "Redownload the original audio" : "Redownload as MP3"}
                   className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
