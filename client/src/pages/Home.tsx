@@ -20,6 +20,18 @@ import {
   History,
 } from "lucide-react";
 
+// The history file is plain JSON on disk, so don't trust its dates blindly:
+// an unreadable one shows as "Recently" instead of crashing the list.
+function validDate(iso: string): Date | undefined {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function timeAgo(iso: string): string {
+  const date = validDate(iso);
+  return date ? formatDistanceToNow(date, { addSuffix: true }) : "Recently";
+}
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [format, setFormat] = useDownloadFormat();
@@ -267,13 +279,9 @@ export default function Home() {
                   </p>
                   <p
                     className="text-xs text-muted-foreground"
-                    title={
-                      item.downloadedAt ? new Date(item.downloadedAt).toLocaleString() : undefined
-                    }
+                    title={validDate(item.downloadedAt)?.toLocaleString()}
                   >
-                    {item.downloadedAt
-                      ? formatDistanceToNow(new Date(item.downloadedAt), { addSuffix: true })
-                      : "Recently"}
+                    {timeAgo(item.downloadedAt)}
                   </p>
                 </div>
                 <a

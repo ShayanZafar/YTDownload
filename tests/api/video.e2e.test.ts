@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import express from "express";
 import { createServer, type Server } from "http";
 import request from "supertest";
@@ -15,17 +15,13 @@ const TEST_VIDEO_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 
 let httpServer: Server;
 let app: express.Express;
+let historyDir: string;
 
 beforeAll(async () => {
-  // Pick up DATABASE_URL from .env, the same way the app does.
-  await import("../../server/env");
-
-  if (!process.env.DATABASE_URL) {
-    throw new Error(
-      "DATABASE_URL must be set to run end-to-end API tests. " +
-        "These tests boot the real Express app and exercise the storage layer.",
-    );
-  }
+  // Keep test downloads out of your real history: point the app's history
+  // file at a throwaway folder for this run.
+  historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-history-"));
+  process.env.HISTORY_FILE = path.join(historyDir, "history.json");
 
   // Mirror the minimum middleware stack that server/index.ts sets up,
   // so we can attach Supertest to the real route handlers without starting
@@ -37,6 +33,11 @@ beforeAll(async () => {
   app.use(express.urlencoded({ extended: false }));
   httpServer = createServer(app);
   await registerRoutes(httpServer, app);
+});
+
+afterAll(async () => {
+  delete process.env.HISTORY_FILE;
+  await fs.rm(historyDir, { recursive: true, force: true });
 });
 
 describe("YouTube → MP3 end-to-end (API)", () => {

@@ -24,11 +24,9 @@ This document covers the project's architecture, local development setup, enviro
 - **ffmpeg-static** — an ffmpeg binary fetched by `npm install` (any OS, no system install) that converts the audio to MP3 on the fly. Set `FFMPEG_BIN` to use a different ffmpeg.
 - **Zod** for request validation
 
-### Database
+### Storage
 
-- **PostgreSQL** (any standard provider, e.g. a local Docker container, Neon, Supabase, RDS)
-- **Drizzle ORM** for type-safe database access
-- **drizzle-kit** for schema migrations
+- **No database.** The download history is a small JSON file (`data/history.json`), written by `server/storage.ts`. Nothing to install or run.
 
 ---
 
@@ -51,16 +49,15 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── env.ts                 # Loads .env before anything reads settings
 │   ├── routes.ts              # API route handlers
 │   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers
-│   ├── storage.ts             # Storage abstraction (IStorage + DatabaseStorage)
-│   ├── db.ts                  # Drizzle + pg connection setup
+│   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
+│   ├── audio.ts               # yt-dlp / ffmpeg arguments for the download pipeline
 │   ├── vite.ts                # Dev-only Vite middleware integration
 │   └── static.ts              # Production static-file serving
 ├── shared/                    # Code shared between client & server
-│   ├── schema.ts              # Drizzle tables, Zod schemas, types
+│   ├── schema.ts              # Zod schema + types for history entries
 │   └── routes.ts              # Typed API route definitions
 ├── script/
 │   └── build.ts               # Production build script
-├── drizzle.config.ts          # Drizzle Kit config (migrations)
 ├── tailwind.config.ts         # Tailwind theme configuration
 ├── vite.config.ts             # Vite configuration
 ├── tests/                     # unit, api (Vitest) and browser (Playwright) tests
@@ -87,11 +84,11 @@ The visual versions of these flows live in [System Design](#system-design) below
 
 ### Storage abstraction
 
-All database access goes through the `IStorage` interface in `server/storage.ts`. Routes never touch the database directly — they call `storage.getDownloads()` or `storage.createDownload(...)`. This makes it easy to swap implementations or add caching later.
+The download history goes through the `IStorage` interface in `server/storage.ts`; routes only call `storage.getDownloads()` and `storage.createDownload(...)`. The implementation, `FileStorage`, keeps the newest 100 entries in `data/history.json` (or wherever `HISTORY_FILE` points). Writes are queued one at a time and go through a temp file + rename, so simultaneous downloads can't clobber each other and a crash can't leave half a file. If the file is ever unreadable, it's copied aside as `history.json.broken-<timestamp>` and a fresh list starts — the history is a convenience, so it should never break downloads.
 
 ### Shared types & routes
 
-`shared/schema.ts` defines the Drizzle table, the `createInsertSchema` Zod validator, and `Download` / `InsertDownload` TypeScript types. Both the client and the server import from `@shared/schema`, guaranteeing the API contract stays in sync.
+`shared/schema.ts` defines the Zod schema for a history entry and the `Download` / `InsertDownload` types; `shared/routes.ts` defines the API contract (paths, request/response schemas, the `mp3 | original` download formats, and `buildDownloadUrl()`). Both the client and the server import from `@shared/*`, so the contract stays in sync — the client validates `/api/downloads` responses against the same schema the server writes.
 
 ---
 
@@ -101,7 +98,7 @@ This section is the visual companion to the prose above. All diagrams use [Merma
 
 ### Component diagram
 
-The whole system is one Node process plus one Postgres database, plus two helper binaries run as subprocesses: `yt-dlp` (which calls out to YouTube) and `ffmpeg` (which converts to MP3).
+The whole system is one Node process and a JSON file, plus two helper binaries run as subprocesses: `yt-dlp` (which calls out to YouTube) and `ffmpeg` (which converts to MP3).
 
 ```mermaid
 flowchart LR
@@ -110,21 +107,21 @@ flowchart LR
   YtDlp["yt-dlp subprocess<br/>(spawned per request)"]
   Ffmpeg["ffmpeg subprocess<br/>(spawned per download)"]
   YouTube["YouTube<br/>(public API + CDN)"]
-  DB[("PostgreSQL<br/>downloads table")]
+  History[("data/history.json<br/>download history")]
 
   Browser -- "HTTPS<br/>/api/* + static assets" --> Node
   Node -- "spawn" --> YtDlp
   YtDlp -- "audio (stdout → stdin)" --> Ffmpeg
   Ffmpeg -- "MP3 (stdout)" --> Node
   YtDlp -- "HTTPS" --> YouTube
-  Node -- "SQL over TLS" --> DB
+  Node -- "read / write" --> History
 ```
 
 Key things this picture makes obvious:
 
 - **One port, one process.** The client, the API, and (in dev) the Vite dev server all share port 5000. There is no separate API gateway, no reverse proxy in the default setup.
 - **`yt-dlp` and `ffmpeg` are subprocesses, not libraries.** Every metadata fetch spawns a fresh `yt-dlp`; every download spawns a `yt-dlp` + `ffmpeg` pair. Those processes are the unit of failure for anything YouTube-related, and the route is responsible for killing both when the download ends or is cancelled.
-- **The database is only on the write path of the download flow** — and even there, a DB failure does not block the download (see Failure modes).
+- **The history file is only on the write path of the download flow** — and even there, a failure to save it does not block the download (see Failure modes).
 
 ### Sequence: video info (`POST /api/video/info`)
 
@@ -165,7 +162,7 @@ sequenceDiagram
   autonumber
   participant C as Browser
   participant S as Express handler
-  participant DB as PostgreSQL
+  participant H as history.json
   participant Y as yt-dlp subprocess
   participant F as ffmpeg subprocess
   participant YT as YouTube
@@ -176,8 +173,8 @@ sequenceDiagram
   Y->>YT: HTTPS
   YT-->>Y: JSON
   Y-->>S: { title, uploader }
-  S->>DB: INSERT INTO downloads (url, title)
-  Note over S,DB: DB error here is logged but swallowed —<br/>download still proceeds
+  S->>H: add entry (url, title)
+  Note over S,H: A failure here is logged but swallowed —<br/>download still proceeds
   S->>F: spawn ffmpeg (stdin → libmp3lame 320k → stdout)
   S->>Y: spawn yt-dlp (bestaudio, output=-)
   Y->>YT: HTTPS audio stream
@@ -212,33 +209,33 @@ flowchart LR
   end
   Internet["Internet users"] -- HTTPS --> Node2
   Node2 -- HTTPS --> YouTubeProd["YouTube"]
-  Node2 -- "SQL over TLS<br/>(DATABASE_URL secret)" --> Neon[("Hosted Postgres<br/>e.g. Neon / Supabase")]
+  Node2 -- "read / write" --> Disk[("data/history.json<br/>(persistent disk)")]
 ```
 
 Notes on this topology:
 
-- The container is **stateless** — every restart is clean. All persistent data is in Postgres.
+- The only persistent data is `data/history.json`. In a container, put it on a persistent volume (or point `HISTORY_FILE` at one), or accept that the history resets on redeploy.
 - `yt-dlp` and `ffmpeg` are fetched into `node_modules/` at install time (`youtube-dl-exec/bin/`, `ffmpeg-static/`), so nothing is installed at runtime. On Linux we **do** need Python 3.10+ in the container, because the Linux yt-dlp build is a Python script.
 - There's no object storage. Audio is streamed from `yt-dlp` through `ffmpeg` to the client and never touches disk on the server.
 
 ### Failure modes
 
-The interesting failures are at the boundaries with `yt-dlp`, YouTube, and Postgres. The table below is the truth as of the code in `server/routes.ts`:
+The interesting failures are at the boundaries with `yt-dlp`, YouTube, and the history file. The table below is the truth as of the code in `server/routes.ts`:
 
-| Failure                              | Where surfaced                  | Behavior                                                                                                        | User sees                                                    |
-| ------------------------------------ | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Invalid / non-YouTube URL            | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                    |
-| Zod body validation fails (info)     | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                     |
-| `yt-dlp` metadata throws             | `youtubedl(...)` rejection      | Caught in handler                                                                                               | `500 { message }` (info) or `500` text (download)            |
-| DB insert into `downloads` fails     | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error`, download proceeds                                                   | Nothing — file still downloads, history just won't show it   |
-| `yt-dlp` / `ffmpeg` fails to start   | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`         |
-| `yt-dlp` fails before any audio      | `ffmpeg` exits with no output   | Headers not sent yet, so the handler can still answer with an error                                             | `502` with yt-dlp's error message (browser: failed download) |
-| `yt-dlp` exits non-zero mid-stream   | `ytdlp.on("close")`             | stderr logged; `ffmpeg` sees end-of-input, flushes and exits; response ended                                    | Shorter but valid MP3                                        |
-| Client cancels the download          | `res.on("close")`               | Watched from the start of the request: nothing is spawned if it's already gone, otherwise both processes killed | n/a (user already left)                                      |
-| Postgres unreachable on `/downloads` | `storage.getDownloads()` throws | Caught in handler                                                                                               | `500 Failed to fetch downloads`, history list shows error    |
-| YouTube blocks the request           | `yt-dlp` exits non-zero         | Same as the two rows above — that's why we keep `yt-dlp` itself up to date, not roll our own scraping logic     | `502`, or a shortened file if it happens mid-stream          |
+| Failure                            | Where surfaced                  | Behavior                                                                                                        | User sees                                                    |
+| ---------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Invalid / non-YouTube URL          | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                    |
+| Zod body validation fails (info)   | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                     |
+| `yt-dlp` metadata throws           | `youtubedl(...)` rejection      | Caught in handler                                                                                               | `500 { message }` (info) or `500` text (download)            |
+| Saving the history entry fails     | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error`, download proceeds                                                   | Nothing — file still downloads, history just won't show it   |
+| `yt-dlp` / `ffmpeg` fails to start | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`         |
+| `yt-dlp` fails before any audio    | `ffmpeg` exits with no output   | Headers not sent yet, so the handler can still answer with an error                                             | `502` with yt-dlp's error message (browser: failed download) |
+| `yt-dlp` exits non-zero mid-stream | `ytdlp.on("close")`             | stderr logged; `ffmpeg` sees end-of-input, flushes and exits; response ended                                    | Shorter but valid MP3                                        |
+| Client cancels the download        | `res.on("close")`               | Watched from the start of the request: nothing is spawned if it's already gone, otherwise both processes killed | n/a (user already left)                                      |
+| History file can't be read         | `storage.getDownloads()`        | Unparseable file is copied aside and a fresh list starts; other read errors → caught in handler                 | Empty history, or `500 Failed to fetch downloads`            |
+| YouTube blocks the request         | `yt-dlp` exits non-zero         | Same as the two rows above — that's why we keep `yt-dlp` itself up to date, not roll our own scraping logic     | `502`, or a shortened file if it happens mid-stream          |
 
-The deliberate design choice worth flagging: **a database outage doesn't break downloads**. The download history is best-effort, the audio extraction is the product. We chose this over the alternative (fail the download if we can't log it), because the user's download is what they came for.
+The deliberate design choice worth flagging: **a history problem never breaks downloads**. The download history is best-effort, the audio extraction is the product. We chose this over the alternative (fail the download if we can't log it), because the user's download is what they came for.
 
 ### Scaling considerations
 
@@ -249,7 +246,7 @@ This stack is designed for a small-to-medium audience. Here's where it would cra
 | Single Node process            | Sustained concurrent downloads, since each one occupies an event-loop slot for the duration of the stream | Run multiple Node instances behind a load balancer.                                                               |
 | Subprocess fan-out             | Each download runs a `yt-dlp` + `ffmpeg` pair; MP3 encoding is the main CPU cost                          | Add a per-instance concurrency cap (e.g., a small `p-limit` queue around the download pipeline).                  |
 | Outbound bandwidth from server | Every byte of audio flows server → client                                                                 | Move to a presigned-URL or proxy-and-cache model, where popular videos hit a CDN instead of `yt-dlp` per request. |
-| Postgres connection pool       | Many concurrent requests sharing one pool                                                                 | Tune the pool size in `server/db.ts`; for serverless Postgres (Neon), the HTTP driver handles this automatically. |
+| History in a JSON file         | Multiple server instances, or a history far longer than the 100-entry cap                                 | Swap `FileStorage` for a database-backed `IStorage` (SQLite or Postgres); routes don't need to change.            |
 | `yt-dlp` extractor rot         | YouTube periodically changes its players and `yt-dlp` ships a fix                                         | Bump the `youtube-dl-exec` dependency on a cadence (or pin a specific `yt-dlp` binary release).                   |
 | No background job queue        | If a future feature needs work to outlive the request (e.g., batch playlist downloads)                    | Introduce a queue (BullMQ + Redis is the conventional pick) and a worker process.                                 |
 | No caching of metadata         | Same URL fetched repeatedly costs a `yt-dlp` spawn each time                                              | Add a short TTL cache (in-memory `lru-cache` or Redis) keyed by canonical video ID.                               |
@@ -258,19 +255,22 @@ None of these are problems today. They're listed here so the next person doesn't
 
 ---
 
-## Database Schema
+## History File
 
-A single table tracks every successful download:
+`data/history.json` (git-ignored) holds the newest 100 downloads, newest first:
 
-```ts
-// shared/schema.ts
-downloads {
-  id            serial PRIMARY KEY,
-  url           text   NOT NULL,
-  title         text   NOT NULL,
-  downloadedAt  timestamp DEFAULT now()
-}
+```json
+[
+  {
+    "id": 2,
+    "url": "https://www.youtube.com/watch?v=9DII4peQE7I",
+    "title": "Progression - Ocean Green (2004)",
+    "downloadedAt": "2026-09-29T22:58:44.009Z"
+  }
+]
 ```
+
+`downloadedAt` is an ISO 8601 UTC timestamp. It's safe to delete the file to clear the history.
 
 ---
 
@@ -288,14 +288,15 @@ All JSON errors follow the shape `{ message: string, field?: string }`.
 
 ## Environment Variables
 
-| Variable       | Required | Description                                                                  |
-| -------------- | -------- | ---------------------------------------------------------------------------- |
-| `DATABASE_URL` | Yes      | PostgreSQL connection string (e.g. `postgres://user:pass@host:5432/dbname`). |
-| `NODE_ENV`     | No       | `development` (default) or `production`. Controls Vite vs static serving.    |
-| `PORT`         | No       | Port to bind (default `5000`).                                               |
-| `HOST`         | No       | Interface to listen on (default `127.0.0.1`; use `0.0.0.0` in a container).  |
+| Variable       | Required | Description                                                                 |
+| -------------- | -------- | --------------------------------------------------------------------------- |
+| `NODE_ENV`     | No       | `development` (default) or `production`. Controls Vite vs static serving.   |
+| `PORT`         | No       | Port to bind (default `5000`).                                              |
+| `HOST`         | No       | Interface to listen on (default `127.0.0.1`; use `0.0.0.0` in a container). |
+| `HISTORY_FILE` | No       | Where to keep the download history (default `data/history.json`).           |
+| `FFMPEG_BIN`   | No       | Use this ffmpeg instead of the one `ffmpeg-static` downloads.               |
 
-Put these in a `.env` file in the project root (copy `.env.example`); `server/env.ts` loads it on startup. Variables already set in your shell or hosting platform take priority over the file.
+None are required. To set any, put them in a `.env` file in the project root (copy `.env.example`); `server/env.ts` loads it on startup. Variables already set in your shell or hosting platform take priority over the file.
 
 ---
 
@@ -310,31 +311,6 @@ Put these in a `.env` file in the project root (copy `.env.example`); `server/en
   - Debian/Ubuntu: `sudo apt install python3`
   - Fedora/RHEL: `sudo dnf install python3`
   - Verify with `python3 --version` (should be 3.10+).
-- A reachable **PostgreSQL** instance — see the next section for how to get one.
-
-### Get a PostgreSQL instance
-
-You have three reasonable options; pick whichever is least friction for you.
-
-**Option 1 — Hosted (fastest, zero install).** Sign up for a free Postgres at [Neon](https://neon.tech/), [Supabase](https://supabase.com/), or [Render](https://render.com/), copy the connection string they give you, and use it as `DATABASE_URL`. No local install, no port conflicts.
-
-**Option 2 — Docker (one command).** If you have Docker installed:
-
-```bash
-docker run -d --name yt-mp3-db \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=youtube_audio \
-  -p 5432:5432 \
-  postgres:16
-```
-
-Then use `DATABASE_URL=postgres://postgres:postgres@localhost:5432/youtube_audio`.
-
-**Option 3 — Local install.**
-
-- macOS: `brew install postgresql@16 && brew services start postgresql@16`
-- Debian/Ubuntu: `sudo apt install postgresql && sudo systemctl start postgresql`
-- Then: `createdb youtube_audio` and use `DATABASE_URL=postgres://$USER@localhost:5432/youtube_audio`.
 
 ### Steps
 
@@ -351,28 +327,11 @@ Then use `DATABASE_URL=postgres://postgres:postgres@localhost:5432/youtube_audio
    npm install
    ```
 
-3. **Configure environment variables**
-   Copy the example file and fill in your real `DATABASE_URL`:
-
-   ```bash
-   cp .env.example .env
-   # then edit .env in your editor
-   ```
-
-   `.env` is git-ignored, so credentials never leave your machine.
-
-4. **Push the database schema**
-   This creates the `downloads` table from `shared/schema.ts`:
-
-   ```bash
-   npm run db:push
-   ```
-
-5. **Start the dev server**
+3. **Start the dev server**
    ```bash
    npm run dev
    ```
-   The app is available at `http://localhost:5000`. The frontend hot-reloads via Vite, and changes to server files restart automatically through `tsx`.
+   The app is available at `http://localhost:5000`. The frontend hot-reloads via Vite; restart the command after changing server files. No configuration is needed — `.env` is optional (see [Environment Variables](#environment-variables)).
 
 ---
 
@@ -384,38 +343,23 @@ The app runs natively on Windows — no WSL or Git Bash needed. The npm scripts 
 
 ```powershell
 winget install -e --id OpenJS.NodeJS.LTS         # Node 20+ and npm
-winget install -e --id Docker.DockerDesktop      # OPTIONAL — easiest way to run Postgres locally
 ```
 
 Close and reopen your terminal so the new programs are on `PATH`, then check `node --version` (v20.x or newer).
 
 > **PowerShell tip:** if `npm` fails with "npm.ps1 cannot be loaded because running scripts is disabled", either type `npm.cmd` instead of `npm`, or allow local scripts once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-### Get a PostgreSQL database
-
-Pick one:
-
-- **Docker Desktop** (start it first):
-  ```powershell
-  docker run -d --name yt-mp3-db --restart unless-stopped -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=youtube_audio -p 5432:5432 postgres:16
-  ```
-  Connection string: `postgres://postgres:postgres@localhost:5432/youtube_audio`. The container starts automatically whenever Docker Desktop is running; if it's ever stopped, `docker start yt-mp3-db`.
-- **Hosted** (Neon, Supabase, …): copy the connection string they give you.
-- **Native install:** `winget install -e --id PostgreSQL.PostgreSQL.16`, then create a `youtube_audio` database.
-
-### Install, configure, run
+### Install and run
 
 ```powershell
 $env:YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"   # see note below
 npm install
-Copy-Item .env.example .env      # then set DATABASE_URL in .env
-npm run db:push                  # creates the downloads table
 npm run dev                      # http://localhost:5000
 ```
 
 `youtube-dl-exec`'s installer refuses to run unless it finds Python 3.9+, even though the Windows `yt-dlp.exe` doesn't use Python. Setting `YOUTUBE_DL_SKIP_PYTHON_CHECK` skips that check; to make it permanent, run `setx YOUTUBE_DL_SKIP_PYTHON_CHECK 1` once and reopen the terminal.
 
-Works the same in PowerShell, `cmd.exe`, Git Bash, or WSL. Variables already set in your shell (e.g. `$env:DATABASE_URL = "..."`) take priority over `.env`.
+Works the same in PowerShell, `cmd.exe`, Git Bash, or WSL.
 
 ### Production build on Windows
 
@@ -429,7 +373,7 @@ npm start                        # serves dist/ on http://localhost:5000
 - **Port 5000 is in use.** Set `PORT=5001` (or any free port) in `.env`. Find what's holding 5000 with `Get-NetTCPConnection -LocalPort 5000`.
 - **Reaching it from your phone or another PC.** The server only listens on this computer by default. Set `HOST=0.0.0.0` in `.env` (Windows Firewall will ask to allow Node).
 - **Downloads stop working after a while.** YouTube changes things regularly; run `npm rebuild youtube-dl-exec` to fetch the latest yt-dlp (with `YOUTUBE_DL_SKIP_PYTHON_CHECK` set, as above).
-- **`npm install` skips dev dependencies** (e.g. `'drizzle-kit' is not recognized`). `NODE_ENV=production` is set in that terminal — clear it (`Remove-Item Env:NODE_ENV`) and reinstall.
+- **`npm install` skips dev dependencies** (e.g. `'tsx' is not recognized`). `NODE_ENV=production` is set in that terminal — clear it (`Remove-Item Env:NODE_ENV`) and reinstall.
 - **Long file paths in `node_modules`.** If `npm install` fails with `ENAMETOOLONG`, enable Windows long-path support: `New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force` (elevated PowerShell, then reboot).
 - **Keep the project path free of spaces** (e.g. `C:\Code\...`, not `C:\My Projects\...`). The yt-dlp wrapper falls back to running through a shell when its path contains spaces, which is more fragile.
 - **CRLF vs. LF line endings.** Git on Windows usually checks files out with CRLF; `.prettierrc` uses `"endOfLine": "auto"`, so Prettier accepts either and keeps what's there.
@@ -440,13 +384,12 @@ npm start                        # serves dist/ on http://localhost:5000
 
 ### Wired-up npm scripts
 
-| Script            | What it does                                                                      |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `npm run dev`     | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode. |
-| `npm run build`   | Runs `script/build.ts` to bundle the client (Vite) and the server (esbuild).      |
-| `npm start`       | Runs the production build from `dist/index.cjs` (production mode is baked in).    |
-| `npm run check`   | Type-checks the entire project with `tsc`.                                        |
-| `npm run db:push` | Syncs your Drizzle schema to the database (no migration files needed).            |
+| Script          | What it does                                                                      |
+| --------------- | --------------------------------------------------------------------------------- |
+| `npm run dev`   | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode. |
+| `npm run build` | Runs `script/build.ts` to bundle the client (Vite) and the server (esbuild).      |
+| `npm start`     | Runs the production build from `dist/index.cjs` (production mode is baked in).    |
+| `npm run check` | Type-checks the entire project with `tsc`.                                        |
 
 ### Tests, linting, and formatting
 
@@ -499,15 +442,15 @@ What it checks:
 3. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file is verified to be a real MP3 (ID3 tag + MPEG frame), not just an audio file with an `.mp3` name.
 4. `?format=original` returns YouTube's audio unconverted, with a matching extension and content type, and the file is what its extension says.
 5. An unknown `format` is rejected with `400`.
-6. The completed download is recorded in the `downloads` table and surfaces through `/api/downloads`.
+6. The completed download is recorded in the history and surfaces through `/api/downloads`.
 
 Run it:
 
 ```bash
-DATABASE_URL=... npx vitest run tests/api
+npx vitest run tests/api
 ```
 
-`DATABASE_URL` is required because the test exercises the storage layer end-to-end. It's read from `.env`, the same as the app.
+The tests point `HISTORY_FILE` at a temporary folder, so they never add entries to your real history.
 
 ### Browser end-to-end (Playwright)
 
@@ -573,23 +516,23 @@ Running `npm run build` produces:
 ### Running in production
 
 ```bash
-NODE_ENV=production DATABASE_URL=... PORT=5000 npm start
+npm start   # optionally with PORT / HOST / HISTORY_FILE set
 ```
 
 The Express server serves the static client from `dist/public` and the API from the same port.
 
 ### Deploying
 
-The app is a standard Node.js + PostgreSQL service and runs on any provider that supports long-running Node processes (Railway, Render, Fly.io, a VPS, Docker, etc.).
+The app is a standard Node.js service and runs on any provider that supports long-running Node processes (Railway, Render, Fly.io, a VPS, Docker, etc.).
 
 A typical flow:
 
-1. Provision a PostgreSQL database and copy the connection string.
-2. Set environment variables on the host: `DATABASE_URL`, `NODE_ENV=production`, and `PORT` (if the platform requires a specific port).
-3. Build the project: `npm ci && npm run build`.
-4. Run schema migrations: `npm run db:push`.
-5. Start the server: `npm start`.
-6. Point your domain / load balancer at the host's exposed port.
+1. Set environment variables on the host: `HOST=0.0.0.0`, `PORT` if the platform requires one, and `HISTORY_FILE` on a persistent volume if you want the history to survive redeploys.
+2. Build the project: `npm ci && npm run build`.
+3. Start the server: `npm start`.
+4. Point your domain / load balancer at the host's exposed port.
+
+> The app has no login. Don't expose it on the public internet as-is — anyone who can reach it can use it. For access from your own devices, a private network like Tailscale is the simple option. Also note YouTube often blocks downloads from data-centre IP addresses, so hosted copies tend to break.
 
 > Serverless platforms (e.g. Vercel, Netlify Functions) are **not recommended** because the audio download endpoint streams long-lived responses, which conflicts with most serverless function time limits.
 
@@ -599,29 +542,27 @@ A typical flow:
 
 - Dependencies were audited and updated: `rollup` was upgraded to a patched version (≥ 4.59.0) to fix a high-severity Path Traversal advisory (GHSA-mw96-cpmx-2vgc), and `tsx` was reinstalled after the audit reset `node_modules`.
 - To re-run the audit at any time: `npm audit`.
-- The download endpoint accepts only validated YouTube URLs (`ytdl.validateURL`) and sanitises the filename before sending it back in `Content-Disposition`.
-- All request bodies on JSON endpoints are validated through Zod schemas before reaching the storage layer.
-- `DATABASE_URL` and any other secrets must never be committed to source control. Use the host's environment-variable manager.
+- The download endpoint accepts only validated YouTube URLs (`extractVideoId` in `server/youtube-url.ts`, which rebuilds a canonical URL from the video ID) and sanitises the filename before sending it back in `Content-Disposition`. yt-dlp and ffmpeg are run with argument arrays, never through a shell.
+- Request bodies and query strings are validated with Zod schemas before use.
+- The server listens on `127.0.0.1` by default and has no authentication; see the note under [Deploying](#deploying).
 
 ---
 
 ## Troubleshooting
 
-| Symptom                                         | Likely cause / fix                                                                                |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `tsx: not found` when running `npm run dev`     | `node_modules` is incomplete. Run `npm install` again.                                            |
-| `DATABASE_URL must be set...` thrown on startup | Set `DATABASE_URL` in `.env` (or your shell) and make sure Postgres is running.                   |
-| `Invalid YouTube URL` on the info endpoint      | The submitted URL did not pass `ytdl.validateURL`. Try a standard `youtube.com/watch?v=...` link. |
-| Download starts but the file is empty / 0 bytes | The video may be age-restricted, region-locked, or removed. Try a different URL.                  |
-| Port `5000` already in use                      | Set `PORT=<other-port>` in the environment, then restart.                                         |
-| Schema changes don't appear in the database     | Run `npm run db:push` to sync the latest Drizzle schema.                                          |
+| Symptom                                           | Likely cause / fix                                                                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tsx: not found` when running `npm run dev`       | `node_modules` is incomplete. Run `npm install` again.                                                                                                     |
+| `Invalid YouTube URL` on the info endpoint        | The URL isn't a recognised YouTube link. Try a standard `youtube.com/watch?v=...` link.                                                                    |
+| Download fails with "Couldn't download the audio" | YouTube refused the stream (age-restricted, region-locked, removed, or bot check). Try another video, or update yt-dlp with `npm rebuild youtube-dl-exec`. |
+| Port `5000` already in use                        | Set `PORT=<other-port>` in the environment, then restart.                                                                                                  |
+| History list is empty after an update             | Check for `data/history.json.broken-*` — the old file couldn't be read and was set aside.                                                                  |
 
 ---
 
 ## Further Reading
 
 - User-facing overview: [README.md](./README.md)
-- Drizzle ORM docs: <https://orm.drizzle.team/>
 - TanStack Query docs: <https://tanstack.com/query/latest>
 - Wouter docs: <https://github.com/molefrog/wouter>
 - shadcn/ui: <https://ui.shadcn.com/>

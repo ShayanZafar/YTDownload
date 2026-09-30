@@ -8,7 +8,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 
 - **Frontend:** React 18 + Vite, wouter (routing), TanStack Query, shadcn/ui, Tailwind — `client/`
 - **Backend:** Express 5 + TypeScript (`tsx` in dev, esbuild bundle in prod) — `server/`
-- **Database:** PostgreSQL via Drizzle ORM; one table, `downloads` (the history list) — `shared/schema.ts`
+- **Storage:** no database — the download history is `data/history.json` (git-ignored), written by
+  `server/storage.ts`; entry shape in `shared/schema.ts`
 - **YouTube:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads into
   `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed)
 - **MP3:** `ffmpeg-static` (ffmpeg fetched by `npm install`; `FFMPEG_BIN` overrides it)
@@ -20,7 +21,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/video/download`, `GET /api/downloads`
 - `server/audio.ts` — yt-dlp and ffmpeg arguments/spawning for the MP3 pipeline (unit-tested)
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
-- `server/storage.ts`, `server/db.ts` — Drizzle storage layer
+- `server/storage.ts` — `FileStorage`: newest 100 entries, queued writes, temp-file + rename
 - `shared/` — schema and API contracts shared by client and server
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` is generated shadcn/ui
 - `client/src/hooks/use-download-format.ts` — the MP3 / Original audio toggle, remembered in localStorage
@@ -28,21 +29,19 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 
 ## Commands
 
-- `npm run dev` — dev server at http://localhost:5000 (needs Postgres running)
+- `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running)
 - `npm run check` — type-check
 - `npx vitest run tests/unit` — fast unit tests
 - `npx vitest run tests/api` — end-to-end API tests (needs DB + internet)
 - `npx playwright test` — browser tests (starts `npm run dev` if nothing is on port 5000)
 - `npx eslint .` and `npx prettier --check .`
 - `npm run build`, then `npm start` — production bundle
-- `npm run db:push` — sync the Drizzle schema to the database
 
 ## Local setup (Windows)
 
-- Postgres runs in the `yt-mp3-db` Docker container (auto-restarts while Docker Desktop is running;
-  otherwise `docker start yt-mp3-db`). If `/api/downloads` returns "Failed to fetch downloads", the
-  database is down. Created with the command in TECHNICAL.md → "Local Development on Windows".
-- `.env` (git-ignored) holds `DATABASE_URL`; optional `PORT` and `HOST`. Shell variables override it.
+- No setup beyond `npm install`. `.env` is optional (`PORT`, `HOST`, `HISTORY_FILE`, `FFMPEG_BIN`);
+  shell variables override it. Delete `data/history.json` to clear the history.
+- The API tests point `HISTORY_FILE` at a temp folder, so they never touch the real history.
 - In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
 - `npm install` / `npm rebuild youtube-dl-exec` need `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment:
   the package's installer demands Python 3.9+ even though Windows' `yt-dlp.exe` doesn't use it.

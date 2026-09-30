@@ -116,7 +116,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (clientGone) return;
 
       try {
-        await storage.createDownload({ url, title: safeTitle });
+        await storage.createDownload({ url, title });
       } catch (dbError) {
         console.error("Failed to log download", dbError);
       }

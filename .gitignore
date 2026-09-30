@@ -5,6 +5,9 @@ server/public
 vite.config.ts.*
 *.tar.gz
 
+# Download history (see server/storage.ts)
+data/
+
 # Local environment files — keep credentials out of git.
 # .env.example IS committed; .env and per-environment overrides are not.
 .env
@@ -14,4 +17,4 @@ vite.config.ts.*
 # Test artifacts
 test-results
 playwright-report
-.cache/ms-playwright
+.cache/ms-playwright

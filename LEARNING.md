@@ -18,10 +18,9 @@ If something feels arbitrary, jump to [Why we chose what we chose](#why-we-chose
 | `Program.cs` / `Startup.cs`           | **`server/index.ts`**                        | Entry point, sets up middleware, starts the listener.                                                                      |
 | ASP.NET Core controllers              | **`server/routes.ts`**                       | Express routes are the equivalent of attribute-routed controllers.                                                         |
 | ASP.NET Core middleware pipeline      | **Express middleware**                       | Same pipeline pattern: `app.use(...)`, request → response.                                                                 |
-| Entity Framework Core                 | **Drizzle ORM**                              | Code-first schemas, type-safe queries. Lighter weight than EF.                                                             |
-| `DbContext`                           | **`db` from `server/db.ts`**                 | Your handle on the database.                                                                                               |
-| EF Core migrations                    | **`drizzle-kit push`**                       | One command syncs your schema to the DB. No migration files in this project.                                               |
-| DTOs / models                         | **`shared/schema.ts`**                       | Drizzle table definitions + inferred TypeScript types — the single source of truth for both sides.                         |
+| Entity Framework Core                 | **Nothing — there's no database**            | The download history is a JSON file. See §5.                                                                               |
+| `DbContext` / repository              | **`FileStorage` in `server/storage.ts`**     | Reads and writes `data/history.json`.                                                                                      |
+| DTOs / models                         | **`shared/schema.ts`**                       | Zod schemas + inferred TypeScript types — the single source of truth for both sides.                                       |
 | FluentValidation / DataAnnotations    | **Zod**                                      | Schema-based runtime validation. Used to validate request bodies in `server/routes.ts`.                                    |
 | Razor / Blazor                        | **React + JSX/TSX**                          | Server-rendered HTML at startup, then SPA navigation. Bigger conceptual leap; see §7.                                      |
 | Refit + `IMemoryCache` + `HttpClient` | **TanStack Query (`@tanstack/react-query`)** | Typed HTTP fetching with built-in caching, retries, and request deduplication for the frontend.                            |
@@ -35,7 +34,7 @@ If something feels arbitrary, jump to [Why we chose what we chose](#why-we-chose
 | StyleCop / .NET analyzers             | **ESLint**                                   | Catches bad patterns at build time. Configured in `eslint.config.js`.                                                      |
 | `dotnet format` / EditorConfig        | **Prettier**                                 | Auto-formats source files. Configured in `.prettierrc`.                                                                    |
 | Dependency Injection container        | **Module imports + manual wiring**           | Most of the app just `import`s singletons. Only `IStorage` is abstracted — see §4.                                         |
-| LINQ                                  | **Array methods + Drizzle query builder**    | `.map() / .filter() / .reduce()` for in-memory; Drizzle's chained query builder for the DB.                                |
+| LINQ                                  | **Array methods**                            | `.map() / .filter() / .reduce()` — LINQ-to-Objects. With no database, that's all the querying there is.                    |
 | `async` / `await`                     | **`async` / `await`**                        | Same syntax. C# borrowed this from JavaScript's predecessor and TypeScript inherits it.                                    |
 
 ---
@@ -78,11 +77,11 @@ client/                     ← React frontend (the equivalent of a Blazor proje
 server/                     ← Express API (the equivalent of Api + Domain + Data)
   index.ts                  ← Program.cs
   routes.ts                 ← Controllers
-  storage.ts                ← Repository (IStorage)
-  db.ts                     ← DbContext setup
+  storage.ts                ← Repository (IStorage) over a JSON file
+  audio.ts                  ← yt-dlp / ffmpeg pipeline arguments
   youtube-url.ts            ← Pure domain helpers
 shared/                     ← Code shared by client AND server (no .NET equivalent)
-  schema.ts                 ← Drizzle table definitions + Zod schemas
+  schema.ts                 ← Zod schema for a history entry
   routes.ts                 ← API contract: paths, methods, request/response shapes
 tests/
   unit/                     ← Pure-function tests
@@ -90,7 +89,7 @@ tests/
   browser/                  ← Playwright browser tests
 ```
 
-The single biggest difference: **`shared/`**. In .NET, sharing types between a web API and a JS client usually means generating TypeScript clients from OpenAPI (NSwag, Refit, etc.). Here, both sides are TypeScript, so they just `import` the same files. `shared/schema.ts` defines the database tables, and the same module exports the Zod validation schemas. The client and server consume identical types, with zero codegen.
+The single biggest difference: **`shared/`**. In .NET, sharing types between a web API and a JS client usually means generating TypeScript clients from OpenAPI (NSwag, Refit, etc.). Here, both sides are TypeScript, so they just `import` the same files. `shared/schema.ts` defines the shape of a history entry as a Zod schema, which is both the runtime validator and (via `z.infer`) the TypeScript type. The client and server consume identical types, with zero codegen.
 
 ---
 
@@ -129,13 +128,13 @@ export interface IStorage {
   getDownloads(): Promise<Download[]>;
   createDownload(download: InsertDownload): Promise<Download>;
 }
-export class DatabaseStorage implements IStorage {
-  /* ... */
+export class FileStorage implements IStorage {
+  /* reads/writes data/history.json */
 }
-export const storage = new DatabaseStorage();
+export const storage = new FileStorage();
 ```
 
-That's exactly the .NET pattern. The difference: we don't run it through a DI container — we just `import { storage } from "./storage"`. For an app this size that's fine. If we ever needed swappable implementations (e.g., a `MemStorage` for tests, a `RedisStorage` for caching), we'd thread an `IStorage` parameter in instead of grabbing the singleton.
+That's exactly the .NET pattern. The difference: we don't run it through a DI container — we just `import { storage } from "./storage"`. For an app this size that's fine. The unit tests simply construct their own `new FileStorage(() => tempFile)`, and a database-backed version would just be another class implementing `IStorage` — the routes wouldn't change.
 
 ### No global DI container
 
@@ -143,56 +142,63 @@ This is the most jarring thing for a .NET dev. There's no `IServiceCollection`, 
 
 ---
 
-## 5. The database: Drizzle vs Entity Framework Core
+## 5. Storage: a JSON file instead of Entity Framework Core
 
-### Defining a table
+The only thing this app persists is the "Recent Extractions" list: at most 100 small entries, for one user. A database (it used to be Postgres, via Drizzle) meant Docker, a connection string and a schema-push step just to show that list. So it's a JSON file, `data/history.json`, and there's no ORM at all.
+
+### Defining the shape
 
 ```ts
 // shared/schema.ts
-export const downloads = pgTable("downloads", {
-  id: serial("id").primaryKey(),
-  url: text("url").notNull(),
-  title: text("title").notNull(),
-  downloadedAt: timestamp("downloaded_at").defaultNow(),
+export const downloadSchema = z.object({
+  id: z.number().int(),
+  url: z.string(),
+  title: z.string(),
+  downloadedAt: z.string(), // ISO 8601, UTC
 });
-
-export type Download = typeof downloads.$inferSelect; // ← like SELECT model
-export type InsertDownload = typeof downloads.$inferInsert; // ← like an INSERT DTO
+export type Download = z.infer<typeof downloadSchema>; // ← the "entity"
+export type InsertDownload = Pick<Download, "url" | "title">; // ← the create DTO
 ```
 
-EF Core equivalent:
+The C# equivalent is a record plus a validator:
 
 ```csharp
-public class Download {
-    public int Id { get; set; }
-    public string Url { get; set; }
-    public string Title { get; set; }
-    public DateTime DownloadedAt { get; set; }
-}
-
-public class AppDbContext : DbContext {
-    public DbSet<Download> Downloads { get; set; }
-}
+public record Download(int Id, string Url, string Title, DateTime DownloadedAt);
 ```
 
-### Querying
+### Reading and writing
 
 ```ts
-// In our storage layer:
-return await db.select().from(downloads).orderBy(desc(downloads.downloadedAt));
+// server/storage.ts (simplified)
+async getDownloads() {
+  return historySchema.parse(JSON.parse(await fs.readFile(file, "utf8")));
+}
+createDownload(insert) {
+  // queued: each write waits for the previous one
+  const entries = await readHistory(file);
+  await writeHistory(file, [newEntry, ...entries].slice(0, MAX_HISTORY));
+}
 ```
 
-EF Core:
+In .NET you'd write roughly:
 
 ```csharp
-return await _ctx.Downloads.OrderByDescending(d => d.DownloadedAt).ToListAsync();
+var list = JsonSerializer.Deserialize<List<Download>>(await File.ReadAllTextAsync(path));
+await _lock.WaitAsync();                         // SemaphoreSlim(1) ↔ the write queue
+try {
+    await File.WriteAllTextAsync(tmp, JsonSerializer.Serialize(updated));
+    File.Move(tmp, path, overwrite: true);       // ↔ write-to-temp + rename
+} finally { _lock.Release(); }
 ```
 
-Same semantics. Drizzle is closer to LINQ-to-SQL than to EF — it's a thin, fully-typed query builder, **not** a change-tracker. If you're used to "load entity, mutate property, call SaveChanges()", that pattern doesn't exist here. You write explicit `update` / `insert` / `delete` calls.
+Two details carry over directly from how you'd do it in .NET:
 
-### Migrations
+- **Serialised writes.** Node is single-threaded, but two downloads can still interleave their `await`s (read, read, write, write) and lose an entry. The write queue plays the role of a `SemaphoreSlim(1)`.
+- **Atomic replace.** Writing a temp file and renaming it over the old one means a crash never leaves half a JSON file behind.
 
-In EF you'd run `dotnet ef migrations add Init` and `dotnet ef database update`. In this project we use `drizzle-kit push`, which **diffs the live database against the schema and applies the difference directly** — no migration files. Faster for small apps; you trade off the migration history. For a production app with multiple environments, you'd usually generate proper migration files with `drizzle-kit generate` instead.
+### When you'd want a database back
+
+If the app ever had several server instances, many users, or needed to search/filter a long history, you'd add a database-backed `IStorage` (SQLite is the natural next step for a single machine — the EF Core equivalent would be the SQLite provider). Only `server/storage.ts` would change.
 
 ---
 
@@ -348,7 +354,7 @@ This is the section that actually answers "why didn't you just use X?"
 
 **Express over Fastify / Hono / Koa.** Express 5 is mature, widely understood, and has middleware for everything. The performance difference vs. Fastify isn't relevant for this app's load. Picking the boring option saves onboarding time.
 
-**Drizzle over Prisma / TypeORM.** Prisma uses a separate schema file and a code generator, which adds a build step. TypeORM is heavier and has long-running maintenance issues. Drizzle is type-safe, lightweight, and reads like SQL — closer to Dapper than to EF.
+**A JSON file over a database.** The history is one short list for one user. Postgres needed Docker, a connection string and a schema step for that; a file needs nothing. `IStorage` keeps the door open to swap in SQLite later without touching the routes.
 
 **Vite over webpack / Next.js.** Webpack is slow in dev. Next.js would force us to adopt its server model. Vite is just a dev server + a production bundler — the smallest tool that does the job.
 
@@ -358,11 +364,11 @@ This is the section that actually answers "why didn't you just use X?"
 
 **shadcn/ui over Material UI / Chakra.** shadcn isn't an installed package — you copy components into your repo (`client/src/components/ui/`) so you own them. No version-upgrade pain, no vendor lock-in.
 
-**`yt-dlp` (via `youtube-dl-exec`) over pure-JS scrapers like `ytdl-core` / `youtubei.js`.** YouTube actively blocks pure-JS scrapers via PoToken enforcement; `yt-dlp` is the only extractor with a community large enough to keep up. Trade-off: requires Python 3 on the host.
+**`yt-dlp` (via `youtube-dl-exec`) over pure-JS scrapers like `ytdl-core` / `youtubei.js`.** YouTube actively blocks pure-JS scrapers via PoToken enforcement; `yt-dlp` is the only extractor with a community large enough to keep up. Trade-off: on Linux/macOS it needs Python 3.10+ on the host (on Windows it's a standalone `.exe`).
 
 **No DI container.** For a single-team app with one service implementation per interface, `import` + a singleton is enough. We'd reach for a container if we ever had multiple swappable implementations or a complex object graph.
 
-**`drizzle-kit push` instead of generated migration files.** Faster for small apps. We'd switch to `drizzle-kit generate` (which produces SQL migration files) if the database had to support multiple environments with different schema versions.
+**Streaming through ffmpeg instead of saving files.** yt-dlp's output is piped into ffmpeg and ffmpeg's output straight into the HTTP response, so nothing is written to disk and the download starts immediately. The cost is that errors after the first byte can only cut the file short — see "Failure modes" in TECHNICAL.md.
 
 ---
 
@@ -394,9 +400,9 @@ If you want to trace one full request top-to-bottom, this is the path:
 
 1. **`server/index.ts`** — the entry point (`Program.cs` equivalent). Sets up middleware, registers routes, starts listening.
 2. **`shared/routes.ts`** — the API contract. Paths, methods, input/output Zod schemas. Read this once and you'll understand what the API does.
-3. **`server/routes.ts`** — the actual handlers. Each one validates input with Zod, calls into `storage` or `youtubedl`, and returns JSON.
+3. **`server/routes.ts`** — the actual handlers. Each one validates input with Zod, calls into `storage` or yt-dlp/ffmpeg (`server/audio.ts`), and returns JSON or streams audio.
 4. **`server/storage.ts`** — the repository.
-5. **`shared/schema.ts`** — the database table definitions.
+5. **`shared/schema.ts`** — the shape of a history entry.
 6. **`client/src/pages/Home.tsx`** — the UI's only page; a good entry point to see how React components, hooks, and TanStack Query fit together.
 7. **`client/src/hooks/use-youtube.ts`** — the typed wrappers around `useQuery`/`useMutation` that the UI calls.
 

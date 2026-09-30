@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { downloads } from "./schema";
+import { downloadSchema } from "./schema";
 
 /**
  * What the download endpoint can produce:
@@ -29,7 +29,7 @@ export const api = {
       method: "GET" as const,
       path: "/api/downloads" as const,
       responses: {
-        200: z.array(z.custom<typeof downloads.$inferSelect>()),
+        200: z.array(downloadSchema),
       },
     },
   },

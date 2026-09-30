@@ -1,18 +1,13 @@
-import { pgTable, text, serial, timestamp } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const downloads = pgTable("downloads", {
-  id: serial("id").primaryKey(),
-  url: text("url").notNull(),
-  title: text("title").notNull(),
-  downloadedAt: timestamp("downloaded_at").defaultNow(),
+/** One entry in the download history (stored in data/history.json by the server). */
+export const downloadSchema = z.object({
+  id: z.number().int(),
+  url: z.string(),
+  title: z.string(),
+  /** ISO 8601 timestamp, e.g. "2026-09-29T22:58:44.009Z". */
+  downloadedAt: z.string(),
 });
 
-export const insertDownloadSchema = createInsertSchema(downloads).omit({
-  id: true,
-  downloadedAt: true,
-});
-
-export type Download = typeof downloads.$inferSelect;
-export type InsertDownload = z.infer<typeof insertDownloadSchema>;
+export type Download = z.infer<typeof downloadSchema>;
+export type InsertDownload = Pick<Download, "url" | "title">;
