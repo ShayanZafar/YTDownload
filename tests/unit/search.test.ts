@@ -28,9 +28,13 @@ describe("normalize", () => {
 });
 
 describe("isOfficial", () => {
-  it("accepts YouTube's auto-generated Topic channels and VEVO", () => {
+  it("accepts YouTube's auto-generated Topic channels and verified VEVO channels", () => {
     expect(isOfficial({ title: "Get Lucky", channel: "Daft Punk - Topic" })).toBe(true);
-    expect(isOfficial({ title: "Halo", channel: "BeyonceVEVO" })).toBe(true);
+    expect(isOfficial({ title: "Halo", channel: "BeyonceVEVO", channel_is_verified: true })).toBe(
+      true,
+    );
+    // Anyone can put VEVO in their channel name.
+    expect(isOfficial({ title: "Adele - Hello (Audio)", channel: "AlexAraujoVEVO" })).toBe(false);
   });
 
   it("accepts the artist's own verified channel", () => {
@@ -160,7 +164,11 @@ describe("rankResults", () => {
 
   it("only matches whole words ('live' isn't in 'alive' or 'oliver')", () => {
     const [first] = rankResults("x", [
-      entry("bbbbbbbbbb1", { title: "Pearl Jam - Alive", channel: "PearlJamVEVO" }),
+      entry("bbbbbbbbbb1", {
+        title: "Pearl Jam - Alive",
+        channel: "PearlJamVEVO",
+        channel_is_verified: true,
+      }),
     ]);
     expect(first.official).toBe(true);
     const ids = rankResults("x", [
@@ -210,7 +218,7 @@ describe("rankResults", () => {
       entry(`eeeeeeeee${String(i).padStart(2, "0")}`, { title: `Song ${i}`, channel: "A" }),
     );
     expect(rankResults("song", many)).toHaveLength(MAX_RESULTS);
-    expect(rankResults("song", many, 3)).toHaveLength(3);
+    expect(rankResults("song", many, { limit: 3 })).toHaveLength(3);
   });
 });
 

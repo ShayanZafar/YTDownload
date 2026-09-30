@@ -142,6 +142,32 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await expect(downloadLink).toBeVisible({ timeout: 60_000 });
   });
 
+  test("a Spotify song link finds the same song on YouTube, ready to download", async ({
+    page,
+  }) => {
+    await page.goto("/");
+
+    // Pasted into the link box: it's a song to look up, so it's searched for.
+    await page
+      .locator('input[type="url"]')
+      .fill("https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv?si=e2e");
+    await page.locator('button[type="submit"]').click();
+    await expect(page.getByRole("button", { name: /search by song/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    const results = page.getByRole("region", { name: /search results/i });
+    await expect(results.getByText(/from spotify/i)).toBeVisible({ timeout: 60_000 });
+    await expect(results.getByText(/bohemian rhapsody/i).first()).toBeVisible();
+
+    // The best match is picked straight away, with a download link.
+    await expect(results.getByRole("button", { pressed: true })).toHaveCount(1);
+    await expect(
+      page.locator('a[href^="/api/video/download"]', { hasText: /download audio/i }),
+    ).toBeVisible();
+  });
+
   test("invalid URL surfaces a friendly error toast", async ({ page }) => {
     await page.goto("/");
 

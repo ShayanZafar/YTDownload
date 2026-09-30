@@ -51,6 +51,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── routes.ts              # API route handlers
 │   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers
 │   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first
+│   ├── spotify.ts             # Spotify song links → title, artists, length (public embed page)
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
 │   ├── audio.ts               # yt-dlp / ffmpeg arguments for the download pipeline
 │   ├── vite.ts                # Dev-only Vite middleware integration
@@ -79,6 +80,7 @@ The Express server and the Vite dev server are mounted on a single port (default
 
 1. The user either pastes a link or searches by song (the **Paste a link / Search by song** switch above the input, remembered in `localStorage`). Whatever the switch says, a link is opened and anything else is searched for (`asLink()` in `client/src/lib/format.ts`).
    - **Link:** the frontend calls `POST /api/video/info`. The backend validates the body with Zod, extracts the canonical video ID (`server/youtube-url.ts`), shells out to `yt-dlp` for metadata, and returns `{ title, thumbnail, url }`.
+   - **Spotify song link:** also a search — `GET /api/search?q=<the link>`, see [Spotify song links](#spotify-song-links).
    - **Search:** the frontend calls `GET /api/search?q=...`. The backend runs `yt-dlp --flat-playlist --dump-single-json ytsearch12:<query>` (`server/search.ts`), which lists YouTube's top results in a few seconds without opening each video, then ranks them (below) and returns up to 8. Picking a result fills the same preview card with the result's own title and thumbnail — no second `yt-dlp` call.
 2. Both paths end at the preview card, which links to the download endpoint for that video.
 3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies YouTube's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
@@ -91,11 +93,22 @@ The visual versions of these flows live in [System Design](#system-design) below
 
 Every YouTube upload of a song tops out at the same free audio quality (~130 kbps Opus), so the real difference between results is what the uploader started from. `rankResults()` in `server/search.ts` therefore keeps YouTube's relevance order, with three adjustments:
 
-- **Official uploads of the song move up** — YouTube's auto-generated `Artist - Topic` channels (made from label releases), VEVO channels, and verified channels named after the artist: the title starts with the channel's name (the artist's own channel posting "Artist - Song") or the channel is named in the search ("Queen Official" posting "Bohemian Rhapsody" when you searched "queen bohemian rhapsody"). A verified lyrics channel posting someone else's song, or a TV channel's "… performs Get Lucky | BBC", doesn't count.
+- **Official uploads of the song move up** — YouTube's auto-generated `Artist - Topic` channels (made from label releases), verified VEVO channels, and verified channels named after the artist: the title starts with the channel's name (the artist's own channel posting "Artist - Song") or the channel is named in the search ("Queen Official" posting "Bohemian Rhapsody" when you searched "queen bohemian rhapsody"). A verified lyrics channel posting someone else's song, or a TV channel's "… performs Get Lucky | BBC", doesn't count.
 - **Results missing part of the search move down** — at least 75% of the search's words (ignoring filler like "official", "lyrics", "the") must appear in the title or channel name. This keeps another artist's song with the same name below the one you meant, and an official upload is only moved up when it matches.
 - **Other versions move down** — titles with words like live, performance, concert, cover, remix, karaoke, instrumental, sped up, slowed, nightcore, flashmob or trailer, unless the search asks for that kind of version ("… live" keeps live versions, performances and concerts where they are).
 
 Live streams, upcoming premieres, duplicates and non-video entries are dropped. The query reaches `yt-dlp` as a separate argument after `--`, never through a shell, so nothing typed in the search box can run as a command or be read as a `yt-dlp` option.
+
+### Spotify song links
+
+Spotify's audio is DRM-protected and can't be downloaded, but finding the same recording on YouTube only needs the song's details. `server/spotify.ts` reads them from Spotify's public embed player — `https://open.spotify.com/embed/track/<id>`, the page other websites embed, which needs no account or API key. Its Next.js `__NEXT_DATA__` JSON holds the track's name, artists, length in milliseconds and cover art (`props.pageProps.state.data.entity`).
+
+1. `parseSpotifyLink()` accepts `open.spotify.com/track/<22-character id>` (also with `/intl-xx/` or `/embed/`, and with `?si=` share parameters) and `spotify:track:<id>`. Albums, playlists, artists, podcasts and `spotify.link` short links get a `400` explaining what to paste instead. The id is validated before it goes into the embed URL, so the server can only ever fetch that one Spotify page.
+2. `fetchSpotifyTrack()` fetches the embed page (10 s timeout). A deleted song gives `404`; Spotify being unreachable or changing its page gives `502` with a plain message.
+3. `spotifySearchQuery()` searches YouTube for "main artist + title + audio" ("audio" brings the artist's "Official Audio" uploads up), with release notes stripped from the title ("Bohemian Rhapsody - Remastered 2011" → "Bohemian Rhapsody", "(feat. …)" removed). Notes that mean a different recording ("- Live", "- Acoustic") are kept.
+4. The results are ranked as usual plus the song's length: uploads within 5 seconds of the Spotify length (`SAME_LENGTH_SECONDS` in `shared/schema.ts`) that match the search move to the top — "Official Audio" and label uploads of the same master match to within a few seconds, while music videos add intros and radio edits or extended mixes differ by much more. So a Spotify link to the 6-minute album version of a song finds the album version, not the 4-minute radio edit.
+
+The response adds `spotify: { id, url, title, artists, duration, thumbnail }`; the page shows it above the matches, marks same-length uploads, and picks the best match straight away.
 
 ### Storage abstraction
 
@@ -267,20 +280,22 @@ Notes on this topology:
 
 The interesting failures are at the boundaries with `yt-dlp`, YouTube, and the history file. The table below is the truth as of the code in `server/routes.ts`:
 
-| Failure                            | Where surfaced                  | Behavior                                                                                                        | User sees                                                    |
-| ---------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Invalid / non-YouTube URL          | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                    |
-| Zod body validation fails (info)   | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                     |
-| Empty or too-long search           | `api.video.search.query`        | Rejected before `yt-dlp` runs                                                                                   | `400 { message, field: "q" }`                                |
-| `yt-dlp` search fails or hangs     | `searchYouTube(...)`            | Non-zero exit → its last error line; killed after 30 s                                                          | `500 { message }`, shown as a toast and inline error         |
-| `yt-dlp` metadata throws           | `youtubedl(...)` rejection      | Caught in handler                                                                                               | `500 { message }` (info) or `500` text (download)            |
-| Saving the history entry fails     | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error` (the file was already delivered)                                     | Nothing — file still downloads, history just won't show it   |
-| `yt-dlp` / `ffmpeg` fails to start | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`         |
-| `yt-dlp` fails before any audio    | `ffmpeg` exits with no output   | Headers not sent yet, so the handler can still answer with an error                                             | `502` with yt-dlp's error message (browser: failed download) |
-| `yt-dlp` exits non-zero mid-stream | `ytdlp.on("close")`             | stderr logged; `ffmpeg` sees end-of-input, flushes and exits; response ended                                    | Shorter but valid MP3                                        |
-| Client cancels the download        | `res.on("close")`               | Watched from the start of the request: nothing is spawned if it's already gone, otherwise both processes killed | n/a (user already left)                                      |
-| History file can't be read         | `storage.getDownloads()`        | Unparseable file is copied aside and a fresh list starts; other read errors → caught in handler                 | Empty history, or `500 Failed to fetch downloads`            |
-| YouTube blocks the request         | `yt-dlp` exits non-zero         | Same as the two rows above — that's why we keep `yt-dlp` itself up to date, not roll our own scraping logic     | `502`, or a shortened file if it happens mid-stream          |
+| Failure                             | Where surfaced                  | Behavior                                                                                                        | User sees                                                    |
+| ----------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Invalid / non-YouTube URL           | `extractVideoId` returns `null` | Short-circuit, no subprocess spawned                                                                            | `400 Invalid YouTube URL`                                    |
+| Zod body validation fails (info)    | `api.video.info.input.parse`    | Caught in handler, returns `field` + `message`                                                                  | `400 { message, field }`                                     |
+| Empty or too-long search            | `api.video.search.query`        | Rejected before `yt-dlp` runs                                                                                   | `400 { message, field: "q" }`                                |
+| `yt-dlp` search fails or hangs      | `searchYouTube(...)`            | Non-zero exit → its last error line; killed after 30 s                                                          | `500 { message }`, shown as a toast and inline error         |
+| Spotify album/playlist/short link   | `parseSpotifyLink(...)`         | Rejected before any request                                                                                     | `400` explaining that only song links work                   |
+| Spotify unreachable or page changed | `fetchSpotifyTrack(...)`        | 10 s timeout; missing song → `404`, anything else → `502`                                                       | `404` / `502 { message }`, shown as a toast and inline error |
+| `yt-dlp` metadata throws            | `youtubedl(...)` rejection      | Caught in handler                                                                                               | `500 { message }` (info) or `500` text (download)            |
+| Saving the history entry fails      | `storage.createDownload(...)`   | **Swallowed** — logged via `console.error` (the file was already delivered)                                     | Nothing — file still downloads, history just won't show it   |
+| `yt-dlp` / `ffmpeg` fails to start  | child process `error` event     | Pipeline stopped; no audio was sent yet                                                                         | `502 Couldn't download the audio: … failed to start`         |
+| `yt-dlp` fails before any audio     | `ffmpeg` exits with no output   | Headers not sent yet, so the handler can still answer with an error                                             | `502` with yt-dlp's error message (browser: failed download) |
+| `yt-dlp` exits non-zero mid-stream  | `ytdlp.on("close")`             | stderr logged; `ffmpeg` sees end-of-input, flushes and exits; response ended                                    | Shorter but valid MP3                                        |
+| Client cancels the download         | `res.on("close")`               | Watched from the start of the request: nothing is spawned if it's already gone, otherwise both processes killed | n/a (user already left)                                      |
+| History file can't be read          | `storage.getDownloads()`        | Unparseable file is copied aside and a fresh list starts; other read errors → caught in handler                 | Empty history, or `500 Failed to fetch downloads`            |
+| YouTube blocks the request          | `yt-dlp` exits non-zero         | Same as the two rows above — that's why we keep `yt-dlp` itself up to date, not roll our own scraping logic     | `502`, or a shortened file if it happens mid-stream          |
 
 The deliberate design choice worth flagging: **a history problem never breaks downloads**. The download history is best-effort, the audio extraction is the product. We chose this over the alternative (fail the download if we can't log it), because the user's download is what they came for.
 
@@ -323,12 +338,12 @@ None of these are problems today. They're listed here so the next person doesn't
 
 ## API Reference
 
-| Method | Path                  | Purpose                                                                                                                                                                                                 |
-| ------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.                                                                                                                                                     |
-| GET    | `/api/search`         | Query: `?q=...` (1–200 characters). Returns `{ results: [{ id, url, title, channel, duration, thumbnail, official }] }`, up to 8, official uploads first. `400` for an empty search.                    |
-| POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.                                                                                                                                                   |
-| GET    | `/api/video/download` | Query: `?url=...&format=mp3\|original` (`mp3` is the default). Streams a 320 kbps MP3, or YouTube's original audio unconverted (`.opus` / `.m4a` / `.mka`), as a download. `400` for an unknown format. |
+| Method | Path                  | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/downloads`      | Returns the list of recent downloads, newest first.                                                                                                                                                                                                                                                                                                                                                                                     |
+| GET    | `/api/search`         | Query: `?q=...` (1–200 characters). Returns `{ results: [{ id, url, title, channel, duration, thumbnail, official }] }`, up to 8, official uploads first. `400` for an empty search. If `q` is a Spotify song link, also returns `spotify: { id, url, title, artists, duration, thumbnail }` and ranks same-length uploads first; `400` for other Spotify links, `404` for a song Spotify doesn't have, `502` if Spotify can't be read. |
+| POST   | `/api/video/info`     | Body: `{ url }`. Returns `{ title, thumbnail, url }`.                                                                                                                                                                                                                                                                                                                                                                                   |
+| GET    | `/api/video/download` | Query: `?url=...&format=mp3\|original` (`mp3` is the default). Streams a 320 kbps MP3, or YouTube's original audio unconverted (`.opus` / `.m4a` / `.mka`), as a download. `400` for an unknown format.                                                                                                                                                                                                                                 |
 
 All JSON errors follow the shape `{ message: string, field?: string }`.
 
@@ -474,6 +489,7 @@ tests/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
 │   ├── audio.test.ts            # yt-dlp / ffmpeg argument builders
 │   ├── search.test.ts           # search ranking + "official" detection
+│   ├── spotify.test.ts          # Spotify links, embed-page parsing, title clean-up, same-length ranking
 │   ├── format.test.ts           # durations + link-vs-search detection
 │   ├── storage.test.ts          # history file
 │   └── host-check.test.ts       # DNS-rebinding protection
@@ -492,7 +508,7 @@ What it checks:
 
 1. An invalid URL returns HTTP 400 with a message.
 2. A real YouTube URL returns title + thumbnail metadata.
-3. Searching for "me at the zoo jawed" finds the test video, with a channel, duration and thumbnail; an empty search is rejected with `400`.
+3. Searching for "me at the zoo jawed" finds the test video, with a channel, duration and thumbnail; an empty search is rejected with `400`. A Spotify link to Queen's "Bohemian Rhapsody" returns the song's details and a best match of the same length; a Spotify album link is rejected with `400`.
 4. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file is verified to be a real MP3 (ID3 tag + MPEG frame), not just an audio file with an `.mp3` name.
 5. `?format=original` returns YouTube's audio unconverted, with a matching extension and content type, and the file is what its extension says.
 6. An unknown `format` is rejected with `400`.
@@ -516,7 +532,8 @@ What it checks:
 2. Clicking **Download Audio** triggers a browser download whose suggested filename ends in `.mp3` and whose saved bytes pass the MP3-header check.
 3. Turning on **Original audio** switches the link to `format=original`, and the download is a valid `.opus` (or `.m4a`/`.mka`) file.
 4. Switching to **Search by song**, searching for the test video and picking it shows the preview with a download link for that video; the mode survives a reload, and a link typed into the search box is opened (the switch flips back to **Paste a link**).
-5. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+5. Pasting a Spotify song link into the link box switches to **Search by song**, shows the song from Spotify, and picks the best YouTube match with a download link ready.
+6. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
 One-time browser install (already done if you've run the suite before):
 
@@ -541,7 +558,7 @@ npx playwright show-report
 Both suites depend on `yt-dlp` (invoked via the `youtube-dl-exec` wrapper) being able to talk to YouTube's API. YouTube actively changes its internals — signed/encrypted stream URLs, PoToken (proof-of-origin token) requirements, format reshuffling — so any extractor can break between releases. yt-dlp is the most aggressively maintained option in this space, but you should still expect periodic breakage.
 
 - The negative tests (invalid URLs → 400) keep passing regardless — they prove the wiring still works.
-- The metadata, search and download tests all depend on yt-dlp successfully reaching YouTube. If they start failing, first reinstall to get the latest bundled binary:
+- The metadata, search and download tests all depend on yt-dlp successfully reaching YouTube (and the Spotify tests on reaching open.spotify.com). If they start failing, first reinstall to get the latest bundled binary:
 
   ```bash
   # via the package manager — do not edit package.json directly

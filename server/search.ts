@@ -8,7 +8,7 @@
  * the official upload is taken from the label's masters.
  */
 import { spawn } from "child_process";
-import type { SearchResult } from "@shared/schema";
+import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
 import { YT_DLP_PATH } from "./audio";
 
 /** How many results to ask YouTube for; ranking then keeps the best MAX_RESULTS. */
@@ -75,6 +75,10 @@ const FILLER_WORDS = new Set([
 // How much of the search a result has to contain to count as a match.
 const MATCH_THRESHOLD = 0.75;
 
+// When we know the song's exact length (from a Spotify link), uploads within
+// SAME_LENGTH_SECONDS of it are very likely the same recording — label "Topic"
+// uploads usually match to the second, while music videos add intros.
+
 /** Lowercase, strip accents and punctuation, single spaces: "Beyoncé - Halo!" → "beyonce halo". */
 export function normalize(text: string): string {
   return text
@@ -104,8 +108,8 @@ export function queryCoverage(query: string, entry: RawSearchEntry): number {
 
 /**
  * Did the artist or their label upload this? YouTube auto-generates
- * "Artist - Topic" channels from label releases, and VEVO channels are
- * label-run. Otherwise it's a verified channel named after the artist: the
+ * "Artist - Topic" channels from label releases, and verified VEVO channels
+ * are label-run (anyone can call a channel "…VEVO", so it must be verified). Otherwise it's a verified channel named after the artist: the
  * title starts with its name ("Daft Punk" posting "Daft Punk - Get Lucky"), or
  * the search has it ("Queen Official" posting "Bohemian Rhapsody" for "queen
  * bohemian rhapsody"). A verified lyrics channel posting someone else's song,
@@ -113,8 +117,9 @@ export function queryCoverage(query: string, entry: RawSearchEntry): number {
  */
 export function isOfficial(entry: RawSearchEntry, query = ""): boolean {
   const channel = (entry.channel ?? entry.uploader ?? "").trim();
-  if (/ - topic$/i.test(channel) || /vevo$/i.test(channel)) return true;
+  if (/ - topic$/i.test(channel)) return true;
   if (!entry.channel_is_verified) return false;
+  if (/vevo$/i.test(channel)) return true;
   const name = normalize(channel.replace(/\b(official|music|tv|channel)\b/gi, " "));
   if (name.length < 2 || FILLER_WORDS.has(name)) return false;
   return (
@@ -129,10 +134,16 @@ export function isOfficial(entry: RawSearchEntry, query = ""): boolean {
  * for) down; otherwise YouTube's own order. Drops live streams and anything
  * that isn't a single video.
  */
+export type RankOptions = {
+  limit?: number;
+  /** The song's length in seconds, if known: same-length uploads move up (above official ones). */
+  targetDuration?: number | null;
+};
+
 export function rankResults(
   query: string,
   entries: RawSearchEntry[],
-  limit = MAX_RESULTS,
+  { limit = MAX_RESULTS, targetDuration }: RankOptions = {},
 ): SearchResult[] {
   const q = normalize(query);
   const seen = new Set<string>();
@@ -151,9 +162,17 @@ export function rankResults(
     const variant = VARIANT_GROUPS.some(
       (group) => group.some((w) => hasWords(t, w)) && !group.some((w) => hasWords(q, w)),
     );
+    const sameLength =
+      targetDuration != null &&
+      typeof entry.duration === "number" &&
+      Math.abs(entry.duration - targetDuration) <= SAME_LENGTH_SECONDS;
     scored.push({
       index,
-      score: (official && matches ? 2 : 0) - (matches ? 0 : 1) - (variant ? 3 : 0),
+      score:
+        (official && matches ? 2 : 0) +
+        (sameLength && matches ? 3 : 0) -
+        (matches ? 0 : 1) -
+        (variant ? 3 : 0),
       result: {
         id,
         url: `https://www.youtube.com/watch?v=${id}`,
@@ -213,7 +232,10 @@ function runYtDlpJson(args: string[]): Promise<unknown> {
   });
 }
 
-export async function searchYouTube(query: string): Promise<SearchResult[]> {
+export async function searchYouTube(
+  query: string,
+  options: Omit<RankOptions, "limit"> = {},
+): Promise<SearchResult[]> {
   const info = (await runYtDlpJson(ytDlpSearchArgs(query))) as { entries?: RawSearchEntry[] };
-  return rankResults(query, info.entries ?? []);
+  return rankResults(query, info.entries ?? [], options);
 }

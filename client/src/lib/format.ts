@@ -7,6 +7,15 @@ export function formatDuration(seconds: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
+/** A Spotify link: the server looks the song up and searches YouTube for it. */
+export function isSpotifyLink(input: string): boolean {
+  const text = input.trim();
+  return (
+    /^spotify:/i.test(text) ||
+    /^(https?:\/\/)?(open\.spotify\.com|play\.spotify\.com|spotify\.link)\//i.test(text)
+  );
+}
+
 /**
  * If what was typed is a link, returns it ready to open ("youtu.be/…" gains
  * "https://"); returns undefined for anything else, which is search text.

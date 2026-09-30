@@ -1,7 +1,7 @@
 # YouTube → audio extractor
 
-Small full-stack app: paste a YouTube URL (or search for a song), preview it, download the audio
-track. Developed and run locally on Windows (it also works on macOS/Linux). `README.md` is the user
+Small full-stack app: paste a YouTube URL (or search for a song, or paste a Spotify song link),
+preview it, download the audio track. Developed and run locally on Windows (it also works on macOS/Linux). `README.md` is the user
 guide, `TECHNICAL.md` has architecture, setup and deployment details, and `LEARNING.md` maps the
 stack onto .NET concepts.
 
@@ -24,6 +24,9 @@ stack onto .NET concepts.
   `GET /api/downloads`
 - `server/search.ts` — song search: `yt-dlp ytsearch12:` (flat, ~4s) + `rankResults()` (official
   uploads up; partial matches and live/cover/remix down unless searched for); pure parts unit-tested
+- `server/spotify.ts` — Spotify song links (`/api/search?q=<link>`): title/artists/length from the
+  public embed page `open.spotify.com/embed/track/<id>` (`__NEXT_DATA__`, no account or API key),
+  then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first)
 - `server/audio.ts` — yt-dlp and ffmpeg arguments/spawning for the MP3 pipeline (unit-tested)
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 100 entries, queued writes, temp-file + rename
@@ -32,7 +35,8 @@ stack onto .NET concepts.
   components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
   Original audio toggle (`use-download-format.ts`) and the Paste a link / Search by song switch
-- `client/src/lib/format.ts` — `formatDuration()` and `asLink()` (a link is opened, anything else searched)
+- `client/src/lib/format.ts` — `formatDuration()`, `isSpotifyLink()` and `asLink()` (a YouTube link
+  is opened; a Spotify link or anything else is searched)
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser` (Playwright)
 
 ## Commands
@@ -77,6 +81,9 @@ stack onto .NET concepts.
 - Search spawns yt-dlp directly (no shell) with the query after `--`; keep it that way so search
   text can't become a command or a yt-dlp option. Results carry their own title/thumbnail, so
   picking one needs no `/api/video/info` call.
+- Spotify: only the validated 22-character track id goes into the one embed URL we fetch (no
+  user-controlled URLs are ever fetched). If Spotify links break, check the embed page's
+  `__NEXT_DATA__` shape first (`parseEmbedPage()`); the cloud workspace can't reach Spotify.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
   (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).

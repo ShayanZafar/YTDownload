@@ -8,6 +8,13 @@ import { z } from "zod";
 import { extractVideoId, pickThumbnail, type ThumbnailLike } from "./youtube-url";
 import { searchYouTube } from "./search";
 import {
+  SpotifyError,
+  fetchSpotifyTrack,
+  parseSpotifyLink,
+  spotifyLinkError,
+  spotifySearchQuery,
+} from "./spotify";
+import {
   AUDIO_FORMAT,
   YT_DLP_BASE_FLAGS,
   audioOutput,
@@ -73,14 +80,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Song search: top YouTube results for a text query, official uploads first.
+  // A Spotify song link searches for that song, preferring same-length uploads.
   app.get(api.video.search.path, async (req, res) => {
     const query = api.video.search.query.safeParse(req.query);
     if (!query.success) {
       return res.status(400).json({ message: query.error.errors[0].message, field: "q" });
     }
+    const { q } = query.data;
     try {
-      res.json({ results: await searchYouTube(query.data.q) });
+      const spotifyLink = parseSpotifyLink(q);
+      if (!spotifyLink) {
+        return res.json({ results: await searchYouTube(q) });
+      }
+      if (spotifyLink.kind !== "track") {
+        return res.status(400).json({ message: spotifyLinkError(spotifyLink), field: "q" });
+      }
+      const spotify = await fetchSpotifyTrack(spotifyLink.id);
+      const results = await searchYouTube(spotifySearchQuery(spotify), {
+        targetDuration: spotify.duration,
+      });
+      res.json({ results, spotify });
     } catch (err) {
+      if (err instanceof SpotifyError) {
+        return res.status(err.status).json({ message: err.message });
+      }
       console.error("Search failed:", err);
       res.status(500).json({ message: err instanceof Error ? err.message : "Search failed" });
     }

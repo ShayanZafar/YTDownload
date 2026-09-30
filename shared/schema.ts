@@ -25,4 +25,24 @@ export const searchResultSchema = z.object({
 });
 
 export type SearchResult = z.infer<typeof searchResultSchema>;
+
+/**
+ * Uploads within this many seconds of a Spotify song's length are treated as
+ * the same recording (ranked first, and marked "Same length" in the results).
+ */
+export const SAME_LENGTH_SECONDS = 5;
+
+/** A song read from a Spotify link, used to find the same recording on YouTube. */
+export const spotifyTrackSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  title: z.string(),
+  artists: z.array(z.string()),
+  /** Length in seconds. */
+  duration: z.number().nullable(),
+  /** Cover art. */
+  thumbnail: z.string().nullable(),
+});
+
+export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
 export type InsertDownload = Pick<Download, "url" | "title">;

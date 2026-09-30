@@ -6,6 +6,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 
 - **Paste a YouTube URL** — Drop in any standard YouTube video link.
 - **Or search for a song** — Type an artist and song title to find it on YouTube. Uploads from the artist or their label come first, marked **Official**.
+- **Or paste a Spotify song link** — The app reads the song's name, artist and length from Spotify and finds the same recording on YouTube. (Spotify's own audio can't be downloaded; the audio comes from YouTube.)
 - **Preview the video** — See the title and thumbnail before downloading, so you can confirm you've got the right one.
 - **Extract high-quality audio** — One-click download of the audio track as a 320 kbps MP3 (the highest MP3 quality), converted from the best audio stream YouTube offers for free.
 - **Browse recent extractions** — Every completed download is saved to a history list so you can quickly grab a file again later without re-pasting the URL. Cancelled or failed downloads aren't added.
@@ -16,6 +17,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 | --------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Instant video preview | Title and thumbnail load before you commit to downloading.                                                   |
 | Song search           | Search YouTube by artist and title; official uploads first, live/cover/remix versions last unless you ask.   |
+| Spotify song links    | Paste a Spotify song link to get the same recording from YouTube, matched by artist, title and length.       |
 | High-quality audio    | Pulls the best available audio stream from the source video.                                                 |
 | MP3 download          | Real MP3 files (320 kbps) named after the video, with title and artist tags that music players show.         |
 | Original audio option | A toggle to get YouTube's own audio stream instead — not converted, smaller (usually `.opus`). Great in VLC. |
@@ -26,7 +28,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 ## How To Use It
 
 1. Open the app in your browser.
-2. Either paste a YouTube URL into the input box (for example, `https://www.youtube.com/watch?v=...`) and click **Extract**, or switch to **Search by song**, type the artist and song title, click **Search**, and pick a result. Either way, a preview card appears with the video's title and thumbnail. (The app remembers which one you used last, and it works out what you meant: a link typed into the search box is opened, and plain words typed into the link box are searched for.)
+2. Either paste a YouTube URL into the input box (for example, `https://www.youtube.com/watch?v=...`) and click **Extract**, or switch to **Search by song**, type the artist and song title, click **Search**, and pick a result. Either way, a preview card appears with the video's title and thumbnail. (The app remembers which one you used last, and it works out what you meant: a link typed into the search box is opened, and plain words typed into the link box are searched for.) You can also paste a Spotify song link (in Spotify: **Share → Copy Song Link**) into either box — the best YouTube match is picked for you, and uploads the same length as the Spotify song are marked **Same length**.
 3. Not the right video? Pick a different search result, or click **Clear and start over**.
 4. Click **Download Audio** to save the MP3 to your device. Prefer the untouched original? Turn on **Original audio** first — the app remembers your choice, and it also applies to redownloads.
 5. Scroll down to **Recent Extractions** to redownload any audio file you've previously fetched.
@@ -34,6 +36,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 ## Notes & Limitations
 
 - The app extracts audio only — video downloads are not supported.
+- Spotify: only song links work, not albums, playlists or podcasts, and not `spotify.link` short links (open one and copy the `open.spotify.com` address instead). No Spotify account is needed.
 - Every YouTube upload of a song has the same audio quality ceiling for free (about 130 kbps Opus), so for music, the artist's or label's own upload — the ones marked **Official** — is usually the cleanest source.
 - The source video must be publicly accessible on YouTube (age-restricted, private, or members-only videos may fail).
 - Downloaded files are intended for personal use. Please respect YouTube's Terms of Service and the rights of content creators.

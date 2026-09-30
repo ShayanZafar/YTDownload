@@ -5,12 +5,12 @@ import { Layout } from "@/components/layout";
 import { useVideoInfo, useRecentDownloads, useSongSearch } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
-import { asLink, formatDuration } from "@/lib/format";
+import { asLink, formatDuration, isSpotifyLink } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { buildDownloadUrl } from "@shared/routes";
-import type { SearchResult } from "@shared/schema";
+import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
 import { formatDistanceToNow } from "date-fns";
 import {
   Search,
@@ -24,6 +24,7 @@ import {
   Link2,
   BadgeCheck,
   Check,
+  Timer,
 } from "lucide-react";
 
 // Paste a link, or search by song title. The last one used is remembered.
@@ -81,7 +82,7 @@ export default function Home() {
   const {
     mutate: search,
     isPending: isSearching,
-    data: results,
+    data: searchData,
     variables: searchedFor,
     error: searchError,
     reset: resetSearch,
@@ -89,6 +90,8 @@ export default function Home() {
   const { data: recentDownloads, isLoading: isLoadingHistory } = useRecentDownloads(
     pending.length > 0 ? HISTORY_POLL_MS : false,
   );
+  const results = searchData?.results;
+  const spotify = searchData?.spotify;
   const isBusy = isFetchingInfo || isSearching;
   const error = infoError ?? searchError;
 
@@ -144,20 +147,26 @@ export default function Home() {
 
   const runSearch = (query: string) => {
     search(query, {
+      // A Spotify link asks for one particular song: show the best match
+      // straight away (the other matches stay listed below).
+      onSuccess: (data) => {
+        if (data.spotify && data.results[0]) pick(data.results[0]);
+      },
       onError: (err) => {
         toast({ title: "Search failed", description: err.message, variant: "destructive" });
       },
     });
   };
 
-  // Whatever the mode, a link is opened and anything else is searched for —
-  // switching the toggle to match, so pasting a link into the search box works.
+  // Whatever the mode, a YouTube link is opened and anything else is searched
+  // for — switching the toggle to match, so pasting a link into the search box
+  // works. A Spotify link is a search for that song.
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const value = text.trim();
     if (!value) return;
 
-    const link = asLink(value);
+    const link = isSpotifyLink(value) ? undefined : asLink(value);
     if (link) {
       if (mode !== "link") setMode("link");
       extract(link);
@@ -266,7 +275,7 @@ export default function Home() {
               placeholder={
                 mode === "link"
                   ? "https://www.youtube.com/watch?v=..."
-                  : "Artist and song, e.g. Daft Punk Get Lucky"
+                  : "Artist and song, or a Spotify song link"
               }
               enterKeyHint={mode === "link" ? "go" : "search"}
               className="flex-1 w-0 min-w-0 bg-transparent border-none text-foreground placeholder:text-muted-foreground h-14 px-2 text-base sm:text-lg focus:outline-none"
@@ -420,14 +429,42 @@ export default function Home() {
         <section aria-label="Search results" className="max-w-3xl mx-auto w-full space-y-4">
           <div className="flex items-baseline justify-between gap-4 px-2">
             <h2 className="text-xl font-display font-semibold truncate">
-              {isSearching ? "Searching YouTube..." : `Results for “${searchedFor}”`}
+              {isSearching
+                ? "Searching YouTube..."
+                : spotify
+                  ? "YouTube matches"
+                  : `Results for “${searchedFor}”`}
             </h2>
             {!isSearching && results && results.length > 0 && (
               <p className="hidden sm:block shrink-0 text-xs text-muted-foreground">
-                Official uploads (artist or label) first
+                {spotify
+                  ? "Same length as the Spotify song first"
+                  : "Official uploads (artist or label) first"}
               </p>
             )}
           </div>
+
+          {!isSearching && spotify && (
+            <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">
+              {spotify.thumbnail && (
+                <img
+                  src={spotify.thumbnail}
+                  alt=""
+                  className="w-12 h-12 shrink-0 rounded-md object-cover"
+                />
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  From Spotify
+                </p>
+                <p className="text-sm font-medium text-foreground truncate">{spotify.title}</p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {spotify.artists.join(", ")}
+                  {spotify.duration != null && ` · ${formatDuration(spotify.duration)}`}
+                </p>
+              </div>
+            </div>
+          )}
 
           {isSearching ? (
             <div className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
@@ -445,6 +482,10 @@ export default function Home() {
             <ul className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
               {results.map((result) => {
                 const isPicked = selected?.url === result.url;
+                const sameLength =
+                  spotify?.duration != null &&
+                  result.duration != null &&
+                  Math.abs(result.duration - spotify.duration) <= SAME_LENGTH_SECONDS;
                 return (
                   <li key={result.id}>
                     <button
@@ -455,6 +496,7 @@ export default function Home() {
                         result.title,
                         result.channel && `by ${result.channel}`,
                         result.official && "official upload",
+                        sameLength && "same length as the Spotify song",
                         result.duration != null && formatDuration(result.duration),
                       ]
                         .filter(Boolean)
@@ -481,8 +523,8 @@ export default function Home() {
                         <p className="text-sm font-medium text-foreground line-clamp-2">
                           {result.title}
                         </p>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                          <span className="truncate">{result.channel}</span>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                          <span className="truncate max-w-full">{result.channel}</span>
                           {result.official && (
                             <span
                               title="Uploaded by the artist or their label"
@@ -490,6 +532,15 @@ export default function Home() {
                             >
                               <BadgeCheck className="w-3 h-3" />
                               Official
+                            </span>
+                          )}
+                          {sameLength && (
+                            <span
+                              title="Same length as the Spotify song, so most likely the same recording"
+                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground"
+                            >
+                              <Timer className="w-3 h-3" />
+                              Same length
                             </span>
                           )}
                         </div>
@@ -511,9 +562,11 @@ export default function Home() {
             </ul>
           ) : (
             <div className="text-center py-10 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20">
-              <p className="text-sm font-medium text-foreground">No songs found</p>
+              <p className="text-sm font-medium text-foreground">
+                {spotify ? "No YouTube uploads of this song found" : "No songs found"}
+              </p>
               <p className="text-sm text-muted-foreground mt-1">
-                Try the artist and song title, or paste a YouTube link.
+                Try the artist and song title, or paste a YouTube or Spotify link.
               </p>
             </div>
           )}

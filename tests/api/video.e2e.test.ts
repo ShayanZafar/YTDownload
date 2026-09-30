@@ -108,6 +108,32 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     });
   });
 
+  it("finds the YouTube upload of a Spotify song link on /api/search", async () => {
+    // Queen – Bohemian Rhapsody (Remastered 2011), 5:54 on Spotify.
+    const res = await request(app)
+      .get("/api/search")
+      .query({ q: "https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv?si=e2e" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.spotify).toMatchObject({
+      id: "4u7EnebtmKWzUH433cf5Qv",
+      title: expect.stringMatching(/bohemian rhapsody/i),
+      artists: expect.arrayContaining(["Queen"]),
+      duration: expect.any(Number),
+    });
+    const [best] = res.body.results as { title: string; duration: number }[];
+    expect(best.title).toMatch(/bohemian rhapsody/i);
+    expect(Math.abs(best.duration - res.body.spotify.duration)).toBeLessThanOrEqual(3);
+  });
+
+  it("explains that a Spotify album link isn't a song", async () => {
+    const res = await request(app)
+      .get("/api/search")
+      .query({ q: "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/album/i);
+  });
+
   it("rejects an empty search", async () => {
     for (const query of [{}, { q: "   " }]) {
       const res = await request(app).get("/api/search").query(query);

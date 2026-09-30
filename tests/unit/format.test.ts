@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { asLink, formatDuration } from "../../client/src/lib/format";
+import { asLink, formatDuration, isSpotifyLink } from "../../client/src/lib/format";
 
 describe("formatDuration", () => {
   it("formats like a clock", () => {
@@ -39,5 +39,20 @@ describe("asLink", () => {
     expect(asLink("Blink-182")).toBeUndefined();
     expect(asLink("https://example.com with spaces")).toBeUndefined();
     expect(asLink("   ")).toBeUndefined();
+  });
+});
+
+describe("isSpotifyLink", () => {
+  it("spots Spotify links and URIs", () => {
+    expect(isSpotifyLink("https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv?si=x")).toBe(true);
+    expect(isSpotifyLink("open.spotify.com/intl-de/track/4u7EnebtmKWzUH433cf5Qv")).toBe(true);
+    expect(isSpotifyLink("spotify:track:4u7EnebtmKWzUH433cf5Qv")).toBe(true);
+    expect(isSpotifyLink("https://spotify.link/AbCdEf")).toBe(true);
+  });
+
+  it("leaves YouTube links and search text alone", () => {
+    expect(isSpotifyLink("https://www.youtube.com/watch?v=jNQXAC9IVRw")).toBe(false);
+    expect(isSpotifyLink("spotify top songs")).toBe(false);
+    expect(isSpotifyLink("https://open.spotify.com.evil.example/track/x")).toBe(false);
   });
 });

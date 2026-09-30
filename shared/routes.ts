@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { downloadSchema, searchResultSchema } from "./schema";
+import { downloadSchema, searchResultSchema, spotifyTrackSchema } from "./schema";
 
 /**
  * What the download endpoint can produce:
@@ -62,9 +62,15 @@ export const api = {
           .max(200, "That search is too long"),
       }),
       responses: {
-        200: z.object({ results: z.array(searchResultSchema) }),
+        200: z.object({
+          results: z.array(searchResultSchema),
+          /** Present when the search was a Spotify song link: the song it points to. */
+          spotify: spotifyTrackSchema.optional(),
+        }),
         400: errorSchemas.validation,
+        404: errorSchemas.notFound,
         500: errorSchemas.internal,
+        502: errorSchemas.internal,
       },
     },
     download: {
