@@ -115,13 +115,13 @@ The response adds `spotify: { id, url, title, artists, duration, thumbnail }`; t
 
 Browsers always put downloads in their own downloads folder; a page can't change that. What Chrome and Edge (desktop) do offer is the File System Access API, so `client/src/lib/save-folder.ts` saves into a folder you pick instead:
 
-1. **Choose folder** calls `showDirectoryPicker({ mode: "readwrite", startIn: "music" })` — the normal Windows folder dialog. The page only ever sees the folder's name, never its path.
+1. The setting sits just below the search box (`client/src/components/save-to-setting.tsx`), always visible, so it can be set before a video is opened and applies to **Redownload** too. **Choose folder** calls `showDirectoryPicker({ mode: "readwrite", startIn: "music" })` — the normal Windows folder dialog. The page only ever sees the folder's name, never its path.
 2. The folder handle is kept in IndexedDB (`yt-audio` → `settings` → `save-folder`; a handle can't go in `localStorage`) and restored on the next visit. Before writing, `ensureWriteAccess()` checks permission and, if needed, asks — which must happen straight from a click, so it's the first thing the Download click does. Chrome asks once per visit, or never again if you pick **Allow on every visit**.
 3. Download clicks are intercepted (`startDownload()` in `Home.tsx`): the page `fetch`es the same `/api/video/download` URL and streams the body through a byte counter into `FileSystemFileHandle.createWritable()`. The name comes from the response's `Content-Disposition`, made safe for Windows, and an existing file is never overwritten (`Song (1).mp3`, like browsers do).
 4. **Cancel** aborts the `fetch`, which closes the connection — the server sees the same "close" as a cancelled browser download, kills `yt-dlp`/`ffmpeg`, and records nothing. The browser writes to a temporary file and only swaps it in when the stream closes cleanly, and `saveToFolder()` removes the empty placeholder file, so a cancelled or failed download leaves nothing behind.
 5. The server needs no changes: it records the history entry when the response finishes, exactly as for a normal download.
 
-Browsers without `showDirectoryPicker` (Firefox, Safari, phones) don't show the setting, and downloads stay plain `<a download>` links. The Playwright test can't click through a native folder dialog, so it replaces `showDirectoryPicker` with one that returns a folder in the browser's private storage (OPFS) — a real folder handle, written to the same way — and reads the saved MP3 back out of it.
+Browsers without `showDirectoryPicker` (Firefox, Safari, phones — and any page not on `localhost` or HTTPS, since the API needs a secure context) show a short note in place of the setting, and downloads stay plain `<a download>` links. The Playwright test can't click through a native folder dialog, so it replaces `showDirectoryPicker` with one that returns a folder in the browser's private storage (OPFS) — a real folder handle, written to the same way — and reads the saved MP3 back out of it.
 
 ### Searching the history
 
@@ -558,9 +558,10 @@ What it checks:
 3. Turning on **Original audio** switches the link to `format=original`, and the download is a valid `.opus` (or `.m4a`/`.mka`) file.
 4. Switching to **Search by song**, searching for the test video and picking it shows the preview with a download link for that video; the mode survives a reload, and a link typed into the search box is opened (the switch flips back to **Paste a link**).
 5. Pasting a Spotify song link into the link box switches to **Search by song**, shows the song from Spotify, and picks the best YouTube match with a download link ready.
-6. With **Save to** set to a folder (backed by OPFS in the test), cancelling a download leaves the folder empty; a full download lands there as a valid MP3, not through the browser's download manager, appears in the history, and the folder is still chosen after a reload.
-7. Recent Extractions (with a made-up history served in place of `/api/downloads`): 25 entries at a time with **Show more**; typing narrows the list word by word; suggestions list each song once with its download count; picking one with the keyboard shows exactly that song; the date filters work alone and with a search; and "Clear search and filters" resets everything.
-8. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+6. **Save to** can be set before opening a video. With it set to a folder (backed by OPFS in the test), cancelling a download leaves the folder empty; a full download lands there as a valid MP3, not through the browser's download manager, appears in the history, and the folder is still chosen after a reload.
+7. In a browser without a folder picker (simulated by removing `showDirectoryPicker`), a note explains where downloads go and there's no **Choose folder** button.
+8. Recent Extractions (with a made-up history served in place of `/api/downloads`): 25 entries at a time with **Show more**; typing narrows the list word by word; suggestions list each song once with its download count; picking one with the keyboard shows exactly that song; the date filters work alone and with a search; and "Clear search and filters" resets everything.
+9. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 
 The tests run in your installed Google Chrome, in headless mode (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in. Playwright's own lightweight "headless shell" can't be used: it crashes when a page restores a saved **Save to** folder from IndexedDB (real Chrome and Edge are fine). If Chrome isn't installed:
 

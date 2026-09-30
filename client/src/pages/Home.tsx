@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
 import { Highlight, HistorySearch } from "@/components/history-search";
+import { SaveToSetting } from "@/components/save-to-setting";
 import { useVideoInfo, useRecentDownloads, useSongSearch } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
@@ -37,7 +38,6 @@ import {
   BadgeCheck,
   Check,
   Timer,
-  FolderOpen,
   X,
 } from "lucide-react";
 
@@ -437,6 +437,16 @@ export default function Home() {
             </button>
           </div>
         </form>
+
+        {/* Where downloads go — visible before a video is opened, and used by Redownload too. */}
+        <div className="w-full !mt-4">
+          <SaveToSetting
+            supported={saveFolder.supported}
+            folderName={saveFolder.folder?.name}
+            onChoose={chooseFolder}
+            onClear={saveFolder.clear}
+          />
+        </div>
       </section>
 
       {/* Result Section */}
@@ -544,46 +554,6 @@ export default function Home() {
                       className="mt-0.5"
                     />
                   </div>
-
-                  {saveFolder.supported && (
-                    <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-border px-4 py-3 text-left">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground">Save to</p>
-                        <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 min-w-0">
-                          {saveFolder.folder ? (
-                            <>
-                              <FolderOpen className="w-3.5 h-3.5 shrink-0" />
-                              <span className="truncate" data-testid="save-folder-name">
-                                {saveFolder.folder.name}
-                              </span>
-                            </>
-                          ) : (
-                            "Your browser's downloads folder"
-                          )}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={chooseFolder}
-                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                        >
-                          {saveFolder.folder ? "Change" : "Choose folder"}
-                        </button>
-                        {saveFolder.folder && (
-                          <button
-                            type="button"
-                            onClick={saveFolder.clear}
-                            aria-label="Use the browser's downloads folder instead"
-                            title="Use the browser's downloads folder instead"
-                            className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
 
                   <button
                     onClick={clear}

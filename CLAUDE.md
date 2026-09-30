@@ -40,7 +40,9 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
   is opened; a Spotify link or anything else is searched)
 - `client/src/lib/save-folder.ts` + `hooks/use-save-folder.ts` — the "Save to" folder (File System
   Access API, Chrome/Edge desktop only): picked folder handle kept in IndexedDB, downloads fetched
-  and streamed into it (`saveToFolder()`); unsupported browsers keep plain `<a download>` links
+  and streamed into it (`saveToFolder()`); unsupported browsers keep plain `<a download>` links.
+  The setting itself (`components/save-to-setting.tsx`) sits under the search box, always visible;
+  unsupported browsers get a note there instead of a missing setting
 - `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
   Extractions in the browser: word/partial matching, autocomplete suggestions (combobox; picking one
   filters to that exact title), date ranges, highlighting; the list pages 25 at a time

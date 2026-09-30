@@ -204,10 +204,11 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     page.on("download", () => browserDownloads++);
 
     await page.goto("/");
+    // The setting is right under the search box, before any video is opened.
+    await page.getByRole("button", { name: /choose folder/i }).click();
+    await expect(page.getByTestId("save-folder-name")).toHaveText("Music");
     await page.locator('input[type="url"]').fill(TEST_VIDEO_URL);
     await page.getByRole("button", { name: /extract/i }).click();
-    await page.getByRole("button", { name: /choose folder/i }).click({ timeout: 60_000 });
-    await expect(page.getByTestId("save-folder-name")).toHaveText("Music");
 
     const downloadLink = page.locator('a[href^="/api/video/download"]', {
       hasText: /download audio/i,
@@ -239,9 +240,18 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
 
     // The folder is remembered after a reload (restored from IndexedDB).
     await page.reload();
-    await page.locator('input[type="url"]').fill(TEST_VIDEO_URL);
-    await page.getByRole("button", { name: /extract/i }).click();
-    await expect(page.getByTestId("save-folder-name")).toHaveText("Music", { timeout: 60_000 });
+    await expect(page.getByTestId("save-folder-name")).toHaveText("Music");
+  });
+
+  test("browsers that can't save into a folder say where downloads go", async ({ page }) => {
+    // Like Firefox or Safari, which have no folder picker.
+    await page.addInitScript(() => {
+      delete (Window.prototype as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+      delete (window as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+    });
+    await page.goto("/");
+    await expect(page.getByText(/downloads go to this browser's downloads folder/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /choose folder/i })).toHaveCount(0);
   });
 
   test("Recent Extractions can be searched, with suggestions and date filters", async ({
