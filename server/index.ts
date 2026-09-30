@@ -3,9 +3,13 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { hostCheck } from "./host-check";
 
 const app = express();
 const httpServer = createServer(app);
+
+// First thing: refuse requests addressed to unknown host names (see host-check.ts).
+app.use(hostCheck());
 
 declare module "http" {
   interface IncomingMessage {

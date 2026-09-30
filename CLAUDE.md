@@ -17,13 +17,15 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 ## Layout
 
 - `server/index.ts` — entry point; Vite middleware in dev, static `dist/public` in prod
-- `server/env.ts` — loads `.env`; imported first by `index.ts` and `db.ts`
+- `server/env.ts` — loads `.env`; imported first by `index.ts`
+- `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/video/download`, `GET /api/downloads`
 - `server/audio.ts` — yt-dlp and ffmpeg arguments/spawning for the MP3 pipeline (unit-tested)
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 100 entries, queued writes, temp-file + rename
 - `shared/` — schema and API contracts shared by client and server
-- `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` is generated shadcn/ui
+- `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
+  components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-download-format.ts` — the MP3 / Original audio toggle, remembered in localStorage
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube + DB), `tests/browser` (Playwright)
 
@@ -67,3 +69,10 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
   (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).
 - Prettier config is in `.prettierrc` (`endOfLine: auto`, so CRLF checkouts on Windows are fine).
+- Dependencies: runtime imports only in `dependencies`, everything else in `devDependencies`.
+  `npm audit` should stay at 0. npm 10 crashes resolving this tree from scratch (`edgesOut`), so
+  add/update packages with `npx npm@11 …`; plain `npm install` from the lockfile is fine.
+  If a newer npm blocks install scripts, approve the ones the app needs:
+  `npm install-scripts approve esbuild ffmpeg-static youtube-dl-exec` (they fetch esbuild, ffmpeg, yt-dlp).
+- Don't make Vite errors exit the process (the old Replit template did) — a refused request or a
+  half-saved file would kill the dev server.

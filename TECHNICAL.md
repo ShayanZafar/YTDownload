@@ -36,7 +36,7 @@ This document covers the project's architecture, local development setup, enviro
 .
 ├── client/                    # Frontend React application
 │   ├── src/
-│   │   ├── components/        # UI components (incl. shadcn/ui in components/ui)
+│   │   ├── components/        # UI components (the shadcn/ui ones the app uses, in components/ui)
 │   │   ├── hooks/             # Custom React hooks (e.g. use-youtube)
 │   │   ├── lib/               # Helpers (queryClient, utils)
 │   │   ├── pages/             # Route pages (Home, NotFound)
@@ -47,6 +47,7 @@ This document covers the project's architecture, local development setup, enviro
 ├── server/                    # Backend Express application
 │   ├── index.ts               # App bootstrap, middleware, port binding
 │   ├── env.ts                 # Loads .env before anything reads settings
+│   ├── host-check.ts          # Refuses requests for unknown host names (DNS rebinding)
 │   ├── routes.ts              # API route handlers
 │   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
@@ -288,13 +289,14 @@ All JSON errors follow the shape `{ message: string, field?: string }`.
 
 ## Environment Variables
 
-| Variable       | Required | Description                                                                 |
-| -------------- | -------- | --------------------------------------------------------------------------- |
-| `NODE_ENV`     | No       | `development` (default) or `production`. Controls Vite vs static serving.   |
-| `PORT`         | No       | Port to bind (default `5000`).                                              |
-| `HOST`         | No       | Interface to listen on (default `127.0.0.1`; use `0.0.0.0` in a container). |
-| `HISTORY_FILE` | No       | Where to keep the download history (default `data/history.json`).           |
-| `FFMPEG_BIN`   | No       | Use this ffmpeg instead of the one `ffmpeg-static` downloads.               |
+| Variable        | Required | Description                                                                                                       |
+| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`      | No       | `development` (default) or `production`. Controls Vite vs static serving.                                         |
+| `PORT`          | No       | Port to bind (default `5000`).                                                                                    |
+| `HOST`          | No       | Interface to listen on (default `127.0.0.1`; use `0.0.0.0` in a container).                                       |
+| `ALLOWED_HOSTS` | No       | Extra host names to answer to, comma-separated (e.g. a Tailscale name). `localhost` and IP addresses always work. |
+| `HISTORY_FILE`  | No       | Where to keep the download history (default `data/history.json`).                                                 |
+| `FFMPEG_BIN`    | No       | Use this ffmpeg instead of the one `ffmpeg-static` downloads.                                                     |
 
 None are required. To set any, put them in a `.env` file in the project root (copy `.env.example`); `server/env.ts` loads it on startup. Variables already set in your shell or hosting platform take priority over the file.
 
@@ -371,7 +373,7 @@ npm start                        # serves dist/ on http://localhost:5000
 ### Common Windows gotchas
 
 - **Port 5000 is in use.** Set `PORT=5001` (or any free port) in `.env`. Find what's holding 5000 with `Get-NetTCPConnection -LocalPort 5000`.
-- **Reaching it from your phone or another PC.** The server only listens on this computer by default. Set `HOST=0.0.0.0` in `.env` (Windows Firewall will ask to allow Node).
+- **Reaching it from your phone or another PC.** The server only listens on this computer by default. Set `HOST=0.0.0.0` in `.env` (Windows Firewall will ask to allow Node) and open `http://<your PC's IP>:5000`. To use a host name instead of the IP (e.g. a Tailscale name), add it to `ALLOWED_HOSTS`.
 - **Downloads stop working after a while.** YouTube changes things regularly; run `npm rebuild youtube-dl-exec` to fetch the latest yt-dlp (with `YOUTUBE_DL_SKIP_PYTHON_CHECK` set, as above).
 - **`npm install` skips dev dependencies** (e.g. `'tsx' is not recognized`). `NODE_ENV=production` is set in that terminal — clear it (`Remove-Item Env:NODE_ENV`) and reinstall.
 - **Long file paths in `node_modules`.** If `npm install` fails with `ENAMETOOLONG`, enable Windows long-path support: `New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force` (elevated PowerShell, then reboot).
@@ -498,9 +500,9 @@ Both suites depend on `yt-dlp` (invoked via the `youtube-dl-exec` wrapper) being
 - On Linux/macOS, yt-dlp is a Python script: the host (or container) must have `python3` (3.10+) on `$PATH`. Make sure your image installs it. On Windows, yt-dlp is a standalone `.exe` and needs no Python.
 - yt-dlp needs a JavaScript runtime for YouTube. The server passes `--js-runtimes node`, so it uses the same Node that runs the app (Node 20+).
 
-### Test-only dependencies
+### Test and tooling dependencies
 
-The following packages were added solely to support the test suites: `vitest`, `supertest`, `@types/supertest`, `@playwright/test`. They are not loaded by the production build.
+Everything used only for building, testing, linting or formatting is in `devDependencies` (Vitest, Supertest, Playwright, ESLint, Prettier, Vite, Tailwind, …). `dependencies` holds only what the running app and its UI actually import.
 
 ---
 
@@ -540,8 +542,10 @@ A typical flow:
 
 ## Security Notes
 
-- Dependencies were audited and updated: `rollup` was upgraded to a patched version (≥ 4.59.0) to fix a high-severity Path Traversal advisory (GHSA-mw96-cpmx-2vgc), and `tsx` was reinstalled after the audit reset `node_modules`.
-- To re-run the audit at any time: `npm audit`.
+- **Dependencies:** unused packages from the original template were removed (and the unused shadcn/ui components with them), and everything was updated within its current major version. `npm audit` reported 0 vulnerabilities as of September 2026. Re-check any time with `npm audit`.
+- **Updating dependencies:** npm 10 crashes (`Cannot read properties of null (reading 'edgesOut')`) when resolving this project's dependency tree from scratch; use npm 11+ for that, e.g. `npx npm@11 update`. Installing from the existing lockfile works with npm 10.
+- **Host check (`server/host-check.ts`):** the server only answers requests addressed to `localhost`, an IP address, or a name in `ALLOWED_HOSTS`, in both dev and production. This blocks DNS-rebinding attacks, where a malicious website points its own domain at `127.0.0.1` to reach servers on your PC. Vite's dev server applies the same rule to its files, and its `fs.deny` list keeps dotfiles such as `.env` from being served.
+- **Dev server errors don't stop the server:** Vite errors (a refused file, a syntax error while editing) are logged and shown in the browser overlay.
 - The download endpoint accepts only validated YouTube URLs (`extractVideoId` in `server/youtube-url.ts`, which rebuilds a canonical URL from the video ID) and sanitises the filename before sending it back in `Content-Disposition`. yt-dlp and ffmpeg are run with argument arrays, never through a shell.
 - Request bodies and query strings are validated with Zod schemas before use.
 - The server listens on `127.0.0.1` by default and has no authentication; see the note under [Deploying](#deploying).
