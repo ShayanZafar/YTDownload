@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
 import { Highlight, HistorySearch } from "@/components/history-search";
 import { SaveToSetting } from "@/components/save-to-setting";
+import { RenameableTitle } from "@/components/renameable-title";
 import { useVideoInfo, useRecentDownloads, useSongSearch } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
@@ -73,6 +74,8 @@ export default function Home() {
   const [text, setText] = useState("");
   const [mode, setMode] = useStoredChoice<InputMode>("input-mode", inputModes, "link");
   const [selected, setSelected] = useState<Selected | null>(null);
+  // The name to save the selected video's audio under; null = its title.
+  const [fileName, setFileName] = useState<string | null>(null);
   const [format, setFormat] = useDownloadFormat();
   const isOriginal = format === "original";
   const { toast } = useToast();
@@ -170,7 +173,7 @@ export default function Home() {
 
   const extract = (link: string) => {
     fetchInfo(link, {
-      onSuccess: (info) => setSelected(info),
+      onSuccess: (info) => showVideo(info),
       onError: (err) => {
         toast({
           title: "Couldn't fetch video",
@@ -212,9 +215,15 @@ export default function Home() {
     }
   };
 
+  // A newly chosen video starts out saved under its own title.
+  const showVideo = (video: Selected | null) => {
+    setSelected(video);
+    setFileName(null);
+  };
+
   const pick = (result: SearchResult) => {
     resetInfo();
-    setSelected({
+    showVideo({
       url: result.url,
       title: result.title,
       thumbnail: result.thumbnail,
@@ -227,7 +236,7 @@ export default function Home() {
   const clear = () => {
     resetInfo();
     resetSearch();
-    setSelected(null);
+    showVideo(null);
     setText("");
     inputRef.current?.focus();
   };
@@ -319,7 +328,7 @@ export default function Home() {
 
   const handleDownload = (event: React.MouseEvent) => {
     if (!selected) return;
-    if (!startDownload(event, buildDownloadUrl(selected.url, format), selected.url)) return;
+    if (!startDownload(event, selectedHref, selected.url)) return;
 
     toast({
       title: "Download Started",
@@ -329,7 +338,9 @@ export default function Home() {
     });
   };
 
-  const selectedHref = selected ? buildDownloadUrl(selected.url, format) : "";
+  const selectedHref = selected
+    ? buildDownloadUrl(selected.url, format, fileName ?? undefined)
+    : "";
   const selectedSave = saves[selectedHref];
 
   return (
@@ -477,10 +488,19 @@ export default function Home() {
 
               {/* Info & Action */}
               <div className="flex-1 flex flex-col items-center text-center md:items-start md:text-left gap-4 w-full">
-                <div>
-                  <h3 className="font-display font-bold text-xl md:text-2xl line-clamp-3 text-foreground">
-                    {selected.title}
-                  </h3>
+                <div className="w-full md:w-auto">
+                  <RenameableTitle
+                    key={selected.url}
+                    title={selected.title}
+                    fileName={fileName}
+                    extension={isOriginal ? ".opus" : ".mp3"}
+                    extensionHint={
+                      isOriginal
+                        ? "Usually .opus — .m4a when YouTube only has AAC audio for this video"
+                        : undefined
+                    }
+                    onRename={setFileName}
+                  />
                   {selected.channel && (
                     <p className="mt-1 text-sm text-muted-foreground">
                       {selected.channel}
@@ -586,7 +606,7 @@ export default function Home() {
       {/* Search results */}
       {(isSearching || results) && (
         <section aria-label="Search results" className="max-w-3xl mx-auto w-full space-y-4">
-          <div className="flex items-baseline justify-between gap-4 px-2">
+          <div className="flex items-center justify-between gap-4 px-2">
             <h2 className="text-xl font-display font-semibold truncate">
               {isSearching
                 ? "Searching YouTube..."
@@ -594,13 +614,27 @@ export default function Home() {
                   ? "YouTube matches"
                   : `Results for “${searchedFor}”`}
             </h2>
-            {!isSearching && results && results.length > 0 && (
-              <p className="hidden sm:block shrink-0 text-xs text-muted-foreground">
-                {spotify
-                  ? "Same length as the Spotify song first"
-                  : "Official uploads (artist or label) first"}
-              </p>
-            )}
+            <div className="flex shrink-0 items-center gap-3">
+              {!isSearching && results && results.length > 0 && (
+                <p className="hidden sm:block text-xs text-muted-foreground">
+                  {spotify
+                    ? "Same length as the Spotify song first"
+                    : "Official uploads (artist or label) first"}
+                </p>
+              )}
+              {/* Done with the results (e.g. after downloading): hide them. The
+                  chosen video stays in the preview card above. */}
+              <button
+                type="button"
+                onClick={resetSearch}
+                aria-label="Close search results"
+                title="Close search results"
+                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              >
+                <X className="w-4 h-4" />
+                <span className="hidden sm:inline">Close</span>
+              </button>
+            </div>
           </div>
 
           {!isSearching && spotify && (

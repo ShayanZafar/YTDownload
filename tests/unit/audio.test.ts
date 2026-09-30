@@ -78,6 +78,15 @@ describe("buildDownloadUrl", () => {
     expect(url.searchParams.get("format")).toBe("original");
     expect(url.searchParams.get("url")).toBe(video);
   });
+
+  it("passes a new file name along, and leaves it out when there isn't one", () => {
+    const renamed = new URL(buildDownloadUrl(video, "mp3", "  Zoo & café  "), "http://x");
+    expect(renamed.searchParams.get("name")).toBe("Zoo & café");
+    expect(
+      new URL(buildDownloadUrl(video, "mp3", "   "), "http://x").searchParams.has("name"),
+    ).toBe(false);
+    expect(new URL(buildDownloadUrl(video), "http://x").searchParams.has("name")).toBe(false);
+  });
 });
 
 describe("ffmpegMp3Args", () => {

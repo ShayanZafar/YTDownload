@@ -40,6 +40,17 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     // The preview should show the title and a thumbnail.
     await expect(page.locator("img[alt]").first()).toBeVisible();
 
+    // The title can be renamed in place; the file is then saved under that name.
+    await page.getByRole("button", { name: /^rename file: me at the zoo/i }).click();
+    const nameBox = page.getByRole("textbox", { name: /file name/i });
+    await expect(nameBox).toHaveValue(/me at the zoo/i);
+    await nameBox.fill("Zoo clip: the first video");
+    await nameBox.press("Enter");
+    await expect(
+      page.getByRole("button", { name: /^rename file: zoo clip - the first video$/i }),
+    ).toBeVisible();
+    await expect(page.getByText(/renamed from/i)).toBeVisible();
+
     // 4. Click the download link and capture the file the browser saves.
     await expect(page.getByText(/recent extractions/i)).toBeVisible();
     const rowsBefore = await historyRows(page).count();
@@ -47,8 +58,8 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await downloadLink.click();
     const download = await downloadPromise;
 
-    // The suggested filename should end with .mp3.
-    expect(download.suggestedFilename()).toMatch(/\.mp3$/i);
+    // Saved under the new name (":" isn't allowed in Windows file names).
+    expect(download.suggestedFilename()).toBe("Zoo clip - the first video.mp3");
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-browser-test-"));
     const savedPath = path.join(tmpDir, download.suggestedFilename());
@@ -124,6 +135,11 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     });
     await expect(downloadLink).toBeVisible();
     await expect(downloadLink).toHaveAttribute("href", /jNQXAC9IVRw/);
+
+    // Done with the results: close them; the chosen video stays ready to download.
+    await results.getByRole("button", { name: /close search results/i }).click();
+    await expect(results).toHaveCount(0);
+    await expect(downloadLink).toBeVisible();
 
     // Search mode is remembered on reload.
     await page.reload();

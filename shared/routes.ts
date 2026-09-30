@@ -83,15 +83,25 @@ export const api = {
             errorMap: () => ({ message: 'format must be "mp3" or "original"' }),
           })
           .default("mp3"),
+        /** File name to save as (without extension); the video's title if left out. */
+        name: z.string().max(300, "That file name is too long").optional(),
       }),
     },
   },
 };
 
-/** Link for downloading a video's audio in the given format. */
-export function buildDownloadUrl(videoUrl: string, format: DownloadFormat = "mp3"): string {
+/**
+ * Link for downloading a video's audio in the given format — saved under
+ * `name` (made safe with safeFileName on the server) instead of the title.
+ */
+export function buildDownloadUrl(
+  videoUrl: string,
+  format: DownloadFormat = "mp3",
+  name?: string,
+): string {
   const params = new URLSearchParams({ url: videoUrl });
   if (format !== "mp3") params.set("format", format);
+  if (name?.trim()) params.set("name", name.trim());
   return `${api.video.download.path}?${params}`;
 }
 

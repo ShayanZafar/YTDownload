@@ -7,6 +7,7 @@ import { api } from "@shared/routes";
 import { z } from "zod";
 import { extractVideoId, pickThumbnail, type ThumbnailLike } from "./youtube-url";
 import { searchYouTube } from "./search";
+import { safeFileName } from "@shared/filename";
 import {
   SpotifyError,
   fetchSpotifyTrack,
@@ -129,7 +130,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!query.success) {
         return res.status(400).send(query.error.errors[0].message);
       }
-      const { url, format } = query.data;
+      const { url, format, name } = query.data;
       const videoId = extractVideoId(url);
       if (!videoId) {
         return res.status(400).send("Invalid or missing YouTube URL");
@@ -148,7 +149,6 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       })) as YtDlpInfo;
 
       const title = info.title ?? "audio";
-      const safeTitle = title.replace(/[^\w\s-]/g, "").trim() || "audio";
 
       // Cancelled while we were looking up the video: don't start any work.
       if (clientGone) return;
@@ -160,7 +160,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         { title, artist: info.uploader ?? info.channel },
         info.acodec,
       );
-      res.header("Content-Disposition", `attachment; filename="${safeTitle}.${output.ext}"`);
+      // Saved as the name chosen on the page, or the video's title. res.attachment
+      // writes both a plain filename and a UTF-8 one (filename*), so accents and
+      // non-Latin titles survive.
+      res.attachment(`${safeFileName(name || title)}.${output.ext}`);
       res.header("Content-Type", output.contentType);
 
       // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.

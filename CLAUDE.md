@@ -31,7 +31,8 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename
-- `shared/` — schema and API contracts shared by client and server
+- `shared/` — schema and API contracts shared by client and server; `shared/filename.ts` has
+  `safeFileName()`, used by the server to name downloads and by the page to show that name
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
   components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
@@ -43,6 +44,8 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
   and streamed into it (`saveToFolder()`); unsupported browsers keep plain `<a download>` links.
   The setting itself (`components/save-to-setting.tsx`) sits under the search box, always visible;
   unsupported browsers get a note there instead of a missing setting
+- `client/src/components/renameable-title.tsx` — the preview card's title; click it to rename the
+  file (sent as `?name=` on the download link); Enter keeps, Esc cancels
 - `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
   Extractions in the browser: word/partial matching, autocomplete suggestions (combobox; picking one
   filters to that exact title), date ranges, highlighting; the list pages 25 at a time
@@ -89,6 +92,9 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
   response `finish`es) — never on cancel or failure. The page polls `/api/downloads` until it appears.
 - Headers go out with the first chunk of audio, so failures before any audio become a `502`; don't
   write to `res` before the pipeline produces output.
+- Download names: always `safeFileName()` + `res.attachment()` (ASCII `filename` plus UTF-8
+  `filename*`), so accents and non-Latin titles survive. Linux Chromium with no UTF-8 locale
+  (`LANG` unset) can't use non-ASCII file names — run such browsers with `LANG=C.UTF-8`.
 - Search spawns yt-dlp directly (no shell) with the query after `--`; keep it that way so search
   text can't become a command or a yt-dlp option. Results carry their own title/thumbnail, so
   picking one needs no `/api/video/info` call.

@@ -177,12 +177,24 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  it("saves under a new name with ?name=, keeping accents and non-Latin letters", async () => {
+    const res = await download({ url: TEST_VIDEO_URL, name: "Zoo: first video – café 動物園.mp3" });
+    expect(res.status).toBe(200);
+
+    const disposition = String(res.headers["content-disposition"]);
+    // A plain-ASCII name for old clients, and the real one (UTF-8) for everyone else.
+    const utf8Name = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+    expect(utf8Name, disposition).toBeDefined();
+    expect(decodeURIComponent(utf8Name!)).toBe("Zoo - first video – café 動物園.mp3");
+    expect((res.body as Buffer).length).toBeGreaterThan(10_000);
+  });
+
   it("downloads YouTube's original audio, unconverted, with ?format=original", async () => {
     const res = await download({ url: TEST_VIDEO_URL, format: "original" });
     expect(res.status).toBe(200);
 
     const disposition = String(res.headers["content-disposition"]);
-    const ext = /\.(opus|m4a|mka)"$/.exec(disposition)?.[1];
+    const ext = /\.(opus|m4a|mka)(?=["; ]|$)/.exec(disposition)?.[1];
     expect(ext, `unexpected filename in: ${disposition}`).toBeDefined();
     const contentTypes: Record<string, string> = {
       opus: "audio/ogg",
@@ -209,10 +221,11 @@ describe("YouTube → MP3 end-to-end (API)", () => {
   });
 
   it("logs completed downloads in /api/downloads", async () => {
-    // The two download tests above (MP3 and original) both completed.
-    const rows = await waitForHistory(TEST_VIDEO_URL, 2);
-    expect(rows).toHaveLength(2);
-    expect(rows[0].title.length).toBeGreaterThan(0);
+    // The three download tests above (MP3, renamed and original) all completed.
+    const rows = await waitForHistory(TEST_VIDEO_URL, 3);
+    expect(rows).toHaveLength(3);
+    // The history keeps the video's title, whatever the file was named.
+    expect(rows.every((row) => row.title.length > 0 && !row.title.includes("café"))).toBe(true);
   });
 
   it("does not log a download the browser cancels part-way through", async () => {
