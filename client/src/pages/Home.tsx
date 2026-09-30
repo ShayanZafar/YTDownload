@@ -240,48 +240,55 @@ export default function Home() {
         </div>
 
         {isLoadingHistory ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
             {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="h-24 bg-secondary/50 rounded-2xl animate-pulse border border-border/50"
-              />
-            ))}
-          </div>
-        ) : recentDownloads && recentDownloads.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {recentDownloads.map((item) => (
-              <div
-                key={item.id}
-                className="group p-4 rounded-2xl border border-border bg-card hover:shadow-lg hover:shadow-black/5 transition-all duration-300 flex flex-col justify-between h-full hover:border-primary/20"
-              >
-                <div className="space-y-3">
-                  <div className="w-10 h-10 rounded-xl bg-primary/5 flex items-center justify-center text-primary group-hover:scale-110 transition-transform duration-300">
-                    <FileAudio className="w-5 h-5" />
-                  </div>
-                  <h4 className="font-medium text-foreground text-sm line-clamp-2 leading-tight">
-                    {item.title}
-                  </h4>
-                </div>
-
-                <div className="pt-4 mt-4 border-t border-border/50 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>
-                    {item.downloadedAt
-                      ? formatDistanceToNow(new Date(item.downloadedAt), { addSuffix: true })
-                      : "Recently"}
-                  </span>
-                  <a
-                    href={buildDownloadUrl(item.url, format)}
-                    download
-                    title={isOriginal ? "Redownload the original audio" : "Redownload as MP3"}
-                    className="text-primary font-medium hover:underline flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    Redownload <Download className="w-3 h-3" />
-                  </a>
+              <div key={i} className="flex items-center gap-4 px-4 py-3">
+                <div className="w-9 h-9 shrink-0 rounded-lg bg-secondary animate-pulse" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-3.5 w-2/3 rounded bg-secondary animate-pulse" />
+                  <div className="h-3 w-1/4 rounded bg-secondary/70 animate-pulse" />
                 </div>
               </div>
             ))}
           </div>
+        ) : recentDownloads && recentDownloads.length > 0 ? (
+          <ul className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
+            {recentDownloads.map((item) => (
+              <li
+                key={item.id}
+                className="flex items-center gap-4 px-4 py-3 hover:bg-secondary/40 transition-colors"
+              >
+                <div className="w-9 h-9 shrink-0 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+                  <FileAudio className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground truncate" title={item.title}>
+                    {item.title}
+                  </p>
+                  <p
+                    className="text-xs text-muted-foreground"
+                    title={
+                      item.downloadedAt ? new Date(item.downloadedAt).toLocaleString() : undefined
+                    }
+                  >
+                    {item.downloadedAt
+                      ? formatDistanceToNow(new Date(item.downloadedAt), { addSuffix: true })
+                      : "Recently"}
+                  </p>
+                </div>
+                <a
+                  href={buildDownloadUrl(item.url, format)}
+                  download
+                  aria-label={`Redownload ${item.title}`}
+                  title={isOriginal ? "Redownload the original audio" : "Redownload as MP3"}
+                  className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Redownload</span>
+                </a>
+              </li>
+            ))}
+          </ul>
         ) : (
           <div className="text-center py-16 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20 flex flex-col items-center">
             <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center mb-4">
