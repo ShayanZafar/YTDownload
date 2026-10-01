@@ -1,7 +1,7 @@
 # YouTube → audio extractor
 
-Small full-stack app: paste a YouTube URL (or search for a song, or paste a Spotify song link),
-preview it, download the audio track. Developed and run locally on Windows (it also works on
+Small full-stack app: paste a YouTube URL (or search for a song, paste a Spotify song link, or pick
+songs from a Spotify playlist), preview it, download the audio track. Developed and run locally on Windows (it also works on
 macOS/Linux). `README.md` is the user guide, `TECHNICAL.md` has architecture, setup and
 deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 
@@ -21,8 +21,9 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `server/index.ts` — entry point; Vite middleware in dev, static `dist/public` in prod
 - `server/env.ts` — loads `.env`; imported first by `index.ts`
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
-- `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/video/download`,
-  `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`, `GET /api/downloads`
+- `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/playlist`,
+  `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
+  `GET /api/downloads`
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
   replacing a file (`Song (1).mp3`); streams JSON-line progress (`saveEventSchema`)
@@ -35,7 +36,9 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
   uploads up; partial matches and live/cover/remix down unless searched for); pure parts unit-tested
 - `server/spotify.ts` — Spotify song links (`/api/search?q=<link>`): title/artists/length from the
   public embed page `open.spotify.com/embed/track/<id>` (`__NEXT_DATA__`, no account or API key),
-  then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first)
+  then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first).
+  Playlists and albums (`/api/spotify/playlist?link=`): the songs from `embed/playlist|album/<id>`
+  (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there → `maybeMore`)
 - `server/audio.ts` — yt-dlp and ffmpeg arguments (unit-tested), `fetchAudioInfo()` (metadata pass)
   and `startAudioPipeline()` (yt-dlp → ffmpeg, used by both download and save), yt-dlp error lines
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
@@ -46,9 +49,14 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
   components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
-  Original audio toggle (`use-download-format.ts`) and the Paste a link / Search by song switch
-- `client/src/lib/format.ts` — `formatDuration()`, `isSpotifyLink()` and `asLink()` (a YouTube link
-  is opened; a Spotify link or anything else is searched)
+  Original audio toggle (`use-download-format.ts`) and the Link / Search / Spotify playlist switch;
+  `use-stored-value.ts` remembers free text (the open playlist's link)
+- `client/src/lib/format.ts` — `formatDuration()`, `isSpotifyLink()`, `isSpotifyPlaylistLink()` and
+  `asLink()` (a YouTube link is opened, a playlist/album link opens the panel, anything else is
+  searched)
+- `client/src/components/spotify-playlist.tsx` — the playlist panel: lists the songs (filter,
+  Downloaded marks from history entries' `spotifyId`); picking one searches its song link. The
+  download link/save request carry `spotifyId` so the history knows which song it was
 - `client/src/lib/save-to-folder.ts` + `hooks/use-save-settings.ts` — the page's side of "Save to":
   settings/folder API calls and `saveOnServer()` (reads the progress lines with `getReader()`).
   `components/folder-picker.tsx` is the folder browser (native `<dialog>`, portalled to `<body>`);
@@ -112,9 +120,11 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - Search spawns yt-dlp directly (no shell) with the query after `--`; keep it that way so search
   text can't become a command or a yt-dlp option. Results carry their own title/thumbnail, so
   picking one needs no `/api/video/info` call.
-- Spotify: only the validated 22-character track id goes into the one embed URL we fetch (no
-  user-controlled URLs are ever fetched). If Spotify links break, check the embed page's
-  `__NEXT_DATA__` shape first (`parseEmbedPage()`); the cloud workspace can't reach Spotify.
+- Spotify: only a validated kind (track/playlist/album) and 22-character id go into the embed URL we
+  fetch (no user-controlled URLs are ever fetched). If Spotify links break, check the embed page's
+  `__NEXT_DATA__` shape first (`parseEmbedPage()`, `parsePlaylistPage()`); the cloud workspace can't
+  reach Spotify. No sign-in on purpose: since Feb 2026 Spotify's Web API Development Mode needs the
+  app owner to have Premium, and the app must stay free — so only public playlists, first 100 songs.
 - "Save to" folder: download links stay real `<a href download>` elements — `startDownload()` only
   calls `preventDefault()` (and `POST /api/video/save` instead) when a folder is set — so the default
   path and its tests are unchanged. Anything that reads or writes the user's disk must sit behind

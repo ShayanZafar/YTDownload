@@ -55,7 +55,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
       const [issue] = input.error.errors;
       return res.status(400).json({ message: issue.message, field: issue.path.join(".") });
     }
-    const { url, format, name } = input.data;
+    const { url, format, name, spotifyId } = input.data;
     const videoId = extractVideoId(url);
     if (!videoId) {
       return res.status(400).json({ message: "Invalid or missing YouTube URL", field: "url" });
@@ -127,7 +127,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
     const saved = await claimName(part.path, folder, fileName);
     part = undefined;
     await storage
-      .createDownload({ url, title: info.title })
+      .createDownload({ url, title: info.title, spotifyId })
       .catch((err) => console.error("Failed to save download history", err));
     send(res, { type: "done", fileName: path.basename(saved), folder, path: saved, bytes });
     res.end();

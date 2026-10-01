@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+/** A Spotify song, playlist or album id: 22 letters and digits. */
+export const spotifyIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9]{22}$/, "That isn't a Spotify song id");
+
 /** One entry in the download history (stored in data/history.json by the server). */
 export const downloadSchema = z.object({
   id: z.number().int(),
@@ -7,6 +12,11 @@ export const downloadSchema = z.object({
   title: z.string(),
   /** ISO 8601 timestamp, e.g. "2026-09-29T22:58:44.009Z". */
   downloadedAt: z.string(),
+  /**
+   * The Spotify song this download is (when it was found from a Spotify link
+   * or playlist), so the playlist panel can show which songs you already have.
+   */
+  spotifyId: z.string().optional(),
 });
 
 export type Download = z.infer<typeof downloadSchema>;
@@ -45,7 +55,38 @@ export const spotifyTrackSchema = z.object({
 });
 
 export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
-export type InsertDownload = Pick<Download, "url" | "title">;
+export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId">;
+
+/** One song in a Spotify playlist or album, as the playlist panel lists it. */
+export const spotifyPlaylistTrackSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  title: z.string(),
+  /** As Spotify shows them: "Daft Punk, Pharrell Williams". */
+  artists: z.string(),
+  /** Length in seconds. */
+  duration: z.number().nullable(),
+  explicit: z.boolean(),
+});
+
+export type SpotifyPlaylistTrack = z.infer<typeof spotifyPlaylistTrackSchema>;
+
+/** A public Spotify playlist or album, read from Spotify's embed page (no account needed). */
+export const spotifyPlaylistSchema = z.object({
+  kind: z.enum(["playlist", "album"]),
+  id: z.string(),
+  url: z.string(),
+  name: z.string(),
+  /** Who made it: the playlist's owner, or the album's artists. */
+  by: z.string().nullable(),
+  /** Cover art. */
+  image: z.string().nullable(),
+  tracks: z.array(spotifyPlaylistTrackSchema),
+  /** Spotify shares only the first 100 songs of a playlist this way: true if there may be more. */
+  maybeMore: z.boolean(),
+});
+
+export type SpotifyPlaylist = z.infer<typeof spotifyPlaylistSchema>;
 
 /** The "Save to" setting as the page sees it. */
 export const saveSettingsSchema = z.object({

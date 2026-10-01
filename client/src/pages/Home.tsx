@@ -6,15 +6,23 @@ import { Highlight, HistorySearch } from "@/components/history-search";
 import { SaveToSetting } from "@/components/save-to-setting";
 import { FolderPicker } from "@/components/folder-picker";
 import { RenameableTitle } from "@/components/renameable-title";
-import { useVideoInfo, useRecentDownloads, useSongSearch } from "@/hooks/use-youtube";
+import { SpotifyPlaylistPanel } from "@/components/spotify-playlist";
+import {
+  useVideoInfo,
+  useRecentDownloads,
+  useSongSearch,
+  useSpotifyPlaylist,
+} from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
+import { useStoredValue } from "@/hooks/use-stored-value";
 import { useSaveSettings } from "@/hooks/use-save-settings";
 import {
   asLink,
   formatBytes,
   formatDuration,
   isSpotifyLink,
+  isSpotifyPlaylistLink,
   timeAgo,
   validDate,
 } from "@/lib/format";
@@ -33,7 +41,12 @@ import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { api, buildDownloadUrl, type DownloadFormat } from "@shared/routes";
-import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
+import {
+  SAME_LENGTH_SECONDS,
+  type SearchResult,
+  type SpotifyPlaylistTrack,
+  type SpotifyTrack,
+} from "@shared/schema";
 import {
   Search,
   ArrowRight,
@@ -44,15 +57,48 @@ import {
   FileAudio,
   History,
   Link2,
+  ListMusic,
   BadgeCheck,
   Check,
   Timer,
   X,
 } from "lucide-react";
 
-// Paste a link, or search by song title. The last one used is remembered.
-const inputModes = ["link", "search"] as const;
+// Paste a link, search by song title, or open a Spotify playlist to pick songs
+// from. The last one used is remembered.
+const inputModes = ["link", "search", "playlist"] as const;
 type InputMode = (typeof inputModes)[number];
+
+const modeOptions = [
+  { mode: "link", label: "Paste a link", short: "Link", Icon: Link2 },
+  { mode: "search", label: "Search by song", short: "Search", Icon: Search },
+  { mode: "playlist", label: "Spotify playlist", short: "Playlist", Icon: ListMusic },
+] as const;
+
+// The main box, for each mode.
+const inputFor = {
+  link: {
+    type: "url",
+    label: "YouTube link",
+    placeholder: "https://www.youtube.com/watch?v=...",
+    enterKeyHint: "go",
+    Icon: Link2,
+  },
+  search: {
+    type: "search",
+    label: "Song search",
+    placeholder: "Artist and song, or a Spotify song link",
+    enterKeyHint: "search",
+    Icon: Search,
+  },
+  playlist: {
+    type: "url",
+    label: "Spotify playlist link",
+    placeholder: "Paste a Spotify playlist or album link",
+    enterKeyHint: "go",
+    Icon: ListMusic,
+  },
+} as const;
 
 // What the preview card shows: a video opened from a link or picked from the
 // search results.
@@ -62,6 +108,8 @@ type Selected = {
   thumbnail: string;
   channel?: string;
   duration?: number | null;
+  /** The Spotify song it was found for, kept with the download in the history. */
+  spotifyId?: string;
 };
 
 // A download started from this page that hasn't shown up in the history yet.
@@ -77,8 +125,14 @@ const HISTORY_PAGE = 25;
 
 // A download being saved into the "Save to" folder, keyed by its download URL.
 type ActiveSave = { bytes: number; folder: string; cancel: () => void };
-// What to download: a video, as MP3 or original audio, under a name (or its title).
-type DownloadRequest = { url: string; format: DownloadFormat; name?: string };
+// What to download: a video, as MP3 or original audio, under a name (or its
+// title), maybe for a Spotify song.
+type DownloadRequest = {
+  url: string;
+  format: DownloadFormat;
+  name?: string;
+  spotifyId?: string;
+};
 
 export default function Home() {
   const [text, setText] = useState("");
@@ -97,6 +151,11 @@ export default function Home() {
   const [choosingFolder, setChoosingFolder] = useState(false);
   const [saves, setSaves] = useState<Record<string, ActiveSave>>({});
   const isSaving = Object.keys(saves).length > 0;
+  // The Spotify playlist (or album) open in the panel, remembered for next time.
+  const [playlistLink, setPlaylistLink] = useStoredValue("spotify-playlist");
+  const playlist = useSpotifyPlaylist(playlistLink);
+  // The playlist song being looked for on YouTube.
+  const [pendingTrackId, setPendingTrackId] = useState<string>();
 
   const {
     mutate: fetchInfo,
@@ -118,6 +177,7 @@ export default function Home() {
   const results = searchData?.results;
   const spotify = searchData?.spotify;
   const isBusy = isFetchingInfo || isSearching;
+  const input = inputFor[mode];
 
   // Searching and filtering Recent Extractions (all in the browser).
   const [historyQuery, setHistoryQuery] = useState("");
@@ -145,6 +205,11 @@ export default function Home() {
     setHistoryLimit(HISTORY_PAGE);
   };
   const error = infoError ?? searchError;
+  // Songs in the history by their Spotify id, so the playlist can mark them.
+  const downloadedSpotifyIds = useMemo(
+    () => new Set(allHistory.flatMap((d) => (d.spotifyId ? [d.spotifyId] : []))),
+    [allHistory],
+  );
 
   // Stop waiting for a download once it's in the history (or has timed out).
   useEffect(() => {
@@ -208,12 +273,13 @@ export default function Home() {
     });
   };
 
-  const runSearch = (query: string) => {
+  const runSearch = (query: string, playlistTrackId?: string) => {
+    setPendingTrackId(playlistTrackId);
     search(query, {
       // A Spotify link asks for one particular song: show the best match
       // straight away (the other matches stay listed below).
       onSuccess: (data) => {
-        if (data.spotify && data.results[0]) pick(data.results[0]);
+        if (data.spotify && data.results[0]) pick(data.results[0], data.spotify);
       },
       onError: (err) => {
         toast({ title: "Search failed", description: err.message, variant: "destructive" });
@@ -221,14 +287,29 @@ export default function Home() {
     });
   };
 
-  // Whatever the mode, a YouTube link is opened and anything else is searched
-  // for — switching the toggle to match, so pasting a link into the search box
-  // works. A Spotify link is a search for that song.
+  // Opens a Spotify playlist or album in the panel (or reloads it, if it's open).
+  const openPlaylist = (link: string) => {
+    if (link === playlistLink) void playlist.refetch();
+    else setPlaylistLink(link);
+  };
+
+  // A song picked in the playlist panel: find it on YouTube, like its Spotify link.
+  const findPlaylistSong = (track: SpotifyPlaylistTrack) => runSearch(track.url, track.id);
+
+  // Whatever the mode, a YouTube link is opened, a Spotify playlist or album
+  // link opens the playlist panel, and anything else is searched for —
+  // switching the toggle to match, so pasting a link into the search box
+  // works. A Spotify song link is a search for that song.
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const value = text.trim();
     if (!value) return;
 
+    if (isSpotifyPlaylistLink(value)) {
+      if (mode !== "playlist") setMode("playlist");
+      openPlaylist(value);
+      return;
+    }
     const link = isSpotifyLink(value) ? undefined : asLink(value);
     if (link) {
       if (mode !== "link") setMode("link");
@@ -245,7 +326,8 @@ export default function Home() {
     setFileName(null);
   };
 
-  const pick = (result: SearchResult) => {
+  // `song`: the Spotify song these results were found for, if any.
+  const pick = (result: SearchResult, song?: SpotifyTrack) => {
     resetInfo();
     showVideo({
       url: result.url,
@@ -253,6 +335,7 @@ export default function Home() {
       thumbnail: result.thumbnail,
       channel: result.channel,
       duration: result.duration,
+      spotifyId: song?.id,
     });
     setScrollRequest((n) => n + 1);
   };
@@ -333,7 +416,12 @@ export default function Home() {
 
   const handleDownload = (event: React.MouseEvent) => {
     if (!selected) return;
-    const request = { url: selected.url, format, name: fileName ?? undefined };
+    const request = {
+      url: selected.url,
+      format,
+      name: fileName ?? undefined,
+      spotifyId: selected.spotifyId,
+    };
     if (!startDownload(event, selectedHref, request)) return;
 
     toast({
@@ -345,7 +433,10 @@ export default function Home() {
   };
 
   const selectedHref = selected
-    ? buildDownloadUrl(selected.url, format, fileName ?? undefined)
+    ? buildDownloadUrl(selected.url, format, {
+        name: fileName ?? undefined,
+        spotifyId: selected.spotifyId,
+      })
     : "";
   const selectedSave = saves[selectedHref];
 
@@ -370,32 +461,29 @@ export default function Home() {
           music, videos, podcasts, and lectures.
         </p>
 
-        {/* Link / Search switch */}
+        {/* Link / Search / Playlist switch (short labels on a phone) */}
         <div
           role="group"
           aria-label="Find audio by"
           className="mt-8 inline-flex rounded-full border border-border bg-secondary/60 p-1"
         >
-          {(
-            [
-              ["link", "Paste a link", Link2],
-              ["search", "Search by song", Search],
-            ] as const
-          ).map(([value, label, Icon]) => (
+          {modeOptions.map(({ mode: value, label, short, Icon }) => (
             <button
               key={value}
               type="button"
               aria-pressed={mode === value}
+              aria-label={label}
               onClick={() => switchMode(value)}
               className={cn(
-                "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                "inline-flex items-center gap-1.5 sm:gap-2 rounded-full px-3 sm:px-4 py-2 text-sm font-medium transition-colors",
                 mode === value
                   ? "bg-card text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
               <Icon className="w-4 h-4" />
-              {label}
+              <span className="sm:hidden">{short}</span>
+              <span className="hidden sm:inline">{label}</span>
             </button>
           ))}
         </div>
@@ -404,21 +492,13 @@ export default function Home() {
         <form onSubmit={handleSubmit} noValidate className="w-full relative mt-4 group">
           <div className="absolute inset-0 bg-primary/5 blur-2xl rounded-3xl transition-opacity duration-500 opacity-0 group-hover:opacity-100" />
           <div className="relative flex items-center w-full bg-card rounded-2xl shadow-lg shadow-black/5 border border-border focus-within:ring-4 focus-within:ring-primary/10 transition-all duration-300 p-2">
-            {mode === "link" ? (
-              <Link2 className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-muted-foreground ml-3 sm:ml-4 mr-1 sm:mr-2" />
-            ) : (
-              <Search className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-muted-foreground ml-3 sm:ml-4 mr-1 sm:mr-2" />
-            )}
+            <input.Icon className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-muted-foreground ml-3 sm:ml-4 mr-1 sm:mr-2" />
             <input
               ref={inputRef}
-              type={mode === "link" ? "url" : "search"}
-              aria-label={mode === "link" ? "YouTube link" : "Song search"}
-              placeholder={
-                mode === "link"
-                  ? "https://www.youtube.com/watch?v=..."
-                  : "Artist and song, or a Spotify song link"
-              }
-              enterKeyHint={mode === "link" ? "go" : "search"}
+              type={input.type}
+              aria-label={input.label}
+              placeholder={input.placeholder}
+              enterKeyHint={input.enterKeyHint}
               className="flex-1 w-0 min-w-0 bg-transparent border-none text-foreground placeholder:text-muted-foreground h-14 px-2 text-base sm:text-lg focus:outline-none"
               value={text}
               onChange={(e) => {
@@ -430,7 +510,9 @@ export default function Home() {
             <button
               type="submit"
               disabled={isBusy || !text.trim()}
-              aria-label={mode === "link" ? "Extract" : "Search"}
+              aria-label={
+                mode === "link" ? "Extract" : mode === "search" ? "Search" : "Open playlist"
+              }
               className="h-14 shrink-0 px-4 sm:px-6 md:px-8 rounded-xl bg-primary text-primary-foreground font-semibold flex items-center gap-2 hover-elevate disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:-translate-y-0 transition-all"
             >
               {isBusy ? (
@@ -443,6 +525,11 @@ export default function Home() {
               ) : mode === "link" ? (
                 <>
                   <span className="hidden sm:inline">Extract</span>
+                  <ArrowRight className="w-5 h-5" />
+                </>
+              ) : mode === "playlist" ? (
+                <>
+                  <span className="hidden sm:inline">Open</span>
                   <ArrowRight className="w-5 h-5" />
                 </>
               ) : (
@@ -467,6 +554,22 @@ export default function Home() {
           <FolderPicker onChoose={chooseFolder} onClose={() => setChoosingFolder(false)} />
         )}
       </section>
+
+      {/* Spotify playlist panel: open while a playlist or album is loaded */}
+      {playlistLink !== null && (
+        <SpotifyPlaylistPanel
+          playlist={playlist.data}
+          isLoading={playlist.isLoading}
+          isRefreshing={playlist.isFetching && !playlist.isLoading}
+          error={playlist.error}
+          activeTrackId={isSearching ? pendingTrackId : (spotify?.id ?? selected?.spotifyId)}
+          isSearching={isSearching}
+          downloadedIds={downloadedSpotifyIds}
+          onPick={findPlaylistSong}
+          onRefresh={() => void playlist.refetch()}
+          onClose={() => setPlaylistLink(null)}
+        />
+      )}
 
       {/* Result Section */}
       <AnimatePresence mode="wait">
@@ -694,7 +797,7 @@ export default function Home() {
                   <li key={result.id}>
                     <button
                       type="button"
-                      onClick={() => pick(result)}
+                      onClick={() => pick(result, spotify)}
                       aria-pressed={isPicked}
                       aria-label={[
                         result.title,
@@ -869,67 +972,73 @@ export default function Home() {
         ) : shownHistory.length > 0 ? (
           <>
             <ul className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
-              {shownHistory.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex items-center gap-4 px-4 py-3 hover:bg-secondary/40 transition-colors"
-                >
-                  <div className="w-9 h-9 shrink-0 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
-                    <FileAudio className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-foreground truncate" title={item.title}>
-                      <Highlight text={item.title} query={historyExact ? "" : historyQuery} />
-                    </p>
-                    <p
-                      className="text-xs text-muted-foreground"
-                      title={validDate(item.downloadedAt)?.toLocaleString()}
-                    >
-                      {timeAgo(item.downloadedAt)}
-                    </p>
-                  </div>
-                  {saves[buildDownloadUrl(item.url, format)] ? (
-                    <button
-                      type="button"
-                      onClick={saves[buildDownloadUrl(item.url, format)].cancel}
-                      aria-label={`Cancel saving ${item.title}`}
-                      title="Cancel"
-                      className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                    >
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      {saves[buildDownloadUrl(item.url, format)].bytes > 0 && (
-                        <span className="tabular-nums">
-                          {formatBytes(saves[buildDownloadUrl(item.url, format)].bytes)}
-                        </span>
-                      )}
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  ) : (
-                    <a
-                      href={buildDownloadUrl(item.url, format)}
-                      download
-                      onClick={(event) =>
-                        startDownload(event, buildDownloadUrl(item.url, format), {
-                          url: item.url,
-                          format,
-                        })
-                      }
-                      aria-label={`Redownload ${item.title}`}
-                      title={
-                        saveTo.folder
-                          ? `Save again to “${folderName(saveTo.folder)}”`
-                          : isOriginal
-                            ? "Redownload the original audio"
-                            : "Redownload as MP3"
-                      }
-                      className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span className="hidden sm:inline">Redownload</span>
-                    </a>
-                  )}
-                </li>
-              ))}
+              {shownHistory.map((item) => {
+                const href = buildDownloadUrl(item.url, format, { spotifyId: item.spotifyId });
+                const save = saves[href];
+                return (
+                  <li
+                    key={item.id}
+                    className="flex items-center gap-4 px-4 py-3 hover:bg-secondary/40 transition-colors"
+                  >
+                    <div className="w-9 h-9 shrink-0 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
+                      <FileAudio className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p
+                        className="text-sm font-medium text-foreground truncate"
+                        title={item.title}
+                      >
+                        <Highlight text={item.title} query={historyExact ? "" : historyQuery} />
+                      </p>
+                      <p
+                        className="text-xs text-muted-foreground"
+                        title={validDate(item.downloadedAt)?.toLocaleString()}
+                      >
+                        {timeAgo(item.downloadedAt)}
+                      </p>
+                    </div>
+                    {save ? (
+                      <button
+                        type="button"
+                        onClick={save.cancel}
+                        aria-label={`Cancel saving ${item.title}`}
+                        title="Cancel"
+                        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                      >
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        {save.bytes > 0 && (
+                          <span className="tabular-nums">{formatBytes(save.bytes)}</span>
+                        )}
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <a
+                        href={href}
+                        download
+                        onClick={(event) =>
+                          startDownload(event, href, {
+                            url: item.url,
+                            format,
+                            spotifyId: item.spotifyId,
+                          })
+                        }
+                        aria-label={`Redownload ${item.title}`}
+                        title={
+                          saveTo.folder
+                            ? `Save again to “${folderName(saveTo.folder)}”`
+                            : isOriginal
+                              ? "Redownload the original audio"
+                              : "Redownload as MP3"
+                        }
+                        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Redownload</span>
+                      </a>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
             {matchingHistory.length > shownHistory.length && (
               <button

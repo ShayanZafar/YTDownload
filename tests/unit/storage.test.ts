@@ -36,6 +36,18 @@ describe("FileStorage (download history)", () => {
     expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual(list);
   });
 
+  it("remembers which Spotify song a download was for, when it was one", async () => {
+    await store.createDownload({ url: "https://youtu.be/a", title: "Plain" });
+    await store.createDownload({
+      url: "https://youtu.be/b",
+      title: "From Spotify",
+      spotifyId: "4u7EnebtmKWzUH433cf5Qv",
+    });
+    const [spotify, plain] = await store.getDownloads();
+    expect(spotify.spotifyId).toBe("4u7EnebtmKWzUH433cf5Qv");
+    expect(plain).not.toHaveProperty("spotifyId");
+  });
+
   it(`keeps only the newest ${MAX_HISTORY} entries`, async () => {
     // Start from a full history (newest first), then add five more.
     const full = Array.from({ length: MAX_HISTORY }, (_, i) => {

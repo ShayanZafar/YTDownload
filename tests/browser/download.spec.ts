@@ -190,6 +190,95 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     ).toBeVisible();
   });
 
+  test("a Spotify playlist opens in a panel; picking a song finds it on YouTube", async ({
+    page,
+  }) => {
+    // A made-up playlist (Spotify's own change every day) holding a real song,
+    // which is then looked up on Spotify and YouTube for real.
+    const songs: [string, string, string, number][] = [
+      ["4u7EnebtmKWzUH433cf5Qv", "Bohemian Rhapsody - Remastered 2011", "Queen", 354],
+      ["2Foc5Q5nqNiosCNqttzHof", "Get Lucky", "Daft Punk, Pharrell Williams, Nile Rodgers", 369],
+      ...Array.from({ length: 10 }, (_, i): [string, string, string, number] => [
+        `${String(i).padStart(2, "0")}Foc5Q5nqNiosCNqttzHo`,
+        `Road Song ${i + 1}`,
+        "The Band",
+        200,
+      ]),
+    ];
+    const playlist = {
+      kind: "playlist",
+      id: "37i9dQZF1DXcBWIGoYBM5M",
+      url: "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      name: "Road Trip",
+      by: "Moomoo",
+      image: null,
+      maybeMore: false,
+      tracks: songs.map(([id, title, artists, duration]) => ({
+        id,
+        url: `https://open.spotify.com/track/${id}`,
+        title,
+        artists,
+        duration,
+        explicit: false,
+      })),
+    };
+    await page.route("**/api/spotify/playlist?*", (route) => route.fulfill({ json: playlist }));
+    // "Get Lucky" was downloaded before.
+    await page.route("**/api/downloads", (route) =>
+      route.fulfill({
+        json: [
+          {
+            id: 1,
+            url: "https://www.youtube.com/watch?v=5NV6Rdv1a3I",
+            title: "Daft Punk - Get Lucky",
+            downloadedAt: new Date().toISOString(),
+            spotifyId: "2Foc5Q5nqNiosCNqttzHof",
+          },
+        ],
+      }),
+    );
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Spotify playlist", exact: true }).click();
+    await page.getByRole("textbox", { name: /spotify playlist link/i }).fill(playlist.url);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+
+    const panel = page.getByRole("region", { name: /spotify playlist/i });
+    await expect(panel.getByRole("heading", { name: "Road Trip" })).toBeVisible();
+    await expect(panel.getByRole("listitem")).toHaveCount(12);
+    await expect(panel.getByText("by Moomoo · 12 songs · 1 downloaded")).toBeVisible();
+    await expect(panel.getByRole("button", { name: /^get lucky.*downloaded$/i })).toBeVisible();
+
+    // The filter narrows the list.
+    await panel.getByRole("searchbox", { name: /filter/i }).fill("queen");
+    await expect(panel.getByRole("listitem")).toHaveCount(1);
+
+    // Picking a song finds it on YouTube: the best match is ready to download,
+    // and the download remembers which Spotify song it is.
+    const song = panel.getByRole("button", { name: /^bohemian rhapsody/i });
+    await song.click();
+    const downloadLink = page.locator('a[href^="/api/video/download"]', {
+      hasText: /download audio/i,
+    });
+    await expect(downloadLink).toBeVisible({ timeout: 60_000 });
+    await expect(downloadLink).toHaveAttribute("href", /spotifyId=4u7EnebtmKWzUH433cf5Qv/);
+    await expect(song).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("region", { name: /search results/i }).getByText(/from spotify/i),
+    ).toBeVisible();
+
+    // The playlist stays open across visits, until it's closed.
+    await page.reload();
+    await expect(panel.getByRole("heading", { name: "Road Trip" })).toBeVisible();
+    await panel.getByRole("button", { name: /close the spotify playlist/i }).click();
+    await expect(panel).toHaveCount(0);
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "Spotify playlist", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("region", { name: /spotify playlist/i })).toHaveCount(0);
+  });
+
   test("Save to: pick a folder in the app's folder browser; downloads are saved into it", async ({
     page,
   }) => {

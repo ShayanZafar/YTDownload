@@ -10,8 +10,10 @@ import { safeFileName } from "@shared/filename";
 import type { SaveSettings } from "@shared/schema";
 import {
   SpotifyError,
+  fetchSpotifyPlaylist,
   fetchSpotifyTrack,
   parseSpotifyLink,
+  playlistLinkError,
   spotifyLinkError,
   spotifySearchQuery,
 } from "./spotify";
@@ -193,6 +195,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // The songs in a public Spotify playlist or album, for the playlist panel.
+  // Picking one searches for its song link like any other (above).
+  app.get(api.spotify.playlist.path, async (req, res) => {
+    const query = api.spotify.playlist.query.safeParse(req.query);
+    if (!query.success) return res.status(400).json(validationError(query.error));
+    const link = parseSpotifyLink(query.data.link);
+    if (link?.kind !== "playlist" && link?.kind !== "album") {
+      return res.status(400).json({ message: playlistLinkError(link), field: "link" });
+    }
+    try {
+      res.json(await fetchSpotifyPlaylist(link.kind, link.id));
+    } catch (err) {
+      if (err instanceof SpotifyError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      console.error("Reading the Spotify playlist failed:", err);
+      res.status(500).json({ message: err instanceof Error ? err.message : "Couldn't read it" });
+    }
+  });
+
   // Streams a video's audio as a download: yt-dlp → ffmpeg → response.
   // `?format=mp3` (default) converts to MP3; `?format=original` keeps YouTube's
   // own stream untouched. See server/audio.ts for the details.
@@ -213,7 +235,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!query.success) {
         return res.status(400).send(query.error.errors[0].message);
       }
-      const { url, format, name } = query.data;
+      const { url, format, name, spotifyId } = query.data;
       const videoId = extractVideoId(url);
       if (!videoId) {
         return res.status(400).send("Invalid or missing YouTube URL");
@@ -264,7 +286,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.once("finish", () => {
         if (!ok || clientGone) return;
         storage
-          .createDownload({ url, title: info.title })
+          .createDownload({ url, title: info.title, spotifyId })
           .catch((err) => console.error("Failed to save download history", err));
       });
       res.end();

@@ -1,13 +1,18 @@
 /**
- * Spotify song links. Spotify doesn't let anyone download its audio, but its
+ * Spotify links. Spotify doesn't let anyone download its audio, but its
  * public embed player (the one other websites show — no account or API key
- * needed) tells us the song's name, artists and exact length. That's enough to
+ * needed) tells us a song's name, artists and exact length. That's enough to
  * find the same recording on YouTube: search for "artist title", then prefer
  * uploads with the same length (see `targetDuration` in search.ts).
+ *
+ * The embed player for a playlist or album lists its songs the same way (the
+ * first 100 of a playlist), which is what the playlist panel shows.
  */
-import type { SpotifyTrack } from "@shared/schema";
+import type { SpotifyPlaylist, SpotifyPlaylistTrack, SpotifyTrack } from "@shared/schema";
 
-const TRACK_ID_RE = /^[A-Za-z0-9]{22}$/;
+const SPOTIFY_ID_RE = /^[A-Za-z0-9]{22}$/;
+/** The most songs Spotify's embed page lists for a playlist. */
+export const PLAYLIST_EMBED_LIMIT = 100;
 const FETCH_TIMEOUT_MS = 10_000;
 // Spotify serves the same page to any browser; a browser-like User-Agent just
 // avoids being treated as an unknown bot.
@@ -26,14 +31,18 @@ export class SpotifyError extends Error {
 
 export type SpotifyLink =
   | { kind: "track"; id: string }
-  /** An album, playlist, artist, podcast… — or a link we can't read. */
+  /** Things with a list of songs. */
+  | { kind: "playlist"; id: string }
+  | { kind: "album"; id: string }
+  /** An artist, podcast… — or a link we can't read. */
   | { kind: "other"; type: string };
 
 /**
- * Recognises Spotify links: open.spotify.com/track/…, the same with
- * /intl-xx/ or /embed/ in front, "spotify:track:…" URIs, and spotify.link
- * short links (which we can't open — see `spotifyLinkError`). Anything else,
- * including plain search text that mentions Spotify, gives undefined.
+ * Recognises Spotify links: open.spotify.com/track/… (or /playlist/…,
+ * /album/…), the same with /intl-xx/ or /embed/ in front, "spotify:track:…"
+ * URIs, and spotify.link short links (which we can't open — see
+ * `spotifyLinkError`). Anything else, including plain search text that
+ * mentions Spotify, gives undefined.
  */
 export function parseSpotifyLink(input: string): SpotifyLink | undefined {
   const text = input.trim();
@@ -61,30 +70,65 @@ export function parseSpotifyLink(input: string): SpotifyLink | undefined {
 }
 
 function toLink(type: string, id: string): SpotifyLink {
-  return type === "track" && TRACK_ID_RE.test(id) ? { kind: "track", id } : { kind: "other", type };
+  if (SPOTIFY_ID_RE.test(id)) {
+    if (type === "track") return { kind: "track", id };
+    if (type === "playlist") return { kind: "playlist", id };
+    if (type === "album") return { kind: "album", id };
+  }
+  return { kind: "other", type };
 }
 
-/** What to tell the user when a Spotify link isn't a song we can look up. */
-export function spotifyLinkError(link: Extract<SpotifyLink, { kind: "other" }>): string {
-  if (link.type === "short link") {
-    return "Spotify short links (spotify.link) can't be read. Open it, then copy the song's open.spotify.com link instead.";
-  }
-  const what = ["album", "playlist", "artist", "episode", "show"].includes(link.type)
-    ? `a Spotify ${link.type === "show" ? "podcast" : link.type}`
+const SHORT_LINK_ERROR =
+  "Spotify short links (spotify.link) can't be read. Open it, then copy its open.spotify.com link instead.";
+
+/** "a Spotify artist", "a Spotify podcast"… for a link of this type. */
+const aSpotify = (type: string) =>
+  ["album", "playlist", "artist", "episode", "show"].includes(type)
+    ? `a Spotify ${type === "show" ? "podcast" : type}`
     : "a Spotify page";
-  return `That's ${what} — only song links work. In Spotify, use Share → Copy Song Link on a song.`;
+
+/** What to tell the user when a Spotify link searched for isn't a song we can look up. */
+export function spotifyLinkError(link: Exclude<SpotifyLink, { kind: "track" }>): string {
+  if (link.kind === "playlist" || link.kind === "album") {
+    return `That's a Spotify ${link.kind}, not a song — choose “Spotify playlist” above the search box to pick one of its songs.`;
+  }
+  if (link.type === "short link") return SHORT_LINK_ERROR;
+  return `That's ${aSpotify(link.type)} — only song links work. In Spotify, use Share → Copy Song Link on a song.`;
+}
+
+/** What to tell the user when what they gave the playlist panel isn't a playlist or album link. */
+export function playlistLinkError(link: SpotifyLink | undefined): string {
+  if (link?.kind === "track") {
+    return "That's a Spotify song, not a playlist — paste it in the search box to find it on YouTube.";
+  }
+  if (link?.kind === "other" && link.type === "short link") return SHORT_LINK_ERROR;
+  const what = link?.kind === "other" ? `That's ${aSpotify(link.type)}. ` : "";
+  return `${what}Paste a Spotify playlist or album link — in Spotify, use Share → Copy link to playlist.`;
 }
 
 type EmbedEntity = {
   type?: unknown;
   name?: unknown;
+  subtitle?: unknown;
   artists?: unknown;
   duration?: unknown;
+  trackList?: unknown;
   visualIdentity?: { image?: unknown };
 };
 
-/** Reads the song details out of Spotify's embed page (Next.js `__NEXT_DATA__`). */
-export function parseEmbedPage(html: string, id: string): SpotifyTrack {
+type EmbedTrackItem = {
+  uri?: unknown;
+  title?: unknown;
+  subtitle?: unknown;
+  duration?: unknown;
+  isExplicit?: unknown;
+};
+
+/**
+ * The page's data (Next.js `__NEXT_DATA__`): what's embedded, or undefined if
+ * Spotify says it doesn't exist.
+ */
+function readEmbedEntity(html: string, what: string): EmbedEntity | undefined {
   const match = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
   let data: {
     props?: { pageProps?: { status?: unknown; state?: { data?: { entity?: unknown } } } };
@@ -92,15 +136,20 @@ export function parseEmbedPage(html: string, id: string): SpotifyTrack {
   try {
     data = JSON.parse(match?.[1] ?? "");
   } catch {
-    throw new SpotifyError(502, "Couldn't read the song from Spotify (its page has changed).");
+    throw new SpotifyError(502, `Couldn't read the ${what} from Spotify (its page has changed).`);
   }
-
   const pageProps = data.props?.pageProps;
-  if (pageProps?.status === 404) {
+  if (pageProps?.status === 404) return undefined;
+  return (pageProps?.state?.data?.entity as EmbedEntity | undefined) ?? {};
+}
+
+/** Reads the song details out of Spotify's embed page. */
+export function parseEmbedPage(html: string, id: string): SpotifyTrack {
+  const entity = readEmbedEntity(html, "song");
+  if (!entity) {
     throw new SpotifyError(404, "Spotify doesn't have that song — check the link.");
   }
-  const entity = pageProps?.state?.data?.entity as EmbedEntity | undefined;
-  if (entity?.type !== "track" || typeof entity.name !== "string" || !entity.name.trim()) {
+  if (entity.type !== "track" || typeof entity.name !== "string" || !entity.name.trim()) {
     throw new SpotifyError(502, "Couldn't read the song from Spotify (its page has changed).");
   }
 
@@ -132,12 +181,14 @@ export function parseEmbedPage(html: string, id: string): SpotifyTrack {
   };
 }
 
-/** Looks a song up on Spotify's public embed page. */
-export async function fetchSpotifyTrack(id: string): Promise<SpotifyTrack> {
-  if (!TRACK_ID_RE.test(id)) throw new SpotifyError(400, "That isn't a valid Spotify song link.");
+/**
+ * Fetches one of Spotify's embed pages. `path` is built only from a validated
+ * kind and id, so this can't be made to fetch anything else.
+ */
+async function fetchEmbedPage(path: string, notFound: string): Promise<string> {
   let res: Response;
   try {
-    res = await fetch(`https://open.spotify.com/embed/track/${id}`, {
+    res = await fetch(`https://open.spotify.com/embed/${path}`, {
       headers: { "User-Agent": USER_AGENT, "Accept-Language": "en" },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
@@ -146,10 +197,96 @@ export async function fetchSpotifyTrack(id: string): Promise<SpotifyTrack> {
       err instanceof Error && err.name === "TimeoutError" ? "it took too long" : "no connection";
     throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`);
   }
-  if (res.status === 404)
-    throw new SpotifyError(404, "Spotify doesn't have that song — check the link.");
+  if (res.status === 404) throw new SpotifyError(404, notFound);
   if (!res.ok) throw new SpotifyError(502, `Spotify answered with an error (HTTP ${res.status}).`);
-  return parseEmbedPage(await res.text(), id);
+  return res.text();
+}
+
+/** Looks a song up on Spotify's public embed page. */
+export async function fetchSpotifyTrack(id: string): Promise<SpotifyTrack> {
+  if (!SPOTIFY_ID_RE.test(id)) throw new SpotifyError(400, "That isn't a valid Spotify song link.");
+  const html = await fetchEmbedPage(
+    `track/${id}`,
+    "Spotify doesn't have that song — check the link.",
+  );
+  return parseEmbedPage(html, id);
+}
+
+const notFoundMessage = (kind: "playlist" | "album") =>
+  kind === "playlist"
+    ? "Spotify doesn't share that playlist — it may be private (make it public in Spotify), or the link may be wrong."
+    : "Spotify doesn't have that album — check the link.";
+
+/** The cover image closest to `width` pixels wide (Spotify offers 64, 300 and 640). */
+function coverOfWidth(images: unknown, width: number): string | null {
+  const urls = (Array.isArray(images) ? images : [])
+    .filter((img: { url?: unknown }) => typeof img?.url === "string")
+    .sort(
+      (a: { maxWidth?: number }, b: { maxWidth?: number }) => (a.maxWidth ?? 0) - (b.maxWidth ?? 0),
+    );
+  const best =
+    urls.find((img: { maxWidth?: number }) => (img.maxWidth ?? 0) >= width) ?? urls.at(-1);
+  return (best?.url as string | undefined) ?? null;
+}
+
+/** Reads a playlist's or album's songs out of Spotify's embed page. */
+export function parsePlaylistPage(
+  html: string,
+  kind: "playlist" | "album",
+  id: string,
+): SpotifyPlaylist {
+  const entity = readEmbedEntity(html, kind);
+  if (!entity) throw new SpotifyError(404, notFoundMessage(kind));
+  if (entity.type !== kind || typeof entity.name !== "string" || !entity.name.trim()) {
+    throw new SpotifyError(502, `Couldn't read the ${kind} from Spotify (its page has changed).`);
+  }
+
+  const items = (Array.isArray(entity.trackList) ? entity.trackList : []) as EmbedTrackItem[];
+  // Songs only: playlists can also hold podcast episodes and local files,
+  // which have no song to find on YouTube.
+  const tracks = items.flatMap((item): SpotifyPlaylistTrack[] => {
+    const trackId =
+      typeof item?.uri === "string" ? /^spotify:track:([A-Za-z0-9]{22})$/.exec(item.uri)?.[1] : "";
+    const title = typeof item?.title === "string" ? item.title.trim() : "";
+    if (!trackId || !title) return [];
+    return [
+      {
+        id: trackId,
+        url: `https://open.spotify.com/track/${trackId}`,
+        title,
+        artists: typeof item.subtitle === "string" ? item.subtitle.trim() : "",
+        duration:
+          typeof item.duration === "number" && item.duration > 0
+            ? Math.round(item.duration / 1000)
+            : null,
+        explicit: item.isExplicit === true,
+      },
+    ];
+  });
+
+  const by = typeof entity.subtitle === "string" ? entity.subtitle.trim() : "";
+  return {
+    kind,
+    id,
+    url: `https://open.spotify.com/${kind}/${id}`,
+    name: entity.name.trim(),
+    by: by || null,
+    image: coverOfWidth(entity.visualIdentity?.image, 300),
+    tracks,
+    maybeMore: kind === "playlist" && items.length >= PLAYLIST_EMBED_LIMIT,
+  };
+}
+
+/** The songs in a public playlist or album, from Spotify's public embed page. */
+export async function fetchSpotifyPlaylist(
+  kind: "playlist" | "album",
+  id: string,
+): Promise<SpotifyPlaylist> {
+  if ((kind !== "playlist" && kind !== "album") || !SPOTIFY_ID_RE.test(id)) {
+    throw new SpotifyError(400, "That isn't a valid Spotify playlist link.");
+  }
+  const html = await fetchEmbedPage(`${kind}/${id}`, notFoundMessage(kind));
+  return parsePlaylistPage(html, kind, id);
 }
 
 // Suffixes Spotify adds that name a release, not a different recording.

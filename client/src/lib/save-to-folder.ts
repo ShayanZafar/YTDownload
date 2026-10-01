@@ -98,7 +98,7 @@ export type SaveOptions = {
  * rejects with the reason it failed — or, if cancelled, the fetch's AbortError.
  */
 export async function saveOnServer(
-  request: { url: string; format: DownloadFormat; name?: string },
+  request: { url: string; format: DownloadFormat; name?: string; spotifyId?: string },
   { signal, onProgress, fetchImpl = fetch }: SaveOptions = {},
 ): Promise<SavedFile> {
   const res = await fetchImpl(api.video.save.path, {

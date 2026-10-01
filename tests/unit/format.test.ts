@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { asLink, formatBytes, formatDuration, isSpotifyLink } from "../../client/src/lib/format";
+import {
+  asLink,
+  formatBytes,
+  formatDuration,
+  isSpotifyLink,
+  isSpotifyPlaylistLink,
+} from "../../client/src/lib/format";
 
 describe("formatDuration", () => {
   it("formats like a clock", () => {
@@ -62,5 +68,31 @@ describe("formatBytes", () => {
     expect(formatBytes(512)).toBe("512 B");
     expect(formatBytes(150 * 1024)).toBe("150 KB");
     expect(formatBytes(2_457_600)).toBe("2.3 MB");
+  });
+});
+
+describe("isSpotifyPlaylistLink", () => {
+  it("spots playlist and album links, which open in the playlist panel", () => {
+    for (const link of [
+      "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=1234",
+      "open.spotify.com/intl-fr/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa",
+      "https://open.spotify.com/embed/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      " spotify:playlist:37i9dQZF1DXcBWIGoYBM5M ",
+    ]) {
+      expect(isSpotifyPlaylistLink(link), link).toBe(true);
+    }
+  });
+
+  it("leaves songs, other Spotify pages and everything else to the search", () => {
+    for (const text of [
+      "https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv",
+      "https://open.spotify.com/artist/1dfeR4HaWDbWqFHLkxsg1d",
+      "https://open.spotify.com/playlist/short",
+      "https://open.spotify.com.evil.example/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      "road trip playlist",
+    ]) {
+      expect(isSpotifyPlaylistLink(text), text).toBe(false);
+    }
   });
 });

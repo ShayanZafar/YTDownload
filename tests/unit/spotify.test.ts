@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  PLAYLIST_EMBED_LIMIT,
   SpotifyError,
   cleanTrackTitle,
   parseEmbedPage,
+  parsePlaylistPage,
   parseSpotifyLink,
+  playlistLinkError,
   spotifyLinkError,
   spotifySearchQuery,
 } from "../../server/spotify";
@@ -25,12 +28,26 @@ describe("parseSpotifyLink", () => {
     }
   });
 
-  it("recognises other Spotify pages so it can explain they aren't songs", () => {
+  it("reads playlist and album links, whose songs can be listed", () => {
     expect(parseSpotifyLink("https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa")).toEqual({
-      kind: "other",
-      type: "album",
+      kind: "album",
+      id: "4m2880jivSbbyEGAKfITCa",
     });
     expect(parseSpotifyLink("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M")).toEqual({
+      kind: "playlist",
+      id: "37i9dQZF1DXcBWIGoYBM5M",
+    });
+    expect(
+      parseSpotifyLink("https://open.spotify.com/intl-fr/playlist/37i9dQZF1DXcBWIGoYBM5M?si=abc"),
+    ).toEqual({ kind: "playlist", id: "37i9dQZF1DXcBWIGoYBM5M" });
+  });
+
+  it("recognises other Spotify pages so it can explain they aren't songs", () => {
+    expect(parseSpotifyLink("https://open.spotify.com/artist/1dfeR4HaWDbWqFHLkxsg1d")).toEqual({
+      kind: "other",
+      type: "artist",
+    });
+    expect(parseSpotifyLink("https://open.spotify.com/playlist/tooShort")).toEqual({
       kind: "other",
       type: "playlist",
     });
@@ -59,9 +76,26 @@ describe("parseSpotifyLink", () => {
 
 describe("spotifyLinkError", () => {
   it("says what kind of link it was", () => {
-    expect(spotifyLinkError({ kind: "other", type: "album" })).toMatch(/spotify album/i);
+    expect(spotifyLinkError({ kind: "other", type: "artist" })).toMatch(/spotify artist/i);
     expect(spotifyLinkError({ kind: "other", type: "show" })).toMatch(/podcast/i);
     expect(spotifyLinkError({ kind: "other", type: "short link" })).toMatch(/open\.spotify\.com/);
+  });
+
+  it("points a playlist or album to the playlist panel", () => {
+    expect(spotifyLinkError({ kind: "album", id: "4m2880jivSbbyEGAKfITCa" })).toMatch(
+      /spotify album.*spotify playlist/i,
+    );
+  });
+});
+
+describe("playlistLinkError", () => {
+  it("explains what to paste instead", () => {
+    expect(playlistLinkError({ kind: "track", id: ID })).toMatch(/song, not a playlist/i);
+    expect(playlistLinkError({ kind: "other", type: "artist" })).toMatch(
+      /spotify artist.*playlist or album link/i,
+    );
+    expect(playlistLinkError({ kind: "other", type: "short link" })).toMatch(/open\.spotify\.com/);
+    expect(playlistLinkError(undefined)).toMatch(/copy link to playlist/i);
   });
 });
 
@@ -126,6 +160,148 @@ describe("parseEmbedPage", () => {
       embedPage({ state: { data: { entity: { type: "album", name: "Random Access Memories" } } } }),
     ]) {
       expect(() => parseEmbedPage(html, ID)).toThrow(/spotify/i);
+    }
+  });
+});
+
+// The songs as a playlist's embed page lists them (trimmed down).
+const item = (
+  id: string,
+  title: string,
+  subtitle: string,
+  duration: number,
+  isExplicit = false,
+) => ({
+  uri: `spotify:track:${id}`,
+  uid: `uid-${id}`,
+  title,
+  subtitle,
+  isExplicit,
+  duration,
+  isPlayable: true,
+  entityType: "track",
+});
+
+const playlistEntity = {
+  type: "playlist",
+  name: "Road Trip",
+  id: "37i9dQZF1DXcBWIGoYBM5M",
+  subtitle: "Moomoo",
+  visualIdentity: {
+    image: [
+      { url: "https://image-cdn-fa.spotifycdn.com/image/64", maxHeight: 64, maxWidth: 64 },
+      { url: "https://image-cdn-fa.spotifycdn.com/image/640", maxHeight: 640, maxWidth: 640 },
+      { url: "https://image-cdn-fa.spotifycdn.com/image/300", maxHeight: 300, maxWidth: 300 },
+    ],
+  },
+  trackList: [
+    item(ID, "Bohemian Rhapsody - Remastered 2011", "Queen", 354320),
+    // A podcast episode and a local file: no song to find on YouTube.
+    { uri: "spotify:episode:4rOoJ6Egrf8K2IrywzwOMk", title: "Episode 12", entityType: "episode" },
+    { uri: "spotify:local:::Home+Recording:215", title: "Home Recording" },
+    item(
+      "2Foc5Q5nqNiosCNqttzHof",
+      "Get Lucky",
+      "Daft Punk, Pharrell Williams, Nile Rodgers",
+      369626,
+      true,
+    ),
+  ],
+};
+
+describe("parsePlaylistPage", () => {
+  const PLAYLIST = "37i9dQZF1DXcBWIGoYBM5M";
+
+  it("lists the songs with their artists, length and whether they're explicit", () => {
+    const html = embedPage({ state: { data: { entity: playlistEntity } } });
+    expect(parsePlaylistPage(html, "playlist", PLAYLIST)).toEqual({
+      kind: "playlist",
+      id: PLAYLIST,
+      url: `https://open.spotify.com/playlist/${PLAYLIST}`,
+      name: "Road Trip",
+      by: "Moomoo",
+      image: "https://image-cdn-fa.spotifycdn.com/image/300",
+      tracks: [
+        {
+          id: ID,
+          url: `https://open.spotify.com/track/${ID}`,
+          title: "Bohemian Rhapsody - Remastered 2011",
+          artists: "Queen",
+          duration: 354,
+          explicit: false,
+        },
+        {
+          id: "2Foc5Q5nqNiosCNqttzHof",
+          url: "https://open.spotify.com/track/2Foc5Q5nqNiosCNqttzHof",
+          title: "Get Lucky",
+          artists: "Daft Punk, Pharrell Williams, Nile Rodgers",
+          duration: 370,
+          explicit: true,
+        },
+      ],
+      maybeMore: false,
+    });
+  });
+
+  it("says when a playlist may have more songs than Spotify shares", () => {
+    const full = {
+      ...playlistEntity,
+      trackList: Array.from({ length: PLAYLIST_EMBED_LIMIT }, (_, i) =>
+        item(
+          `${String(i).padStart(2, "0")}Foc5Q5nqNiosCNqttzHo`.slice(0, 22),
+          `Song ${i}`,
+          "Band",
+          200_000,
+        ),
+      ),
+    };
+    const parsed = parsePlaylistPage(
+      embedPage({ state: { data: { entity: full } } }),
+      "playlist",
+      PLAYLIST,
+    );
+    expect(parsed.tracks).toHaveLength(PLAYLIST_EMBED_LIMIT);
+    expect(parsed.maybeMore).toBe(true);
+  });
+
+  it("reads albums the same way", () => {
+    const album = {
+      type: "album",
+      name: "Random Access Memories",
+      subtitle: "Daft Punk",
+      trackList: [item("0dEIca2nhcxDUV8C5QkPYb", "Give Life Back to Music", "Daft Punk", 275386)],
+    };
+    const parsed = parsePlaylistPage(
+      embedPage({ state: { data: { entity: album } } }),
+      "album",
+      "4m2880jivSbbyEGAKfITCa",
+    );
+    expect(parsed).toMatchObject({
+      kind: "album",
+      name: "Random Access Memories",
+      by: "Daft Punk",
+      image: null,
+      maybeMore: false,
+      tracks: [{ title: "Give Life Back to Music", duration: 275 }],
+    });
+  });
+
+  it("explains a private or missing playlist, and a page it can't read", () => {
+    const missing = embedPage({ status: 404, title: "Page not found" });
+    expect(() => parsePlaylistPage(missing, "playlist", PLAYLIST)).toThrow(/private/);
+    try {
+      parsePlaylistPage(missing, "playlist", PLAYLIST);
+    } catch (err) {
+      expect((err as SpotifyError).status).toBe(404);
+    }
+    // An album page answering for a playlist, or no data at all.
+    for (const html of [
+      embedPage({ state: { data: { entity: { type: "album", name: "Random Access Memories" } } } }),
+      "<html>no data here</html>",
+    ]) {
+      expect(() => parsePlaylistPage(html, "playlist", PLAYLIST)).toThrow(
+        /couldn't read the playlist/i,
+      );
     }
   });
 });

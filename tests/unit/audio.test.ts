@@ -82,12 +82,21 @@ describe("buildDownloadUrl", () => {
   });
 
   it("passes a new file name along, and leaves it out when there isn't one", () => {
-    const renamed = new URL(buildDownloadUrl(video, "mp3", "  Zoo & café  "), "http://x");
+    const renamed = new URL(buildDownloadUrl(video, "mp3", { name: "  Zoo & café  " }), "http://x");
     expect(renamed.searchParams.get("name")).toBe("Zoo & café");
     expect(
-      new URL(buildDownloadUrl(video, "mp3", "   "), "http://x").searchParams.has("name"),
+      new URL(buildDownloadUrl(video, "mp3", { name: "   " }), "http://x").searchParams.has("name"),
     ).toBe(false);
     expect(new URL(buildDownloadUrl(video), "http://x").searchParams.has("name")).toBe(false);
+  });
+
+  it("passes along the Spotify song it's for, if any", () => {
+    const url = new URL(
+      buildDownloadUrl(video, "mp3", { spotifyId: "4u7EnebtmKWzUH433cf5Qv" }),
+      "http://x",
+    );
+    expect(url.searchParams.get("spotifyId")).toBe("4u7EnebtmKWzUH433cf5Qv");
+    expect(new URL(buildDownloadUrl(video), "http://x").searchParams.has("spotifyId")).toBe(false);
   });
 });
 

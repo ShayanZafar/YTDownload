@@ -73,6 +73,7 @@ export class FileStorage implements IStorage {
         url: insert.url,
         title: insert.title,
         downloadedAt: new Date().toISOString(),
+        ...(insert.spotifyId ? { spotifyId: insert.spotifyId } : {}),
       };
       await writeHistory(file, [entry, ...entries].slice(0, MAX_HISTORY));
       return entry;

@@ -49,6 +49,31 @@ export function useSongSearch() {
   });
 }
 
+/**
+ * The songs in a Spotify playlist or album (the first 100 of a playlist), for
+ * the playlist panel. `link` is null while no playlist is open.
+ */
+export function useSpotifyPlaylist(link: string | null) {
+  return useQuery({
+    queryKey: [api.spotify.playlist.path, link],
+    enabled: link !== null,
+    queryFn: async () => {
+      const res = await fetch(
+        `${api.spotify.playlist.path}?${new URLSearchParams({ link: link ?? "" })}`,
+        { credentials: "include" },
+      );
+      const data: unknown = await res.json().catch(() => undefined);
+      if (!res.ok) {
+        const parsedError = errorSchemas.internal.safeParse(data);
+        throw new Error(
+          parsedError.success ? parsedError.data.message : "Couldn't open that playlist",
+        );
+      }
+      return parseWithLogging(api.spotify.playlist.responses[200], data, "spotify.playlist");
+    },
+  });
+}
+
 export function useVideoInfo() {
   return useMutation({
     mutationFn: async (url: string) => {

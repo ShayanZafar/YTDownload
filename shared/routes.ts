@@ -5,6 +5,8 @@ import {
   folderListingSchema,
   saveSettingsSchema,
   searchResultSchema,
+  spotifyIdSchema,
+  spotifyPlaylistSchema,
   spotifyTrackSchema,
 } from "./schema";
 
@@ -92,6 +94,8 @@ export const api = {
           .default("mp3"),
         /** File name to save as (without extension); the video's title if left out. */
         name: z.string().max(300, "That file name is too long").optional(),
+        /** The Spotify song this is, kept with the history entry. */
+        spotifyId: spotifyIdSchema.optional(),
       }),
     },
     /** Download straight into the "Save to" folder (streams progress as JSON lines). */
@@ -106,7 +110,31 @@ export const api = {
           })
           .default("mp3"),
         name: z.string().max(300, "That file name is too long").optional(),
+        spotifyId: spotifyIdSchema.optional(),
       }),
+    },
+  },
+  spotify: {
+    /** The songs in a public Spotify playlist or album (the first 100 of a playlist). */
+    playlist: {
+      method: "GET" as const,
+      path: "/api/spotify/playlist" as const,
+      query: z.object({
+        link: z
+          .string({
+            required_error: "Paste a Spotify playlist link",
+            invalid_type_error: "Paste a Spotify playlist link",
+          })
+          .trim()
+          .min(1, "Paste a Spotify playlist link")
+          .max(500, "That link is too long"),
+      }),
+      responses: {
+        200: spotifyPlaylistSchema,
+        400: errorSchemas.validation,
+        404: errorSchemas.notFound,
+        502: errorSchemas.internal,
+      },
     },
   },
   settings: {
@@ -146,16 +174,18 @@ export const api = {
 
 /**
  * Link for downloading a video's audio in the given format — saved under
- * `name` (made safe with safeFileName on the server) instead of the title.
+ * `name` (made safe with safeFileName on the server) instead of the title,
+ * and remembered in the history as `spotifyId` when it's a Spotify song.
  */
 export function buildDownloadUrl(
   videoUrl: string,
   format: DownloadFormat = "mp3",
-  name?: string,
+  { name, spotifyId }: { name?: string; spotifyId?: string } = {},
 ): string {
   const params = new URLSearchParams({ url: videoUrl });
   if (format !== "mp3") params.set("format", format);
   if (name?.trim()) params.set("name", name.trim());
+  if (spotifyId) params.set("spotifyId", spotifyId);
   return `${api.video.download.path}?${params}`;
 }
 

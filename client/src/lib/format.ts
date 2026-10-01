@@ -26,6 +26,20 @@ export function isSpotifyLink(input: string): boolean {
 }
 
 /**
+ * A Spotify playlist or album link: it opens in the playlist panel, which
+ * lists the songs to pick from. (The server checks it properly.)
+ */
+export function isSpotifyPlaylistLink(input: string): boolean {
+  const text = input.trim();
+  return (
+    /^spotify:(playlist|album):[A-Za-z0-9]{22}$/i.test(text) ||
+    /^(https?:\/\/)?(open|play)\.spotify\.com\/(intl-[a-z-]+\/)?(embed\/)?(playlist|album)\/[A-Za-z0-9]{22}([/?#]|$)/i.test(
+      text,
+    )
+  );
+}
+
+/**
  * If what was typed is a link, returns it ready to open ("youtu.be/…" gains
  * "https://"); returns undefined for anything else, which is search text.
  */

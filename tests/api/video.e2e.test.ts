@@ -136,6 +136,66 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(res.body.message).toMatch(/album/i);
   });
 
+  it("lists the songs in a public Spotify playlist", async () => {
+    // Spotify's own "Today's Top Hits": public, and always about 50 songs.
+    const res = await request(app)
+      .get("/api/spotify/playlist")
+      .query({ link: "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=e2e" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      kind: "playlist",
+      id: "37i9dQZF1DXcBWIGoYBM5M",
+      name: expect.stringMatching(/top hits/i),
+      maybeMore: false,
+    });
+    const tracks = res.body.tracks as { id: string; title: string; artists: string }[];
+    expect(tracks.length).toBeGreaterThan(10);
+    expect(tracks.length).toBeLessThanOrEqual(100);
+    for (const track of tracks) {
+      expect(track).toMatchObject({
+        id: expect.stringMatching(/^[A-Za-z0-9]{22}$/),
+        url: `https://open.spotify.com/track/${track.id}`,
+        title: expect.any(String),
+        artists: expect.any(String),
+        explicit: expect.any(Boolean),
+      });
+    }
+  });
+
+  it("lists an album's songs too", async () => {
+    const res = await request(app)
+      .get("/api/spotify/playlist")
+      .query({ link: "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      kind: "album",
+      name: "Random Access Memories",
+      by: expect.stringMatching(/daft punk/i),
+    });
+    expect(res.body.tracks).toHaveLength(13);
+    expect(res.body.tracks[0]).toMatchObject({
+      title: "Give Life Back to Music",
+      duration: expect.any(Number),
+    });
+  });
+
+  it("explains a playlist Spotify won't share, and links that aren't playlists", async () => {
+    const missing = await request(app)
+      .get("/api/spotify/playlist")
+      .query({ link: "https://open.spotify.com/playlist/0000000000000000000000" });
+    expect(missing.status).toBe(404);
+    expect(missing.body.message).toMatch(/private/i);
+
+    const song = await request(app)
+      .get("/api/spotify/playlist")
+      .query({ link: "https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv" });
+    expect(song.status).toBe(400);
+    expect(song.body.message).toMatch(/song, not a playlist/i);
+
+    const empty = await request(app).get("/api/spotify/playlist").query({ link: " " });
+    expect(empty.status).toBe(400);
+  });
+
   it("rejects an empty search", async () => {
     for (const query of [{}, { q: "   " }]) {
       const res = await request(app).get("/api/search").query(query);
@@ -212,6 +272,13 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(verdict.isValid, `Not a valid .${ext}: ${verdict.reason}`).toBe(true);
     expect(verdict.size).toBeGreaterThan(10_000);
     await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("rejects a malformed Spotify song id", async () => {
+    const res = await request(app)
+      .get("/api/video/download")
+      .query({ url: TEST_VIDEO_URL, spotifyId: "not-an-id" });
+    expect(res.status).toBe(400);
   });
 
   it("rejects an unknown download format", async () => {
@@ -379,12 +446,16 @@ describe("Save to folder (API)", () => {
     }
   });
 
-  it("saves YouTube's original audio too", async () => {
-    const { done } = await save({ url: TEST_VIDEO_URL, format: "original" });
+  it("saves YouTube's original audio too, remembering the Spotify song it was for", async () => {
+    const spotifyId = "4u7EnebtmKWzUH433cf5Qv";
+    const { done } = await save({ url: TEST_VIDEO_URL, format: "original", spotifyId });
     const ext = /\.(opus|m4a|mka)$/.exec(String(done?.fileName))?.[1];
     expect(ext, `unexpected file: ${JSON.stringify(done)}`).toBeDefined();
     const verdict = await verifyOriginalAudioFile(String(done!.path), ext!);
     expect(verdict.isValid, `Not a valid .${ext}: ${verdict.reason}`).toBe(true);
+    // The history entry carries the Spotify song, for the playlist panel.
+    const [latest] = (await request(app).get("/api/downloads")).body as { spotifyId?: string }[];
+    expect(latest.spotifyId).toBe(spotifyId);
   });
 
   it("explains a video that can't be downloaded, and leaves nothing behind", async () => {
