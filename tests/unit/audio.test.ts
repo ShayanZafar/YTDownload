@@ -63,6 +63,26 @@ describe("audioOutput", () => {
     expect(audioOutput("original", meta, "vorbis").ext).toBe("mka");
     expect(audioOutput("original", meta, undefined).ext).toBe("mka");
   });
+
+  it("tags a Spotify song's file with its id — in an .m4a's comment, which can't hold a tag of its own", () => {
+    const song = { ...meta, spotifyId: "4u7EnebtmKWzUH433cf5Qv" };
+    for (const [format, acodec] of [
+      ["mp3", "opus"],
+      ["original", "opus"],
+      ["original", "vorbis"],
+    ] as const) {
+      expect(audioOutput(format, song, acodec).ffmpegArgs).toContain(
+        "spotify_id=4u7EnebtmKWzUH433cf5Qv",
+      );
+    }
+    expect(audioOutput("original", song, "mp4a.40.2").ffmpegArgs).toContain(
+      "comment=https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv",
+    );
+    for (const acodec of ["opus", "mp4a.40.2"]) {
+      const args = audioOutput("original", meta, acodec).ffmpegArgs;
+      expect(args.some((a) => a.startsWith("spotify_id=") || a.startsWith("comment="))).toBe(false);
+    }
+  });
 });
 
 describe("buildDownloadUrl", () => {

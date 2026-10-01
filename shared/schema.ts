@@ -114,6 +114,37 @@ export const folderListingSchema = z.object({
 
 export type FolderListing = z.infer<typeof folderListingSchema>;
 
+/** A song to look for in the "Save to" folder: a Spotify playlist's song. */
+export const songToFindSchema = z.object({
+  id: spotifyIdSchema,
+  title: z.string().max(500),
+  /** As Spotify shows them: "Daft Punk, Pharrell Williams". */
+  artists: z.string().max(1000),
+});
+
+export type SongToFind = z.infer<typeof songToFindSchema>;
+
+/**
+ * How a song was recognised in the folder: by the Spotify song saved in the
+ * file's tags (files this app downloads have it), by its title and artist (in
+ * the tags, the file name or the folders it's in), or by a file named just
+ * like the song with no artist to say otherwise.
+ */
+export const foundByValues = ["spotify", "title-artist", "title"] as const;
+
+/** Which of a playlist's songs are already in the "Save to" folder. */
+export const songsInFolderSchema = z.object({
+  folder: z.string(),
+  /** How many audio files the folder (and its subfolders) has. */
+  files: z.number(),
+  /** False if the folder has more files than the app looks at (see MAX_SONG_FILES). */
+  complete: z.boolean(),
+  /** Song id → the file that is that song (its path inside the folder). */
+  found: z.record(z.object({ file: z.string(), by: z.enum(foundByValues) })),
+});
+
+export type SongsInFolder = z.infer<typeof songsInFolderSchema>;
+
 /**
  * Saving into the folder streams one JSON object per line: progress while the
  * audio arrives, then "done" (or "error").

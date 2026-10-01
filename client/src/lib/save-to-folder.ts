@@ -11,10 +11,13 @@ import {
   folderListingSchema,
   saveEventSchema,
   saveSettingsSchema,
+  songsInFolderSchema,
   type FolderEntry,
   type FolderListing,
   type SaveEvent,
   type SaveSettings,
+  type SongToFind,
+  type SongsInFolder,
 } from "@shared/schema";
 
 /** A request the app turned down, with its reason and HTTP status. */
@@ -79,6 +82,21 @@ export function createFolder(parent: string, name: string): Promise<FolderEntry>
   return requestJson(folderEntrySchema, api.folders.create.path, {
     method: api.folders.create.method,
     json: { parent, name },
+  });
+}
+
+/**
+ * Which of these songs are already in the "Save to" folder (or its
+ * subfolders) — the app looks at the files' tags and names.
+ */
+export function findSongsInFolder(
+  songs: SongToFind[],
+  signal?: AbortSignal,
+): Promise<SongsInFolder> {
+  return requestJson(songsInFolderSchema, api.folders.songs.path, {
+    method: api.folders.songs.method,
+    json: { songs },
+    signal,
   });
 }
 

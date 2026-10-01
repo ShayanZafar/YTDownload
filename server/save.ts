@@ -14,6 +14,7 @@ import {
 } from "./folders";
 import { retryWhenBusy } from "./retry-when-busy";
 import { settings } from "./settings";
+import { spotifySongTags } from "./spotify";
 import { storage } from "./storage";
 import { extractVideoId } from "./youtube-url";
 
@@ -68,6 +69,9 @@ export async function saveIntoFolder(req: Request, res: Response) {
     const folder = await assertWritableFolder(saveFolder);
 
     const canonical = `https://www.youtube.com/watch?v=${videoId}`;
+    // A Spotify song is tagged with Spotify's title and artists (looked up
+    // while YouTube is asked about the video).
+    const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
     let info;
     try {
       info = await fetchAudioInfo(canonical);
@@ -76,10 +80,11 @@ export async function saveIntoFolder(req: Request, res: Response) {
         cause: err,
       });
     }
+    const tags = { ...info, ...(await songTags), spotifyId };
     // Cancelled while we were looking up the video: don't start any work.
     if (clientGone) return;
 
-    const output = audioOutput(format, info, info.acodec);
+    const output = audioOutput(format, tags, info.acodec);
     const fileName = `${safeFileName(name || info.title)}.${output.ext}`;
     const created = await createNewFile(folder, `${fileName}.part`);
     part = {

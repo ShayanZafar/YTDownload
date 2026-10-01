@@ -9,6 +9,9 @@
  * first 100 of a playlist), which is what the playlist panel shows.
  */
 import type { SpotifyPlaylist, SpotifyPlaylistTrack, SpotifyTrack } from "@shared/schema";
+import { cleanTrackTitle } from "@shared/spotify-names";
+
+export { cleanTrackTitle };
 
 const SPOTIFY_ID_RE = /^[A-Za-z0-9]{22}$/;
 /** The most songs Spotify's embed page lists for a playlist. */
@@ -289,24 +292,6 @@ export async function fetchSpotifyPlaylist(
   return parsePlaylistPage(html, kind, id);
 }
 
-// Suffixes Spotify adds that name a release, not a different recording.
-// "Song - Live" or "Song - Acoustic" are different recordings, so they stay.
-const RELEASE_SUFFIX_RE =
-  /^((\d{4} )?(digital(ly)? )?remaster(ed)?( \d{4})?( version)?|radio edit|single version|album version|mono( version)?|stereo( version)?|explicit|clean|bonus track)$/i;
-
-/**
- * The song title as people write it on YouTube: "Bohemian Rhapsody -
- * Remastered 2011" → "Bohemian Rhapsody", "Get Lucky (feat. Pharrell
- * Williams…)" → "Get Lucky".
- */
-export function cleanTrackTitle(title: string): string {
-  let clean = title.replace(/\s*[([](feat\.?|ft\.?|featuring|with)\s[^)\]]*[)\]]/gi, "");
-  const dash = clean.lastIndexOf(" - ");
-  if (dash > 0 && RELEASE_SUFFIX_RE.test(clean.slice(dash + 3).trim()))
-    clean = clean.slice(0, dash);
-  return clean.replace(/\s+/g, " ").trim() || title.trim();
-}
-
 /**
  * What to search YouTube for: the main artist, the cleaned-up title, and
  * "audio" — which brings the artist's "Official Audio" uploads (the plain
@@ -314,4 +299,27 @@ export function cleanTrackTitle(title: string): string {
  */
 export function spotifySearchQuery(track: Pick<SpotifyTrack, "title" | "artists">): string {
   return [track.artists[0], cleanTrackTitle(track.title), "audio"].filter(Boolean).join(" ");
+}
+
+/** How long a download waits for Spotify's song details before tagging the file without them. */
+const SONG_TAGS_TIMEOUT_MS = 5_000;
+
+/**
+ * Tags for a download of a Spotify song: Spotify's title and artists (cleaner
+ * than a YouTube video's "Artist - Song (Official Video)"), or undefined if
+ * Spotify doesn't answer in time — the file is then tagged from YouTube, as
+ * any other download.
+ */
+export async function spotifySongTags(
+  id: string,
+): Promise<{ title: string; artist: string } | undefined> {
+  const tags = fetchSpotifyTrack(id).then(
+    (track) => ({ title: cleanTrackTitle(track.title), artist: track.artists.join(", ") }),
+    () => undefined,
+  );
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), SONG_TAGS_TIMEOUT_MS);
+  });
+  return Promise.race([tags, timeout]).finally(() => clearTimeout(timer));
 }

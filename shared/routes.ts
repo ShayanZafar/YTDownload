@@ -5,6 +5,8 @@ import {
   folderListingSchema,
   saveSettingsSchema,
   searchResultSchema,
+  songToFindSchema,
+  songsInFolderSchema,
   spotifyIdSchema,
   spotifyPlaylistSchema,
   spotifyTrackSchema,
@@ -168,6 +170,15 @@ export const api = {
         name: z.string().min(1, "Give the new folder a name").max(200),
       }),
       responses: { 201: folderEntrySchema },
+    },
+    /** Which of these songs are already in the "Save to" folder (or its subfolders). */
+    songs: {
+      method: "POST" as const,
+      path: "/api/folders/songs" as const,
+      input: z.object({
+        songs: z.array(songToFindSchema).max(1000, "That's too many songs to look for at once"),
+      }),
+      responses: { 200: songsInFolderSchema },
     },
   },
 };

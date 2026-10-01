@@ -16,6 +16,7 @@ import {
   playlistLinkError,
   spotifyLinkError,
   spotifySearchQuery,
+  spotifySongTags,
 } from "./spotify";
 import {
   YT_DLP_BASE_FLAGS,
@@ -35,6 +36,7 @@ import {
   placesToSave,
 } from "./folders";
 import { saveIntoFolder } from "./save";
+import { songsInFolder } from "./library";
 
 type YtDlpInfo = ThumbnailLike & { title?: string };
 
@@ -120,6 +122,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   // Downloads a video's audio straight into the "Save to" folder (see save.ts).
   app.post(api.video.save.path, localOnly(), saveIntoFolder);
+
+  // Which of a playlist's songs are already in the "Save to" folder (see library.ts).
+  // Only ever the chosen folder: the page sends songs, never a path.
+  app.post(api.folders.songs.path, localOnly(), async (req, res) => {
+    const input = api.folders.songs.input.safeParse(req.body);
+    if (!input.success) return res.status(400).json(validationError(input.error));
+    try {
+      const { saveFolder } = await settings.get();
+      if (!saveFolder) {
+        return res.status(409).json({ message: "Choose a folder to save into first." });
+      }
+      res.json(await songsInFolder(saveFolder, input.data.songs));
+    } catch (err) {
+      sendFolderError(res, err, "Couldn't look through the folder");
+    }
+  });
 
   // --- Everything else ----------------------------------------------------------
 
@@ -243,16 +261,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const canonical = `https://www.youtube.com/watch?v=${videoId}`;
 
+      // A Spotify song is tagged with Spotify's title and artists (looked up
+      // while YouTube is asked about the video).
+      const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
+
       // Metadata first, so a video that can't be downloaded fails with a clean
       // error before a streaming response is opened.
       const info = await fetchAudioInfo(canonical);
+      const tags = { ...info, ...(await songTags), spotifyId };
 
       // Cancelled while we were looking up the video: don't start any work.
       if (clientGone) return;
 
       // These only go out with the first chunk of audio, so a failure before
       // then can still be turned into a proper error response (see below).
-      const output = audioOutput(format, info, info.acodec);
+      const output = audioOutput(format, tags, info.acodec);
       // Saved as the name chosen on the page, or the video's title. res.attachment
       // writes both a plain filename and a UTF-8 one (filename*), so accents and
       // non-Latin titles survive.

@@ -263,6 +263,11 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await expect(downloadLink).toBeVisible({ timeout: 60_000 });
     await expect(downloadLink).toHaveAttribute("href", /spotifyId=4u7EnebtmKWzUH433cf5Qv/);
     await expect(song).toHaveAttribute("aria-pressed", "true");
+    // Named like a music folder would: "Artist - Title", not the video's title.
+    await expect(downloadLink).toHaveAttribute("href", /name=Queen\+-\+Bohemian\+Rhapsody(&|$)/);
+    await expect(
+      page.getByRole("button", { name: "Rename file: Queen - Bohemian Rhapsody" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("region", { name: /search results/i }).getByText(/from spotify/i),
     ).toBeVisible();
@@ -277,6 +282,110 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
       page.getByRole("button", { name: "Spotify playlist", exact: true }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("region", { name: /spotify playlist/i })).toHaveCount(0);
+  });
+
+  test("with a Save to folder, the playlist shows what's in it, and Download saves the rest", async ({
+    page,
+    request,
+  }) => {
+    // A real folder that has one of the songs already, in a subfolder.
+    const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-playlist-"));
+    await fs.mkdir(path.join(folder, "Queen"));
+    await fs.writeFile(path.join(folder, "Queen", "Bohemian Rhapsody.mp3"), "");
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    const name = path.basename(folder);
+
+    // A made-up playlist: Bohemian Rhapsody (in the folder already) and two
+    // songs whose YouTube search is made up too, both finding YouTube's first
+    // video (19 seconds, quick to download for real): one the same length as
+    // that video, one not — which has to be left for someone to check.
+    const songs = [
+      ["4u7EnebtmKWzUH433cf5Qv", "Bohemian Rhapsody - Remastered 2011", "Queen", 354],
+      ["AAAAAAAAAAAAAAAAAAAAAA", "Me at the zoo", "jawed", 19],
+      ["BBBBBBBBBBBBBBBBBBBBBB", "Zoo Song", "The Keepers", 200],
+    ] as const;
+    const playlist = {
+      kind: "playlist",
+      id: "37i9dQZF1DXcBWIGoYBM5M",
+      url: "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+      name: "Zoo Trip",
+      by: "Moomoo",
+      image: null,
+      maybeMore: false,
+      tracks: songs.map(([id, title, artists, duration]) => ({
+        id,
+        url: `https://open.spotify.com/track/${id}`,
+        title,
+        artists,
+        duration,
+        explicit: false,
+      })),
+    };
+    await page.route("**/api/spotify/playlist?*", (route) => route.fulfill({ json: playlist }));
+    await page.route("**/api/search?*", (route) => {
+      const query = new URL(route.request().url()).searchParams.get("q") ?? "";
+      const song = songs.slice(1).find(([id]) => query.includes(id));
+      if (!song) return route.continue();
+      const [id, title, artists, duration] = song;
+      return route.fulfill({
+        json: {
+          results: [
+            {
+              id: "jNQXAC9IVRw",
+              url: TEST_VIDEO_URL,
+              title: "Me at the zoo",
+              channel: "jawed",
+              duration: 19,
+              thumbnail: "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg",
+              official: true,
+            },
+          ],
+          spotify: {
+            id,
+            url: `https://open.spotify.com/track/${id}`,
+            title,
+            artists: [artists],
+            duration,
+            thumbnail: null,
+          },
+        },
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Spotify playlist", exact: true }).click();
+    await page.getByRole("textbox", { name: /spotify playlist link/i }).fill(playlist.url);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+
+    const panel = page.getByRole("region", { name: /spotify playlist/i });
+    await expect(panel.getByText(`by Moomoo · 3 songs · 1 in “${name}” · 2 missing`)).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(
+      panel.getByRole("button", { name: /^bohemian rhapsody.*in the folder as/i }),
+    ).toBeVisible();
+
+    // Just the missing songs, both ticked to download.
+    await panel.getByRole("button", { name: "Not in folder (2)" }).click();
+    await expect(panel.getByRole("listitem")).toHaveCount(2);
+    await expect(panel.getByRole("checkbox", { checked: true })).toHaveCount(2);
+    await panel.getByRole("button", { name: "Download 2 songs" }).click();
+
+    // The song with a same-length upload is saved; the other one is left to check.
+    await expect(panel.getByRole("button", { name: /^me at the zoo.*saved as/i })).toBeVisible({
+      timeout: 90_000,
+    });
+    await expect(panel.getByRole("button", { name: /^zoo song.*same length/i })).toBeVisible();
+    await expect(page.getByText("Saved 1 song to", { exact: false }).first()).toBeVisible();
+    await expect(panel.getByText(`by Moomoo · 3 songs · 2 in “${name}” · 1 missing`)).toBeVisible();
+    // The one to check isn't ticked for the next Download.
+    await expect(panel.getByRole("checkbox", { name: /zoo song/i })).not.toBeChecked();
+    await expect(panel.getByRole("button", { name: /^download/i })).toBeDisabled();
+
+    // Saved as "Artist - Title", a real MP3.
+    const verdict = await verifyMp3File(path.join(folder, "jawed - Me at the zoo.mp3"));
+    expect(verdict.isValid, `Not a valid MP3: ${verdict.reason}`).toBe(true);
+    await fs.rm(folder, { recursive: true, force: true });
   });
 
   test("Save to: pick a folder in the app's folder browser; downloads are saved into it", async ({

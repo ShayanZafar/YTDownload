@@ -55,7 +55,15 @@ const ytDlpModule = youtubedl as unknown as {
 export const YT_DLP_PATH = ytDlpModule.constants.YOUTUBE_DL_PATH;
 export const FFMPEG_PATH = ffmpegStatic; // null only on platforms ffmpeg-static doesn't cover
 
-export type AudioMetadata = { title: string; artist?: string };
+export type AudioMetadata = {
+  title: string;
+  artist?: string;
+  /**
+   * The Spotify song this is, written into the file's tags so the playlist
+   * panel recognises the file in the "Save to" folder, even after a rename.
+   */
+  spotifyId?: string;
+};
 
 /** What a download produces: the file extension, its MIME type, and the ffmpeg arguments. */
 export type AudioOutput = { ext: string; contentType: string; ffmpegArgs: string[] };
@@ -71,13 +79,18 @@ export function ytDlpAudioArgs(videoUrl: string, format: string = AUDIO_FORMAT):
 }
 
 // Read audio on stdin, drop whatever tags the source container carried, and
-// write our own title/artist.
-function ffmpegInputAndTags({ title, artist }: AudioMetadata): string[] {
+// write our own title/artist (and the Spotify song, if it's one: an ID3
+// "TXXX:spotify_id" frame, or a SPOTIFY_ID comment in Ogg and Matroska).
+function ffmpegInputAndTags({ title, artist, spotifyId }: AudioMetadata): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn"];
   args.push("-map_metadata", "-1", "-metadata", `title=${title}`);
   if (artist) args.push("-metadata", `artist=${artist}`);
+  if (spotifyId) args.push("-metadata", `spotify_id=${spotifyId}`);
   return args;
 }
+
+/** The Spotify song's link, the way it's written into a file's comment. */
+export const spotifySongLink = (id: string) => `https://open.spotify.com/track/${id}`;
 
 /** ffmpeg arguments that convert any audio on stdin to a tagged 320 kbps MP3 on stdout. */
 export function ffmpegMp3Args(meta: AudioMetadata): string[] {
@@ -131,10 +144,22 @@ export function audioOutput(
     return { ext: "mp3", contentType: "audio/mpeg", ffmpegArgs: ffmpegMp3Args(meta) };
   }
   const { ext, contentType, muxerArgs } = originalContainer(sourceAcodec);
+  // An .m4a can't hold a tag of our own, so the Spotify song goes in its comment.
+  const songComment =
+    ext === "m4a" && meta.spotifyId
+      ? ["-metadata", `comment=${spotifySongLink(meta.spotifyId)}`]
+      : [];
   return {
     ext,
     contentType,
-    ffmpegArgs: [...ffmpegInputAndTags(meta), "-c:a", "copy", ...muxerArgs, "pipe:1"],
+    ffmpegArgs: [
+      ...ffmpegInputAndTags(meta),
+      ...songComment,
+      "-c:a",
+      "copy",
+      ...muxerArgs,
+      "pipe:1",
+    ],
   };
 }
 

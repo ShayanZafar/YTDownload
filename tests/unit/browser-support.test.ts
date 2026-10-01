@@ -9,10 +9,13 @@ import { fileURLToPath } from "url";
  * accept only breaks older Safari when it runs, so no test in Chrome would
  * notice. This keeps it out of the page's code.
  */
-const CLIENT = fileURLToPath(new URL("../../client/src", import.meta.url));
-const files = readdirSync(CLIENT, { recursive: true, encoding: "utf8" })
-  .filter((file) => /\.tsx?$/.test(file) && !file.split(/[\\/]/).includes("ui"))
-  .map((file) => ({ file, text: readFileSync(path.join(CLIENT, file), "utf8") }));
+// The page's own code, and the shared code it uses too.
+const files = ["../../client/src", "../../shared"].flatMap((dir) => {
+  const root = fileURLToPath(new URL(dir, import.meta.url));
+  return readdirSync(root, { recursive: true, encoding: "utf8" })
+    .filter((file) => /\.tsx?$/.test(file) && !file.split(/[\\/]/).includes("ui"))
+    .map((file) => ({ file, text: readFileSync(path.join(root, file), "utf8") }));
+});
 
 describe("the page's code runs in every current browser", () => {
   it("finds the code to check", () => {

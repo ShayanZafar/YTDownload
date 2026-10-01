@@ -6,6 +6,7 @@ import request from "supertest";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
+import { parseBuffer, parseFile } from "music-metadata";
 import { verifyMp3File } from "../utils/mp3";
 import { verifyOriginalAudioFile } from "../utils/original-audio";
 
@@ -325,6 +326,17 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     expect((await historyFor(TEST_VIDEO_URL)).length).toBe(before);
   });
+
+  it("tags a Spotify song's download with Spotify's title and artists, and the song's id", async () => {
+    const res = await download({ url: TEST_VIDEO_URL, spotifyId: "4u7EnebtmKWzUH433cf5Qv" });
+    expect(res.status).toBe(200);
+    const { common, native } = await parseBuffer(res.body as Buffer, { mimeType: "audio/mpeg" });
+    expect(common).toMatchObject({ title: "Bohemian Rhapsody", artist: "Queen" });
+    expect(native["ID3v2.3"]).toContainEqual({
+      id: "TXXX:spotify_id",
+      value: "4u7EnebtmKWzUH433cf5Qv",
+    });
+  });
 });
 
 describe("Save to folder (API)", () => {
@@ -373,6 +385,9 @@ describe("Save to folder (API)", () => {
     const { res, error } = await save({ url: TEST_VIDEO_URL });
     expect(res.status).toBe(409);
     expect(error?.message).toMatch(/choose a folder/i);
+
+    const songs = await request(app).post("/api/folders/songs").send({ songs: [] });
+    expect(songs.status).toBe(409);
   });
 
   it("refuses a folder that doesn't exist, isn't a folder, or isn't a full path", async () => {
@@ -456,6 +471,42 @@ describe("Save to folder (API)", () => {
     // The history entry carries the Spotify song, for the playlist panel.
     const [latest] = (await request(app).get("/api/downloads")).body as { spotifyId?: string }[];
     expect(latest.spotifyId).toBe(spotifyId);
+    // And the file is tagged as the song on Spotify, not the YouTube video.
+    const { common } = await parseFile(String(done!.path));
+    expect(common).toMatchObject({ title: "Bohemian Rhapsody", artist: "Queen" });
+  });
+
+  it("says which of a playlist's songs are already in the folder", async () => {
+    const audioFiles = (await fs.readdir(saveDir)).filter((f) => /\.(mp3|opus|m4a|mka)$/.test(f));
+    const res = await request(app)
+      .post("/api/folders/songs")
+      .send({
+        songs: [
+          {
+            id: "4u7EnebtmKWzUH433cf5Qv",
+            title: "Bohemian Rhapsody - Remastered 2011",
+            artists: "Queen",
+          },
+          { id: "AAAAAAAAAAAAAAAAAAAAAA", title: "Me at the zoo", artists: "jawed" },
+          { id: "BBBBBBBBBBBBBBBBBBBBBB", title: "Holiday", artists: "Madonna" },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ folder: saveDir, files: audioFiles.length, complete: true });
+    // The file saved for the Spotify song above carries it in its tags (whatever it's called)…
+    expect(res.body.found["4u7EnebtmKWzUH433cf5Qv"]).toEqual({
+      file: expect.stringMatching(/^Me at the zoo.*\.(opus|m4a|mka)$/),
+      by: "spotify",
+    });
+    // …the other downloads are tagged with the video's title and uploader…
+    expect(res.body.found.AAAAAAAAAAAAAAAAAAAAAA).toMatchObject({ by: "title-artist" });
+    // …and there's no Madonna.
+    expect(res.body.found.BBBBBBBBBBBBBBBBBBBBBB).toBeUndefined();
+
+    const bad = await request(app)
+      .post("/api/folders/songs")
+      .send({ songs: [{ id: "not-a-song", title: "x", artists: "y" }] });
+    expect(bad.status).toBe(400);
   });
 
   it("explains a video that can't be downloaded, and leaves nothing behind", async () => {
@@ -506,6 +557,12 @@ describe("Save to folder (API)", () => {
       .set("Sec-Fetch-Site", "cross-site")
       .send({ url: TEST_VIDEO_URL });
     expect(crossSite.status).toBe(403);
+
+    const peek = await request(app)
+      .post("/api/folders/songs")
+      .set("Sec-Fetch-Site", "cross-site")
+      .send({ songs: [] });
+    expect(peek.status).toBe(403);
 
     const otherSite = await request(app)
       .put("/api/settings")

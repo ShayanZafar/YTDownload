@@ -33,20 +33,21 @@ export function useRecentDownloads(pollEveryMs: number | false = false) {
  * Song search: YouTube results for a text query, official uploads first. A
  * Spotify song link also returns the song it points to (`spotify`).
  */
-export function useSongSearch() {
-  return useMutation({
-    mutationFn: async (query: string) => {
-      const res = await fetch(`${api.video.search.path}?${new URLSearchParams({ q: query })}`, {
-        credentials: "include",
-      });
-      const data: unknown = await res.json().catch(() => undefined);
-      if (!res.ok) {
-        const parsedError = errorSchemas.internal.safeParse(data);
-        throw new Error(parsedError.success ? parsedError.data.message : "Search failed");
-      }
-      return parseWithLogging(api.video.search.responses[200], data, "video.search");
-    },
+export async function searchSongs(query: string, signal?: AbortSignal) {
+  const res = await fetch(`${api.video.search.path}?${new URLSearchParams({ q: query })}`, {
+    credentials: "include",
+    signal,
   });
+  const data: unknown = await res.json().catch(() => undefined);
+  if (!res.ok) {
+    const parsedError = errorSchemas.internal.safeParse(data);
+    throw new Error(parsedError.success ? parsedError.data.message : "Search failed");
+  }
+  return parseWithLogging(api.video.search.responses[200], data, "video.search");
+}
+
+export function useSongSearch() {
+  return useMutation({ mutationFn: (query: string) => searchSongs(query) });
 }
 
 /**

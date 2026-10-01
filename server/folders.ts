@@ -34,6 +34,10 @@ const HIDDEN_NAMES = new Set([
 ]);
 const MAX_ENTRIES = 1000;
 
+/** A system or "hidden" folder, which nobody saves music into: .git, $RECYCLE.BIN, AppData… */
+export const isHiddenFolder = (name: string) =>
+  name.startsWith(".") || name.startsWith("$") || HIDDEN_NAMES.has(name.toLowerCase());
+
 // --- Quick links ---------------------------------------------------------------
 
 const QUICK_LINKS = ["Music", "Downloads", "Desktop", "Documents"] as const;
@@ -178,13 +182,7 @@ export async function listFolders(
     throw folderError(err, folder, "open");
   }
   const folders = entries
-    .filter(
-      (e) =>
-        e.isDirectory() &&
-        !e.name.startsWith(".") &&
-        !e.name.startsWith("$") &&
-        !HIDDEN_NAMES.has(e.name.toLowerCase()),
-    )
+    .filter((e) => e.isDirectory() && !isHiddenFolder(e.name))
     .map((e) => ({ name: e.name, path: path.join(folder, e.name) }))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }))
     .slice(0, MAX_ENTRIES);

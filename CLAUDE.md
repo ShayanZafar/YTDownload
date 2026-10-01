@@ -1,7 +1,8 @@
 # YouTube → audio extractor
 
 Small full-stack app: paste a YouTube URL (or search for a song, paste a Spotify song link, or pick
-songs from a Spotify playlist), preview it, download the audio track. Developed and run locally on Windows (it also works on
+songs from a Spotify playlist — with a Save to folder, it shows which are already there and downloads
+the rest), preview it, download the audio track. Developed and run locally on Windows (it also works on
 macOS/Linux). `README.md` is the user guide, `TECHNICAL.md` has architecture, setup and
 deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 
@@ -15,6 +16,7 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - **YouTube:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads into
   `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed)
 - **MP3:** `ffmpeg-static` (ffmpeg fetched by `npm install`; `FFMPEG_BIN` overrides it)
+- **Tags:** `music-metadata` reads the audio files' tags in the Save to folder (`server/library.ts`)
 
 ## Layout
 
@@ -23,11 +25,15 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/playlist`,
   `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
-  `GET /api/downloads`
+  `POST /api/folders/songs`, `GET /api/downloads`
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
   replacing a file (`Song (1).mp3`); streams JSON-line progress (`saveEventSchema`)
 - `server/settings.ts` — app settings (the Save to folder) in `data/settings.json` (`SETTINGS_FILE`)
+- `server/library.ts` — which of a playlist's songs are in the Save to folder (`POST /api/folders/songs`):
+  walks it and its subfolders (≤6 deep, ≤`MAX_SONG_FILES`), reads tags (cached per file until it
+  changes), and `findSongs()` matches by the Spotify id in the tags, else title + an artist (tags, file
+  name, folder names), else an exact file name with no contradicting artist tag. Pure parts unit-tested
 - `server/folders.ts` — the folder browser (list/make folders, quick links — on Windows from the
   registry's User Shell Folders — writable check, `createNewFile()`, `availablePath()`)
 - `server/local-only.ts` — `localOnly()`: folder routes answer only loopback, same-origin, JSON
@@ -45,7 +51,9 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename
 - `shared/` — schema and API contracts shared by client and server; `shared/filename.ts` has
-  `safeFileName()`, used by the server to name downloads and by the page to show that name
+  `safeFileName()`, used by the server to name downloads and by the page to show that name;
+  `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
+  default name of any download found from Spotify)
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
   components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
@@ -54,9 +62,12 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `client/src/lib/format.ts` — `formatDuration()`, `isSpotifyLink()`, `isSpotifyPlaylistLink()` and
   `asLink()` (a YouTube link is opened, a playlist/album link opens the panel, anything else is
   searched)
-- `client/src/components/spotify-playlist.tsx` — the playlist panel: lists the songs (filter,
-  Downloaded marks from history entries' `spotifyId`); picking one searches its song link. The
-  download link/save request carry `spotifyId` so the history knows which song it was
+- `client/src/components/spotify-playlist.tsx` — the playlist panel: lists the songs (filter); picking
+  one searches its song link. With a Save to folder: In folder marks and counts
+  (`hooks/use-songs-in-folder.ts`, refetched on focus and after saves), a Not in folder view, tick
+  boxes and Download (`hooks/use-download-all.ts`: one song at a time — search, `confidentMatch()`
+  (same length as on Spotify) or mark "check", then `saveOnServer()`; Stop aborts). Without a folder:
+  Downloaded marks from history entries' `spotifyId`. Downloads carry `spotifyId` (history + file tag)
 - `client/src/lib/save-to-folder.ts` + `hooks/use-save-settings.ts` — the page's side of "Save to":
   settings/folder API calls and `saveOnServer()` (reads the progress lines with `getReader()`).
   `components/folder-picker.tsx` is the folder browser (native `<dialog>`, portalled to `<body>`);
@@ -120,6 +131,17 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - Search spawns yt-dlp directly (no shell) with the query after `--`; keep it that way so search
   text can't become a command or a yt-dlp option. Results carry their own title/thumbnail, so
   picking one needs no `/api/video/info` call.
+- A download with `spotifyId` is tagged with it — ID3 `TXXX:spotify_id` (MP3), `SPOTIFY_ID` (.opus/.mka),
+  or the song's link as the comment of an .m4a (the ipod muxer drops custom keys; `use_metadata_tags`
+  breaks the standard ones) — and with Spotify's title/artists (`spotifySongTags()`, ≤5 s, else
+  YouTube's). That tag is how the playlist panel recognises the app's own files after a rename.
+- `music-metadata` is ESM-only and describes `parseFile` only under the "node" exports condition, which
+  TypeScript's `bundler` resolution ignores: `library.ts` loads it with `import()` and types it by hand.
+  Regexes with the `u` flag (`\p{L}`) must be built with `new RegExp(...)`: tsc refuses the literal at
+  this project's default ES5 target.
+- "Download all" stays one song at a time, and never downloads a match that isn't the same length as
+  the Spotify song: unattended picks must be near-certain, and bursts of downloads invite YouTube's
+  bot checks.
 - Spotify: only a validated kind (track/playlist/album) and 22-character id go into the embed URL we
   fetch (no user-controlled URLs are ever fetched). If Spotify links break, check the embed page's
   `__NEXT_DATA__` shape first (`parseEmbedPage()`, `parsePlaylistPage()`); the cloud workspace can't

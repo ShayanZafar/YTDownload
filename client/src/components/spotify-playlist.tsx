@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
+  Clock,
+  Download,
   ExternalLink,
   ListMusic,
   Loader2,
   RefreshCw,
   Search,
+  Square,
   X,
 } from "lucide-react";
-import type { SpotifyPlaylist, SpotifyPlaylistTrack } from "@shared/schema";
-import { formatDuration } from "@/lib/format";
+import type { SongsInFolder, SpotifyPlaylist, SpotifyPlaylistTrack } from "@shared/schema";
+import type { SongStatus } from "@/hooks/use-download-all";
+import { formatBytes, formatDuration } from "@/lib/format";
 import { searchableText } from "@/lib/history-filter";
+import { folderName } from "@/lib/save-to-folder";
 import { cn } from "@/lib/utils";
 
 type SpotifyPlaylistPanelProps = {
@@ -23,8 +29,25 @@ type SpotifyPlaylistPanelProps = {
   /** The song whose YouTube matches are showing (or being looked for). */
   activeTrackId?: string;
   isSearching: boolean;
-  /** Spotify ids of the songs already in the download history. */
+  /** Spotify ids of the songs in the download history (marked when there's no Save to folder). */
   downloadedIds: ReadonlySet<string>;
+  /**
+   * The "Save to" folder, and which of the songs are in it — undefined when
+   * downloads go to the browser's downloads folder.
+   */
+  folder?: {
+    path: string;
+    songs?: SongsInFolder;
+    isChecking: boolean;
+    error: Error | null;
+  };
+  /** No folder is chosen, but this browser could choose one (to say what that would add). */
+  canChooseFolder: boolean;
+  /** "Download all": how each song went, and how far along it is (null when not running). */
+  statuses: Record<string, SongStatus>;
+  progress: { done: number; total: number } | null;
+  onDownloadAll: (songs: SpotifyPlaylistTrack[]) => void;
+  onStop: () => void;
   onPick: (track: SpotifyPlaylistTrack) => void;
   onRefresh: () => void;
   onClose: () => void;
@@ -41,11 +64,99 @@ function matches(track: SpotifyPlaylistTrack, filter: string): boolean {
   return words.every((word) => text.includes(word));
 }
 
+const countSongs = (n: number) => `${n} ${n === 1 ? "song" : "songs"}`;
+
+/** The one entry per song (a playlist can have a song twice). */
+const uniqueIds = (tracks: SpotifyPlaylistTrack[]) => Array.from(new Set(tracks.map((t) => t.id)));
+
+type Mark = {
+  Icon: typeof CheckCircle2;
+  text: string;
+  /** For screen readers, and the tooltip. */
+  detail: string;
+  className: string;
+  spin?: boolean;
+};
+
+/** What a song's row says about it on the right: in the folder, being downloaded, and so on. */
+function markFor(
+  status: SongStatus | undefined,
+  inFolder: { file: string } | undefined,
+  downloaded: boolean,
+): Mark | undefined {
+  switch (status?.state) {
+    case "waiting":
+      return {
+        Icon: Clock,
+        text: "Waiting",
+        detail: "waiting to download",
+        className: "text-muted-foreground",
+      };
+    case "finding":
+      return {
+        Icon: Loader2,
+        text: "Finding",
+        detail: "looking for it on YouTube",
+        className: "text-muted-foreground",
+        spin: true,
+      };
+    case "saving":
+      return {
+        Icon: Loader2,
+        text: status.bytes > 0 ? formatBytes(status.bytes) : "Saving",
+        detail: "saving",
+        className: "text-foreground",
+        spin: true,
+      };
+    case "saved":
+      return {
+        Icon: CheckCircle2,
+        text: "Saved",
+        detail: `saved as ${status.file}`,
+        className: "text-primary",
+      };
+    case "check":
+      return {
+        Icon: AlertTriangle,
+        text: "Check",
+        detail: status.reason,
+        className: "text-amber-600 dark:text-amber-400",
+      };
+    case "failed":
+      return {
+        Icon: AlertCircle,
+        text: "Failed",
+        detail: `failed: ${status.reason}`,
+        className: "text-destructive",
+      };
+  }
+  if (inFolder) {
+    return {
+      Icon: CheckCircle2,
+      text: "In folder",
+      detail: `in the folder as ${inFolder.file}`,
+      className: "text-primary",
+    };
+  }
+  if (downloaded) {
+    return {
+      Icon: CheckCircle2,
+      text: "Downloaded",
+      detail: "downloaded",
+      className: "text-primary",
+    };
+  }
+  return undefined;
+}
+
 /**
  * The songs in a Spotify playlist or album. Clicking one looks for it on
  * YouTube, exactly like pasting that song's Spotify link: the best match is
- * picked, ready to download, with the other matches listed below it. Songs
- * already downloaded are marked, so you can work through a playlist.
+ * picked, ready to download, with the other matches listed below it.
+ *
+ * With a "Save to" folder, each song says whether it's already in the folder,
+ * the list can show just the missing ones, and "Download" fetches the ticked
+ * ones (all missing songs, to begin with) one after another.
  */
 export function SpotifyPlaylistPanel({
   playlist,
@@ -55,27 +166,73 @@ export function SpotifyPlaylistPanel({
   activeTrackId,
   isSearching,
   downloadedIds,
+  folder,
+  canChooseFolder,
+  statuses,
+  progress,
+  onDownloadAll,
+  onStop,
   onPick,
   onRefresh,
   onClose,
 }: SpotifyPlaylistPanelProps) {
   const [filter, setFilter] = useState("");
-  // A different playlist starts unfiltered.
-  useEffect(() => setFilter(""), [playlist?.id]);
+  const [show, setShow] = useState<"all" | "missing">("all");
+  // Songs ticked or unticked for "Download" (the rest follow the default).
+  const [choices, setChoices] = useState<Record<string, boolean>>({});
+  // A different playlist starts afresh.
+  useEffect(() => {
+    setFilter("");
+    setShow("all");
+    setChoices({});
+  }, [playlist?.id]);
 
   const tracks = useMemo(() => playlist?.tracks ?? [], [playlist]);
+  const kind = playlist?.kind ?? "playlist";
+  const running = progress !== null;
+  // Folder mode: once the folder has been looked through.
+  const found = folder?.songs?.found;
+  // How a song's last Download went — unless it was "check" or "failed" and
+  // has been saved into the folder since (picked by hand, say).
+  const statusOf = (id: string): SongStatus | undefined => {
+    const status = statuses[id];
+    const settled = status?.state === "check" || status?.state === "failed";
+    return settled && found?.[id] ? undefined : status;
+  };
+  const inFolder = (id: string) =>
+    found?.[id] ?? (statuses[id]?.state === "saved" ? { file: "" } : undefined);
+  const missing = useMemo(
+    () => (found ? tracks.filter((t) => !found[t.id] && statuses[t.id]?.state !== "saved") : []),
+    [tracks, found, statuses],
+  );
+  const missingIds = uniqueIds(missing);
+  const inFolderCount = found ? uniqueIds(tracks).length - missingIds.length : 0;
+  // Ticked: what you chose, else every missing song but the ones to check by hand.
+  const isTicked = (id: string) => choices[id] ?? statusOf(id)?.state !== "check";
+  const ticked = missing.filter((t) => isTicked(t.id));
+  const tickedCount = uniqueIds(ticked).length;
+  const tickAll = (on: boolean) => setChoices(Object.fromEntries(missingIds.map((id) => [id, on])));
+
   const shown = useMemo(
     () =>
       tracks
         .map((track, index) => ({ track, index }))
-        .filter(({ track }) => matches(track, filter)),
-    [tracks, filter],
+        .filter(
+          ({ track }) =>
+            matches(track, filter) &&
+            // "Not in folder" keeps the last Download's songs too, to show how they went.
+            (show === "all" || !found || !found[track.id] || statuses[track.id] !== undefined),
+        ),
+    [tracks, filter, show, found, statuses],
   );
   const downloadedCount = useMemo(
     () => new Set(tracks.filter((t) => downloadedIds.has(t.id)).map((t) => t.id)).size,
     [tracks, downloadedIds],
   );
-  const kind = playlist?.kind ?? "playlist";
+  const finished = Object.keys(statuses).map(statusOf);
+  const toCheck = finished.filter((s) => s?.state === "check").length;
+  const failed = finished.filter((s) => s?.state === "failed").length;
+  const where = folder ? `“${folderName(folder.path)}”` : "";
 
   return (
     <section aria-label={`Spotify ${kind}`} className="max-w-3xl mx-auto w-full">
@@ -100,11 +257,15 @@ export function SpotifyPlaylistPanel({
               {playlist?.name ?? (isLoading ? "Opening…" : "Couldn't open it")}
             </h2>
             {playlist && (
-              <p className="truncate text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 {[
                   playlist.by && `by ${playlist.by}`,
-                  `${tracks.length} ${tracks.length === 1 ? "song" : "songs"}`,
-                  downloadedCount > 0 && `${downloadedCount} downloaded`,
+                  countSongs(tracks.length),
+                  folder
+                    ? found
+                      ? `${inFolderCount} in ${where} · ${missingIds.length} missing`
+                      : folder.isChecking && `checking ${where}…`
+                    : downloadedCount > 0 && `${downloadedCount} downloaded`,
                 ]
                   .filter(Boolean)
                   .join(" · ")}
@@ -140,7 +301,7 @@ export function SpotifyPlaylistPanel({
               type="button"
               onClick={onClose}
               aria-label={`Close the Spotify ${kind}`}
-              title="Close"
+              title={running ? "Close (stops the downloads)" : "Close"}
               className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             >
               <X className="h-4 w-4" />
@@ -155,6 +316,109 @@ export function SpotifyPlaylistPanel({
           >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{error.message}</span>
+          </p>
+        )}
+        {folder?.error && !found && (
+          <p
+            role="alert"
+            className="m-4 flex items-start gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              Couldn't look through {where}: {folder.error.message}
+            </span>
+          </p>
+        )}
+
+        {/* With a Save to folder: show what's missing, and download it. */}
+        {found && tracks.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border px-4 py-2.5">
+            <div
+              role="group"
+              aria-label="Show"
+              className="inline-flex shrink-0 rounded-full border border-border bg-secondary/60 p-1"
+            >
+              {(
+                [
+                  ["all", "All songs"],
+                  ["missing", `Not in folder (${missingIds.length})`],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={show === value}
+                  onClick={() => setShow(value)}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                    show === value
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {progress ? (
+              <div className="flex min-w-0 items-center gap-3">
+                <p
+                  role="status"
+                  className="flex min-w-0 items-center gap-2 text-xs text-foreground"
+                >
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                  <span className="truncate">
+                    Downloading {Math.min(progress.done + 1, progress.total)} of {progress.total}…
+                  </span>
+                </p>
+                <button
+                  type="button"
+                  onClick={onStop}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
+                >
+                  <Square className="h-3 w-3" />
+                  Stop
+                </button>
+              </div>
+            ) : missingIds.length > 0 ? (
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => tickAll(tickedCount < missingIds.length)}
+                  className="text-xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  {tickedCount < missingIds.length ? "Tick all" : "Untick all"}
+                </button>
+                <button
+                  type="button"
+                  disabled={tickedCount === 0}
+                  onClick={() => onDownloadAll(ticked)}
+                  title={`Find each ticked song on YouTube and save it into ${where}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {tickedCount > 0 ? `Download ${countSongs(tickedCount)}` : "Download"}
+                </button>
+              </div>
+            ) : (
+              <p className="flex items-center gap-1.5 text-xs font-medium text-primary">
+                <CheckCircle2 className="h-4 w-4" />
+                Every song is in {where}
+              </p>
+            )}
+          </div>
+        )}
+        {!running && (toCheck > 0 || failed > 0) && (
+          <p className="border-b border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
+            {[
+              toCheck > 0 &&
+                `${countSongs(toCheck)} to check (no YouTube upload was surely the same recording)`,
+              failed > 0 && `${failed} failed`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            . Click a song to choose its YouTube upload yourself.
           </p>
         )}
 
@@ -190,9 +454,33 @@ export function SpotifyPlaylistPanel({
           <ol className="max-h-[26rem] divide-y divide-border/60 overflow-y-auto">
             {shown.map(({ track, index }) => {
               const active = track.id === activeTrackId;
-              const downloaded = downloadedIds.has(track.id);
+              const here = inFolder(track.id);
+              const mark = markFor(
+                statusOf(track.id),
+                here,
+                !folder && downloadedIds.has(track.id),
+              );
               return (
-                <li key={`${index}-${track.id}`}>
+                <li key={`${index}-${track.id}`} className="flex items-center">
+                  {found && (
+                    <span className="flex w-10 shrink-0 justify-end">
+                      {!here && (
+                        <input
+                          type="checkbox"
+                          checked={isTicked(track.id)}
+                          disabled={running}
+                          onChange={() =>
+                            setChoices((current) => ({
+                              ...current,
+                              [track.id]: !isTicked(track.id),
+                            }))
+                          }
+                          aria-label={`Download “${track.title}”`}
+                          className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-default"
+                        />
+                      )}
+                    </span>
+                  )}
                   <button
                     type="button"
                     onClick={() => onPick(track)}
@@ -201,13 +489,14 @@ export function SpotifyPlaylistPanel({
                       track.title,
                       track.artists && `by ${track.artists}`,
                       track.duration != null && formatDuration(track.duration),
-                      downloaded && "downloaded",
+                      mark?.detail,
                     ]
                       .filter(Boolean)
                       .join(", ")}
                     title="Find this song on YouTube"
                     className={cn(
-                      "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
+                      "flex min-w-0 flex-1 items-center gap-3 py-2.5 pr-4 text-left transition-colors",
+                      found ? "pl-3" : "pl-4",
                       active ? "bg-primary/5" : "hover:bg-secondary/40",
                     )}
                   >
@@ -232,10 +521,16 @@ export function SpotifyPlaylistPanel({
                         {track.artists}
                       </span>
                     </span>
-                    {downloaded && (
-                      <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-primary">
-                        <CheckCircle2 className="h-4 w-4" />
-                        <span className="hidden sm:inline">Downloaded</span>
+                    {mark && (
+                      <span
+                        title={mark.detail}
+                        className={cn(
+                          "inline-flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums",
+                          mark.className,
+                        )}
+                      >
+                        <mark.Icon className={cn("h-4 w-4", mark.spin && "animate-spin")} />
+                        <span className="hidden sm:inline">{mark.text}</span>
                       </span>
                     )}
                     {track.duration != null && (
@@ -262,7 +557,9 @@ export function SpotifyPlaylistPanel({
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">
             {tracks.length === 0
               ? `This ${kind} has no songs Spotify shares.`
-              : `No songs match “${filter.trim()}”.`}
+              : show === "missing" && missingIds.length === 0
+                ? `Every song is in ${where}.`
+                : `No songs match “${filter.trim()}”.`}
           </p>
         ) : null}
 
@@ -270,6 +567,12 @@ export function SpotifyPlaylistPanel({
           <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
             Spotify shares only the first 100 songs of a playlist. For a later one, copy its link in
             Spotify (Share → Copy Song Link) and paste it in the search box.
+          </p>
+        )}
+        {playlist && !folder && canChooseFolder && tracks.length > 0 && (
+          <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+            Choose a folder under <span className="font-medium text-foreground">Save to</span>{" "}
+            (above) to see which of these songs you already have — and download the rest in one go.
           </p>
         )}
       </div>

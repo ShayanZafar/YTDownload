@@ -17,6 +17,8 @@ import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { useStoredValue } from "@/hooks/use-stored-value";
 import { useSaveSettings } from "@/hooks/use-save-settings";
+import { SONGS_IN_FOLDER_KEY, useSongsInFolder } from "@/hooks/use-songs-in-folder";
+import { useDownloadAll, type DownloadAllSummary } from "@/hooks/use-download-all";
 import {
   asLink,
   formatBytes,
@@ -41,6 +43,7 @@ import { cn } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { api, buildDownloadUrl, type DownloadFormat } from "@shared/routes";
+import { spotifyFileName } from "@shared/spotify-names";
 import {
   SAME_LENGTH_SECONDS,
   type SearchResult,
@@ -110,6 +113,11 @@ type Selected = {
   duration?: number | null;
   /** The Spotify song it was found for, kept with the download in the history. */
   spotifyId?: string;
+  /**
+   * The name to save it under unless renamed: "Artist - Title" for a Spotify
+   * song (rather than the YouTube video's title).
+   */
+  fileTitle?: string;
 };
 
 // A download started from this page that hasn't shown up in the history yet.
@@ -134,6 +142,30 @@ type DownloadRequest = {
   spotifyId?: string;
 };
 
+// What "Download all" says when it's over.
+function downloadAllToast(
+  { saved, check, failed, stopped, problem }: DownloadAllSummary,
+  folder: string | null,
+) {
+  const savedText = `${saved} ${saved === 1 ? "song" : "songs"}`;
+  if (problem) {
+    return { title: "Downloads stopped", description: problem, variant: "destructive" as const };
+  }
+  const left = [check > 0 && `${check} to check`, failed > 0 && `${failed} failed`]
+    .filter(Boolean)
+    .join(", ");
+  return {
+    title: stopped
+      ? "Downloads stopped"
+      : saved > 0
+        ? `Saved ${savedText}${folder ? ` to “${folderName(folder)}”` : ""}`
+        : "Nothing was saved",
+    description: [stopped && `${savedText} saved.`, left && `${left} — see the playlist.`]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
 export default function Home() {
   const [text, setText] = useState("");
   const [mode, setMode] = useStoredChoice<InputMode>("input-mode", inputModes, "link");
@@ -156,6 +188,20 @@ export default function Home() {
   const playlist = useSpotifyPlaylist(playlistLink);
   // The playlist song being looked for on YouTube.
   const [pendingTrackId, setPendingTrackId] = useState<string>();
+  // With a "Save to" folder: which of the playlist's songs are in it already.
+  const folderSongs = useSongsInFolder(playlistLink !== null ? saveTo.folder : null, playlist.data);
+  // "Download all": the playlist's missing songs, found and saved one by one.
+  const downloadAll = useDownloadAll({
+    onSaved: () => void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] }),
+    onDone: (summary) => {
+      void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
+      if (summary.problem) void saveTo.refresh();
+      toast(downloadAllToast(summary, saveTo.folder));
+    },
+  });
+  const { reset: resetDownloadAll } = downloadAll;
+  // Another playlist (or none): the last run's marks no longer apply.
+  useEffect(() => resetDownloadAll(), [playlistLink, resetDownloadAll]);
 
   const {
     mutate: fetchInfo,
@@ -229,15 +275,16 @@ export default function Home() {
 
   // Leaving the page cancels saves into the folder (the app stops when the page
   // goes away), so ask first — the browser shows its own "Leave site?" prompt.
+  const isBusySaving = isSaving || downloadAll.running;
   useEffect(() => {
-    if (!isSaving) return;
+    if (!isBusySaving) return;
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = ""; // older browsers need this too
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [isSaving]);
+  }, [isBusySaving]);
 
   // After picking a search result, bring the preview card (with its Download
   // button) into view — it sits above the results list.
@@ -336,6 +383,7 @@ export default function Home() {
       channel: result.channel,
       duration: result.duration,
       spotifyId: song?.id,
+      fileTitle: song ? spotifyFileName(song) : undefined,
     });
     setScrollRequest((n) => n + 1);
   };
@@ -385,6 +433,7 @@ export default function Home() {
       });
       toast({ title: `Saved to “${folderName(saved.folder)}”`, description: saved.path });
       void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] });
+      void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
     } catch (err) {
       if (controller.signal.aborted) {
         toast({ title: "Download cancelled" });
@@ -419,7 +468,7 @@ export default function Home() {
     const request = {
       url: selected.url,
       format,
-      name: fileName ?? undefined,
+      name: fileName ?? selected.fileTitle,
       spotifyId: selected.spotifyId,
     };
     if (!startDownload(event, selectedHref, request)) return;
@@ -434,7 +483,7 @@ export default function Home() {
 
   const selectedHref = selected
     ? buildDownloadUrl(selected.url, format, {
-        name: fileName ?? undefined,
+        name: fileName ?? selected.fileTitle,
         spotifyId: selected.spotifyId,
       })
     : "";
@@ -565,6 +614,21 @@ export default function Home() {
           activeTrackId={isSearching ? pendingTrackId : (spotify?.id ?? selected?.spotifyId)}
           isSearching={isSearching}
           downloadedIds={downloadedSpotifyIds}
+          folder={
+            saveTo.folder
+              ? {
+                  path: saveTo.folder,
+                  songs: folderSongs.data,
+                  isChecking: folderSongs.isFetching,
+                  error: folderSongs.error,
+                }
+              : undefined
+          }
+          canChooseFolder={saveTo.settings?.canSaveToFolder === true}
+          statuses={downloadAll.statuses}
+          progress={downloadAll.progress}
+          onDownloadAll={(songs) => void downloadAll.start(songs, format)}
+          onStop={downloadAll.stop}
           onPick={findPlaylistSong}
           onRefresh={() => void playlist.refetch()}
           onClose={() => setPlaylistLink(null)}
@@ -602,7 +666,7 @@ export default function Home() {
                 <div className="w-full md:w-auto">
                   <RenameableTitle
                     key={selected.url}
-                    title={selected.title}
+                    title={selected.fileTitle ?? selected.title}
                     fileName={fileName}
                     extension={isOriginal ? ".opus" : ".mp3"}
                     extensionHint={
