@@ -68,8 +68,11 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── routes.ts              # Typed API route definitions
 │   ├── filename.ts            # safeFileName(): download names Windows accepts
 │   └── spotify-names.ts       # cleanTrackTitle(), spotifyFileName(): "Artist - Title"
-├── script/
-│   └── build.ts               # Production build script
+├── scripts/
+│   ├── build.ts               # Production build (npm run build)
+│   └── windows/               # Double-click helpers: start, stop, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
+├── docs/
+│   └── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
 ├── tailwind.config.ts         # Tailwind theme configuration
 ├── vite.config.ts             # Vite configuration
 ├── tests/                     # unit, api (Vitest) and browser (Playwright) tests
@@ -534,6 +537,8 @@ None are required. To set any, put them in a `.env` file in the project root (co
 
 The app runs natively on Windows — no WSL or Git Bash needed. The npm scripts are cross-platform (`cross-env`), the server reads `.env` itself, and the Windows build of yt-dlp is a standalone `.exe`, so **Python is not required**.
 
+To just use the app, double-click `scripts\windows\start.cmd`: it checks for Node.js, runs the install below when needed (the first time, or when `package-lock.json` has changed since), starts `npm run dev` and opens the browser. `stop.cmd`, `update-yt-dlp.cmd` and `autostart-on.cmd`/`autostart-off.cmd` sit next to it — see [Running the app](docs/run/README.md). The logic is in `scripts/windows/app.ps1`, written for Windows PowerShell 5.1 and kept plain ASCII (5.1 reads a script without a byte-order mark in the system code page); `.gitattributes` keeps the `.cmd` and `.ps1` files' Windows line endings.
+
 ### Prerequisites — install once
 
 ```powershell
@@ -582,7 +587,7 @@ npm start                        # serves dist/ on http://localhost:5000
 | Script          | What it does                                                                      |
 | --------------- | --------------------------------------------------------------------------------- |
 | `npm run dev`   | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode. |
-| `npm run build` | Runs `script/build.ts` to bundle the client (Vite) and the server (esbuild).      |
+| `npm run build` | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).     |
 | `npm start`     | Runs the production build from `dist/index.cjs` (production mode is baked in).    |
 | `npm run check` | Type-checks the entire project with `tsc`.                                        |
 
@@ -754,7 +759,7 @@ A typical flow:
 3. Start the server: `npm start`.
 4. Point your domain / load balancer at the host's exposed port.
 
-> The app has no login. Don't expose it on the public internet as-is — anyone who can reach it can use it. For access from your own devices, a private network like Tailscale is the simple option. Also note YouTube often blocks downloads from data-centre IP addresses, so hosted copies tend to break.
+> The app has no login. Don't expose it on the public internet as-is — anyone who can reach it can use it. For access from your own devices, a private network like Tailscale is the simple option ([Using it from your phone](docs/run/README.md#using-it-from-your-phone)). Also note YouTube often blocks downloads from data-centre IP addresses, so hosted copies tend to break.
 
 > Serverless platforms (e.g. Vercel, Netlify Functions) are **not recommended** because the audio download endpoint streams long-lived responses, which conflicts with most serverless function time limits.
 

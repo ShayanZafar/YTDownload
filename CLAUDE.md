@@ -3,8 +3,9 @@
 Small full-stack app: paste a YouTube URL (or search for a song, paste a Spotify song link, or pick
 songs from a Spotify playlist — with a Save to folder, it shows which are already there and downloads
 the rest), preview it, download the audio track. Developed and run locally on Windows (it also works on
-macOS/Linux). `README.md` is the user guide, `TECHNICAL.md` has architecture, setup and
-deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
+macOS/Linux). `README.md` is the user guide, `docs/run/README.md` says how to run it (scripts,
+terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment details, and
+`LEARNING.md` maps the stack onto .NET concepts.
 
 ## Stack
 
@@ -78,12 +79,19 @@ deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 - `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
   Extractions in the browser: word/partial matching, autocomplete suggestions (combobox; picking one
   filters to that exact title), date ranges, highlighting; the list pages 25 at a time
+- `scripts/build.ts` — the production build (`npm run build`). `scripts/windows/` — double-click
+  helpers for running the app (`start.cmd`, `stop.cmd`, `update-yt-dlp.cmd`, `autostart-on/off.cmd`),
+  all thin wrappers around `app.ps1`. Keep `app.ps1` Windows PowerShell 5.1-compatible and plain
+  ASCII, with CRLF line endings (`.gitattributes`; `tests/unit/windows-scripts.test.ts` checks).
+  `stop` only kills the app's own process tree: from the server's `node.exe` up through its
+  launchers (npm, `cross-env`, `start.cmd`), never the terminal, editor or Explorer above them
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
   (Playwright, in Chrome and WebKit; Firefox on request)
 
 ## Commands
 
-- `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running)
+- `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
+  `scripts\windows\start.cmd` does the same with install checks and opens the browser
 - `npm run check` — type-check
 - `npx vitest run tests/unit` — fast unit tests
 - `npx vitest run tests/api` — end-to-end API tests (needs internet)
