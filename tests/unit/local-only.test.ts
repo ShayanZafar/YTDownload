@@ -54,12 +54,16 @@ describe("isSameOriginRequest", () => {
 });
 
 describe("localOnly", () => {
-  const run = (req: Request) => {
+  const run = (req: Request, notLocal?: string) => {
     const res = { status: vi.fn(), json: vi.fn() };
     res.status.mockReturnValue(res);
     const next = vi.fn();
-    localOnly()(req, res as unknown as Response, next);
-    return { status: res.status.mock.calls[0]?.[0], next: next.mock.calls.length > 0 };
+    localOnly(notLocal)(req, res as unknown as Response, next);
+    return {
+      status: res.status.mock.calls[0]?.[0],
+      next: next.mock.calls.length > 0,
+      message: res.json.mock.calls[0]?.[0]?.message,
+    };
   };
 
   it("lets the app's own page on this computer through", () => {
@@ -68,16 +72,36 @@ describe("localOnly", () => {
     expect(run(request({ method: "PUT", headers: json })).next).toBe(true);
   });
 
+  it("lets the page's music player through: a plain GET from an audio element, with no Origin", () => {
+    const audio = { "sec-fetch-site": "same-origin", "sec-fetch-dest": "audio", range: "bytes=0-" };
+    expect(run(request({ headers: audio })).next).toBe(true);
+    // Another website's page playing the same address is turned away.
+    expect(run(request({ headers: { ...audio, "sec-fetch-site": "cross-site" } })).status).toBe(
+      403,
+    );
+  });
+
+  it("tells another device why not, in the route's own words", () => {
+    const phone = request({ remoteAddress: "192.168.1.20" });
+    expect(run(phone).message).toMatch(/saving into a folder only works/i);
+    expect(run(phone, "Songs play only on the computer.")).toMatchObject({
+      status: 403,
+      message: "Songs play only on the computer.",
+    });
+  });
+
   it("turns away other devices and other websites", () => {
-    expect(run(request({ remoteAddress: "10.0.0.5" }))).toEqual({ status: 403, next: false });
-    expect(run(request({ headers: { "sec-fetch-site": "cross-site" } }))).toEqual({
+    expect(run(request({ remoteAddress: "10.0.0.5" }))).toMatchObject({ status: 403, next: false });
+    expect(run(request({ headers: { "sec-fetch-site": "cross-site" } }))).toMatchObject({
       status: 403,
       next: false,
     });
   });
 
   it("only takes changes sent as JSON", () => {
-    expect(run(request({ method: "POST", headers: { "content-type": "text/plain" } }))).toEqual({
+    expect(
+      run(request({ method: "POST", headers: { "content-type": "text/plain" } })),
+    ).toMatchObject({
       status: 415,
       next: false,
     });

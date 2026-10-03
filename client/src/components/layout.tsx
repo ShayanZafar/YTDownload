@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { Headphones } from "lucide-react";
 import { Link } from "wouter";
+import { PlayerBar } from "@/components/player-bar";
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
@@ -34,6 +35,8 @@ export function Layout({ children }: { children: ReactNode }) {
           <p>Designed for pure utility. Extracts audio in highest available quality.</p>
         </div>
       </footer>
+
+      <PlayerBar />
     </div>
   );
 }

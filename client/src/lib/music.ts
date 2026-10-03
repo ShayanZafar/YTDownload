@@ -1,0 +1,177 @@
+/**
+ * The music player's songs, as plain data: the songs in the "Save to" folder
+ * (played through the app, on the computer it runs on) and songs picked on
+ * this device (played straight from it — they never leave it). Sorting and
+ * filtering them, and which song comes next.
+ */
+import { api, buildUrl } from "@shared/routes";
+import { AUDIO_TYPES, audioTypeOf, songNameOf } from "@shared/audio-types";
+import { musicLibrarySchema, type MusicLibrary, type MusicTrack } from "@shared/schema";
+import { searchableText } from "@/lib/history-filter";
+import { requestJson } from "@/lib/save-to-folder";
+
+/** A song the player can play. */
+export type PlayerTrack = {
+  /** Unique among the player's songs. */
+  key: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  /** Length in seconds, when known. */
+  duration: number | null;
+  /** Its file: where it is in the folder, or its name. */
+  fileName: string;
+  /** When it arrived (ms since 1970), for "Recently added". */
+  addedAt: number;
+  /** What to ask `canPlayType()` about it ("" when the kind of file is unknown). */
+  check: string;
+} & (
+  | { source: "folder"; id: string }
+  | {
+      source: "device";
+      file: File;
+      /** False until its tags have been read (the title is the file name until then). */
+      tagsRead: boolean;
+    }
+);
+
+// --- The "Save to" folder's songs --------------------------------------------------
+
+/** The songs in the "Save to" folder (a browser on the computer running the app only). */
+export function fetchMusicLibrary(signal?: AbortSignal): Promise<MusicLibrary> {
+  return requestJson(musicLibrarySchema, api.music.list.path, { signal });
+}
+
+export function folderTrack(track: MusicTrack): PlayerTrack {
+  return {
+    key: `folder:${track.id}`,
+    source: "folder",
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    album: track.album,
+    duration: track.duration,
+    fileName: track.path,
+    addedAt: Date.parse(track.addedAt) || 0,
+    check: audioTypeOf(track.path)?.check ?? "",
+  };
+}
+
+/** A folder song's file, untouched. */
+export const folderSongUrl = (id: string) => buildUrl(api.music.audio.path, { id });
+/** A folder song converted to FLAC by the app (lossless), for a browser that can't play the file. */
+export const folderSongFlacUrl = (id: string) => buildUrl(api.music.flac.path, { id });
+/** A folder song's cover picture (the address answers 204 when there's none). */
+export const folderSongCoverUrl = (id: string) => buildUrl(api.music.cover.path, { id });
+
+// --- Songs picked on this device ----------------------------------------------------------
+
+/** What the file picker offers: audio files, plus the kinds a phone may not know are audio. */
+export const AUDIO_FILE_ACCEPT = ["audio/*", ...Object.keys(AUDIO_TYPES)].join(",");
+
+/** Is this picked file a song? */
+export const isAudioFile = (file: File) =>
+  audioTypeOf(file.name) !== undefined || file.type.startsWith("audio/");
+
+/** A song picked on this device, named after its file until its tags are read. */
+export function deviceTrack(file: File): PlayerTrack {
+  // Picked with its folder: "Music/Queen/Bohemian Rhapsody.mp3".
+  const fileName = file.webkitRelativePath || file.name;
+  return {
+    key: `device:${fileName}:${file.size}:${file.lastModified}`,
+    source: "device",
+    file,
+    tagsRead: false,
+    title: songNameOf(file.name),
+    artist: null,
+    album: null,
+    duration: null,
+    fileName,
+    addedAt: file.lastModified,
+    check: audioTypeOf(file.name)?.check ?? (file.type.startsWith("audio/") ? file.type : ""),
+  };
+}
+
+// --- Sorting and filtering ----------------------------------------------------------
+
+export const musicSorts = ["added", "title", "artist"] as const;
+export type MusicSort = (typeof musicSorts)[number];
+
+export const musicSortLabels: Record<MusicSort, string> = {
+  added: "Recently added",
+  title: "Title",
+  artist: "Artist",
+};
+
+const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+const compareText = (a: string | null, b: string | null) =>
+  // Songs with nothing to sort by go last.
+  a === b ? 0 : a === null ? 1 : b === null ? -1 : collator.compare(a, b);
+
+/** The songs in this order: newest first, by title, or by artist (then album, then title). */
+export function sortTracks(tracks: readonly PlayerTrack[], sort: MusicSort): PlayerTrack[] {
+  const byTitle = (a: PlayerTrack, b: PlayerTrack) => collator.compare(a.title, b.title);
+  const compare: Record<MusicSort, (a: PlayerTrack, b: PlayerTrack) => number> = {
+    added: (a, b) => b.addedAt - a.addedAt || byTitle(a, b),
+    title: (a, b) => byTitle(a, b) || compareText(a.artist, b.artist),
+    artist: (a, b) =>
+      compareText(a.artist, b.artist) || compareText(a.album, b.album) || byTitle(a, b),
+  };
+  return [...tracks].sort(compare[sort]);
+}
+
+/** The songs with every word typed in their title, artist, album or file name (partial words too). */
+export function filterTracks(tracks: readonly PlayerTrack[], query: string): PlayerTrack[] {
+  const words = searchableText(query).split(" ").filter(Boolean);
+  if (words.length === 0) return [...tracks];
+  return tracks.filter((track) => {
+    const text = searchableText(
+      [track.title, track.artist, track.album, track.fileName].filter(Boolean).join(" "),
+    );
+    return words.every((word) => text.includes(word));
+  });
+}
+
+// --- What plays next ------------------------------------------------------------------
+
+export const repeatModes = ["off", "all", "one"] as const;
+export type Repeat = (typeof repeatModes)[number];
+
+/**
+ * The songs' places in the queue in a random order, `first` first (the song
+ * that's playing, or was clicked). `random` is there for tests.
+ */
+export function shuffledOrder(length: number, first: number, random = Math.random): number[] {
+  const rest = Array.from({ length }, (_, i) => i).filter((i) => i !== first);
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    [rest[i], rest[j]] = [rest[j], rest[i]];
+  }
+  return first >= 0 && first < length ? [first, ...rest] : rest;
+}
+
+/**
+ * Where to go after the song at `position` in the play order: when it ends
+ * on its own, or Next is pressed (`skip`). Null means stop. Repeat one plays
+ * the song again when it ends, but Next still moves on.
+ */
+export function nextPosition(
+  position: number,
+  length: number,
+  repeat: Repeat,
+  { skip = false } = {},
+): number | null {
+  if (length === 0) return null;
+  if (repeat === "one" && !skip) return position;
+  if (position + 1 < length) return position + 1;
+  return repeat === "off" ? null : 0;
+}
+
+/** Where Previous goes: the song before (round to the last one when repeating), else this one. */
+export function previousPosition(position: number, length: number, repeat: Repeat): number {
+  if (position > 0) return position - 1;
+  return repeat !== "off" && length > 0 ? length - 1 : 0;
+}
+
+/** Previous restarts the song once it has played this long (seconds), like most players. */
+export const RESTART_AFTER_SECONDS = 3;

@@ -39,7 +39,7 @@ async function errorFrom(res: Response): Promise<ApiError> {
   );
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
   schema: z.ZodType<T>,
   url: string,
   init: RequestInit & { json?: unknown } = {},

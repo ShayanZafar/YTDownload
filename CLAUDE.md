@@ -2,10 +2,11 @@
 
 Small full-stack app: paste a YouTube URL (or search for a song, paste a Spotify song link, or pick
 songs from a Spotify playlist — with a Save to folder, it shows which are already there and downloads
-the rest), preview it, download the audio track. Developed and run locally on Windows (it also works on
-macOS/Linux). `README.md` is the user guide, `docs/run/README.md` says how to run it (scripts,
-terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment details, and
-`LEARNING.md` maps the stack onto .NET concepts.
+the rest), preview it, download the audio track — and play your music: the Save to folder's songs
+on the computer running the app, or songs picked on a phone. Developed and run locally on Windows
+(it also works on macOS/Linux). `README.md` is the user guide, `docs/run/README.md` says how to run
+it (scripts, terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
+details, and `LEARNING.md` maps the stack onto .NET concepts.
 
 ## Stack
 
@@ -17,7 +18,8 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
 - **YouTube:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads into
   `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed)
 - **MP3:** `ffmpeg-static` (ffmpeg fetched by `npm install`; `FFMPEG_BIN` overrides it)
-- **Tags:** `music-metadata` reads the audio files' tags in the Save to folder (`server/library.ts`)
+- **Tags:** `music-metadata` reads the audio files' tags in the Save to folder (`server/library.ts`),
+  and — its browser build, loaded on demand — the tags of songs picked on a phone for the player
 
 ## Layout
 
@@ -26,7 +28,8 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/playlist`,
   `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
-  `POST /api/folders/songs`, `GET /api/downloads`
+  `POST /api/folders/songs`, `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`),
+  `GET /api/downloads`
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
   replacing a file (`Song (1).mp3`); streams JSON-line progress (`saveEventSchema`)
@@ -34,7 +37,14 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
 - `server/library.ts` — which of a playlist's songs are in the Save to folder (`POST /api/folders/songs`):
   walks it and its subfolders (≤6 deep, ≤`MAX_SONG_FILES`), reads tags (cached per file until it
   changes), and `findSongs()` matches by the Spotify id in the tags, else title + an artist (tags, file
-  name, folder names), else an exact file name with no contradicting artist tag. Pure parts unit-tested
+  name, folder names), else an exact file name with no contradicting artist tag. Pure parts unit-tested.
+  `readFolderTags()` (the scan + tags) also feeds the player; `oggDuration()` reads an Ogg file's
+  length from its last page (music-metadata would read the whole file)
+- `server/music.ts` — the music player's side of the Save to folder (`GET /api/music…`, local-only):
+  the songs by id (`musicTrackId()`: the place in the folder, hashed — the page never sends a path),
+  `readCover()`, and `convertedForBrowser()`: a song the browser can't play, as FLAC (lossless) in
+  `PLAYER_CACHE_DIR` (temp folder, ≤2 GB, oldest-played go first); requests share one conversion,
+  and when all of them are gone ffmpeg is killed and the `.part` deleted
 - `server/folders.ts` — the folder browser (list/make folders, quick links — on Windows from the
   registry's User Shell Folders — writable check, `createNewFile()`, `availablePath()`)
 - `server/local-only.ts` — `localOnly()`: folder routes answer only loopback, same-origin, JSON
@@ -54,7 +64,8 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
 - `shared/` — schema and API contracts shared by client and server; `shared/filename.ts` has
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
-  default name of any download found from Spotify)
+  default name of any download found from Spotify); `shared/audio-types.ts` has `AUDIO_TYPES` (the
+  audio files the app knows: MIME type, and what to ask `canPlayType()`)
 - `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
   components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
@@ -79,6 +90,12 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
 - `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
   Extractions in the browser: word/partial matching, autocomplete suggestions (combobox; picking one
   filters to that exact title), date ranges, highlighting; the list pages 25 at a time
+- The music player: `hooks/use-player.tsx` (`PlayerProvider` in `App.tsx`: one `<audio>` for the
+  page, queue/shuffle/repeat, the FLAC fallback for folder songs, Media Session) and
+  `components/player-bar.tsx` (fixed to the bottom; rendered by `layout.tsx`). `components/music-library.tsx`
+  is "Your music": the folder's songs (`hooks/use-folder-music.ts`) or songs picked on the device
+  (`hooks/use-device-music.ts`, `lib/device-music.ts`: tags read in the page, played from blob URLs);
+  `lib/music.ts` has the pure parts (songs, sort/filter, play order; unit-tested)
 - `scripts/build.ts` — the production build (`npm run build`). `scripts/windows/` — double-click
   helpers for running the app (`start.cmd`, `stop.cmd`, `update-yt-dlp.cmd`, `autostart-on/off.cmd`),
   all thin wrappers around `app.ps1`. Keep `app.ps1` Windows PowerShell 5.1-compatible and plain
@@ -86,7 +103,8 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
   `stop` only kills the app's own process tree: from the server's `node.exe` up through its
   launchers (npm, `cross-env`, `start.cmd`), never the terminal, editor or Explorer above them
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
-  (Playwright, in Chrome and WebKit; Firefox on request)
+  (Playwright, in Chrome and WebKit; Firefox on request). The player's tests (`music*.test.ts`,
+  `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed
 
 ## Commands
 
@@ -104,7 +122,8 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
 ## Local setup (Windows)
 
 - No setup beyond `npm install`. `.env` is optional (`PORT`, `HOST`, `HISTORY_FILE`, `SETTINGS_FILE`,
-  `FFMPEG_BIN`); shell variables override it. Delete `data/history.json` to clear the history.
+  `FFMPEG_BIN`, `PLAYER_CACHE_DIR`); shell variables override it. Delete `data/history.json` to clear
+  the history.
 - The API tests point `HISTORY_FILE`/`SETTINGS_FILE` at a temp folder, and the Playwright config starts its
   own server on port 5099 with a temp history and settings, so tests never touch the real ones.
 - In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
@@ -160,6 +179,16 @@ terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
   path and its tests are unchanged. Anything that reads or writes the user's disk must sit behind
   `localOnly()`. A save's lifetime is its connection: aborting the fetch (Cancel, closing the tab)
   kills the pipeline and deletes the `.part` file, so re-test cancel paths after edits here too.
+- Music player: songs play untouched (the browser decodes the file, like VLC). Start a song inside the
+  click that asked for it — `player.play()` calls `audio.play()` synchronously; phones refuse `play()`
+  outside a tap, so don't move it into an effect — and keep the one `<audio>` element, which may then
+  move on by itself. The Save to folder's songs are local-only (`/api/music…` behind `localOnly()`)
+  and asked for by id, never by path. Songs picked on another device never reach the server. A
+  folder song the browser can't play (`canPlayType()` says "", or it fails to load) is converted to
+  FLAC; re-test skipping during a conversion after edits (ffmpeg must stop, no `.part` left).
+  Playwright's WebKit on Windows plays media through Media Foundation: opening a song blocks the page
+  for several seconds (give such clicks a long timeout), it can't play blob: URLs, and it plays WMA
+  but not Ogg/Opus or AIFF — `player.spec.ts` asks the browser instead of assuming.
 - Every feature must work in current Chrome, Edge, Firefox and Safari (build target: Safari 16+). No
   browser-only APIs; no regex lookbehind (Safari < 16.4 throws) and no `for await` over streams —
   `tests/unit/browser-support.test.ts` checks. Playwright runs every test in Chrome and WebKit, and

@@ -114,6 +114,12 @@ describe("spotifyIdsInTags", () => {
 });
 
 describe("tagsFrom", () => {
+  const noNumbers = {
+    track: { no: null, of: null },
+    disk: { no: null, of: null },
+    movementIndex: { no: null, of: null },
+  };
+
   it("joins the artists and album artist, and reads the Spotify song", () => {
     expect(
       tagsFrom({
@@ -121,17 +127,32 @@ describe("tagsFrom", () => {
           title: " Get Lucky ",
           artists: ["Daft Punk", "Pharrell Williams"],
           albumartist: "Daft Punk",
-          track: { no: null, of: null },
-          disk: { no: null, of: null },
-          movementIndex: { no: null, of: null },
+          album: "Random Access Memories ",
+          ...noNumbers,
         },
         native: { "ID3v2.3": [{ id: "TXXX:spotify_id", value: ids.getLucky }] },
+        format: { duration: 248.4 },
       }),
     ).toEqual({
       title: "Get Lucky",
       artist: "Daft Punk, Pharrell Williams / Daft Punk",
       spotifyIds: [ids.getLucky],
+      // What the music player shows.
+      trackArtist: "Daft Punk, Pharrell Williams",
+      album: "Random Access Memories",
+      duration: 248.4,
     });
+  });
+
+  it("shows the album artist when there's no artist, and no length it can't trust", () => {
+    const tags = tagsFrom({
+      common: { title: "Intro", albumartist: "Various Artists", ...noNumbers },
+      native: {},
+      format: { duration: Number.NaN },
+    });
+    expect(tags.trackArtist).toBe("Various Artists");
+    expect(tags.duration).toBeUndefined();
+    expect(tagsFrom({ common: noNumbers, native: {} })).toEqual({ spotifyIds: [] });
   });
 });
 

@@ -1,0 +1,179 @@
+import { test, expect, type Page } from "@playwright/test";
+import { spawn } from "child_process";
+import { promises as fs } from "fs";
+import path from "path";
+import os from "os";
+import ffmpegPath from "ffmpeg-static";
+
+// The music player, with real songs made for the test (no YouTube needed):
+// on the computer running the app it plays the Save to folder; on a phone it
+// plays songs picked on the phone, which stay there.
+//
+// Starting a song can hold up Playwright's WebKit on Windows for several
+// seconds (its media engine opens the file before letting the page go on),
+// so clicks that start one get longer to finish.
+const START_SONG = { timeout: 90_000 };
+
+/** Runs ffmpeg with `args`. */
+function ffmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(ffmpegPath!, ["-hide_banner", "-loglevel", "error", "-y", ...args], {
+      windowsHide: true,
+    });
+    let err = "";
+    child.stderr.on("data", (chunk) => (err += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg: ${err}`))));
+  });
+}
+
+/** What the player's audio element is doing. */
+const audio = (page: Page) =>
+  page.evaluate(() => {
+    const element = document.querySelector<HTMLAudioElement>("[data-testid=music-player-audio]")!;
+    return {
+      playing: !element.paused && element.currentTime > 0.2,
+      paused: element.paused,
+      src: element.currentSrc,
+      hasSource: element.hasAttribute("src"),
+      error: element.error?.code ?? null,
+    };
+  });
+
+/** Can this browser play AIFF itself? (Safari can; Chrome and WebKit on Windows can't.) */
+const playsAiff = (page: Page) =>
+  page.evaluate(() => document.createElement("audio").canPlayType("audio/aiff") !== "");
+
+let folder: string;
+let mp3: string;
+let aiff: string;
+
+test.beforeAll(async () => {
+  folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-player-test-"));
+  // A 24-bit AIFF most browsers can't play, then (newer, so listed first) an
+  // MP3 the way the app saves them, tags and all.
+  aiff = path.join(folder, "Studio Master.aiff");
+  await ffmpeg([
+    ...["-f", "lavfi", "-i", "sine=frequency=330:duration=20"],
+    ...["-c:a", "pcm_s24be", aiff],
+  ]);
+  mp3 = path.join(folder, "Test Tone.mp3");
+  await ffmpeg([
+    ...["-f", "lavfi", "-i", "sine=frequency=440:duration=20"],
+    ...["-c:a", "libmp3lame", "-b:a", "320k", "-id3v2_version", "3"],
+    ...["-metadata", "title=Test Tone", "-metadata", "artist=Sine Wave", mp3],
+  ]);
+});
+
+test.afterAll(async () => {
+  await fs.rm(folder, { recursive: true, force: true });
+});
+
+test.describe("Music player (browser)", () => {
+  test.beforeEach(async ({ request }) => {
+    await request.put("/api/settings", { data: { saveFolder: null } });
+  });
+
+  test("plays the Save to folder's songs, converting one the browser can't play", async ({
+    page,
+    request,
+  }) => {
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    await expect(library.getByText(`Songs in “${path.basename(folder)}”`)).toBeVisible();
+    const testTone = library.getByRole("button", { name: /^Play “Test Tone”, by Sine Wave, 0:20/ });
+    await expect(testTone).toBeVisible();
+    await expect(
+      library.getByRole("button", { name: /^Play “Studio Master”, 0:20/ }),
+    ).toBeVisible();
+
+    // Click a song: the player opens and plays it, as it is.
+    await testTone.click(START_SONG);
+    const player = page.getByRole("region", { name: "Music player" });
+    await expect(player.getByTestId("player-title")).toHaveText("Test Tone");
+    await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+    expect((await audio(page)).src).toMatch(/\/api\/music\/[\w-]{22}$/);
+    await expect(library.getByRole("button", { name: /^Pause “Test Tone”/ })).toBeVisible();
+
+    await player.getByRole("button", { name: "Pause" }).click();
+    await expect.poll(() => audio(page)).toMatchObject({ paused: true });
+
+    // The next song is an AIFF: the app converts it to FLAC for a browser
+    // that can't play it.
+    await player.getByRole("button", { name: "Next song" }).click(START_SONG);
+    await expect(player.getByTestId("player-title")).toHaveText("Studio Master");
+    await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+    expect((await audio(page)).src).toMatch(
+      (await playsAiff(page)) ? /\/api\/music\/[\w-]{22}$/ : /\/api\/music\/[\w-]{22}\/flac$/,
+    );
+
+    // Repeat cycles off → all → one; Close stops the song and hides the player.
+    await player.getByRole("button", { name: "Repeat: off" }).click();
+    await expect(player.getByRole("button", { name: "Repeat: all songs" })).toBeVisible();
+    await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
+    await expect(player).toBeHidden();
+    await expect.poll(() => audio(page)).toMatchObject({ paused: true, hasSource: false });
+  });
+
+  test("on a phone, plays songs picked on the phone — nothing is uploaded", async ({
+    page,
+    browserName,
+  }) => {
+    // What the app answers a browser on another device.
+    await page.route("**/api/settings", (route) =>
+      route.fulfill({ json: { saveFolder: null, canSaveToFolder: false } }),
+    );
+    const sent: string[] = [];
+    page.on("request", (req) => {
+      if (req.method() !== "GET" || req.url().includes("/api/music")) sent.push(req.url());
+    });
+
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    await expect(library.getByText(/play songs stored on this device/i)).toBeVisible();
+    await library.getByLabel("Choose songs").setInputFiles([mp3, aiff]);
+
+    // The tags are read in the browser; a song it can't play is marked.
+    const testTone = library.getByRole("button", { name: /^Play “Test Tone”, by Sine Wave/ });
+    await expect(testTone).toBeVisible();
+    const studioMaster = library.getByRole("button", { name: /“Studio Master”/ });
+    if (await playsAiff(page)) {
+      await expect(studioMaster).toBeEnabled();
+    } else {
+      await expect(studioMaster).toHaveAccessibleName(/can't play it/);
+      await expect(studioMaster).toBeDisabled();
+      await expect(library.getByText(/1 song can't play in this browser \(\.aiff\)/)).toBeVisible();
+    }
+
+    await testTone.click(START_SONG);
+    const player = page.getByRole("region", { name: "Music player" });
+    await expect(player.getByTestId("player-title")).toHaveText("Test Tone");
+    if (browserName === "webkit" && process.platform === "win32") {
+      // Playwright's WebKit on Windows plays media with Windows Media
+      // Foundation, which can't open a page's own files (blob: addresses) —
+      // Safari, Chrome and Firefox can. The player says so instead.
+      await expect(player.getByRole("alert")).toContainText("can't play");
+    } else {
+      await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+      expect((await audio(page)).src).toMatch(/^blob:/);
+    }
+    expect(sent).toEqual([]);
+
+    // Picked songs can be cleared.
+    await library.getByRole("button", { name: "Clear the opened songs" }).click();
+    await expect(testTone).toBeHidden();
+  });
+
+  test("the folder's songs can be filtered and put in order", async ({ page, request }) => {
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    const rows = library.getByRole("listitem");
+    await expect(rows).toHaveCount(2);
+    // Newest first, then by title.
+    await expect(rows.first()).toContainText("Test Tone");
+    await library.getByRole("combobox", { name: "Order songs by" }).selectOption("title");
+    await expect(rows.first()).toContainText("Studio Master");
+  });
+});

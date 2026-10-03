@@ -11,6 +11,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 - **Preview the video** — See the title and thumbnail before downloading, so you can confirm you've got the right one.
 - **Extract high-quality audio** — One-click download of the audio track as a 320 kbps MP3 (the highest MP3 quality), converted from the best audio stream YouTube offers for free.
 - **Browse recent extractions** — Every completed download is saved to a history list so you can quickly grab a file again later without re-pasting the URL. Cancelled or failed downloads aren't added. Search it to find a song you extracted a while ago.
+- **Play your music** — A music player on the page plays the songs in your **Save to** folder on the computer running the app, and songs stored on your phone when you use the app there. Songs play untouched, at their full quality, and keep playing while you search and download.
 
 ## Key Features
 
@@ -26,6 +27,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 | Save to a folder      | Pick a folder once in the app's folder browser and downloads go straight into it instead of the browser's downloads folder.             |
 | Any browser           | Every feature works in Chrome, Edge, Firefox and Safari.                                                                                |
 | Download history      | A persistent list of your last 1,000 extractions with one-click redownload — searchable, with suggestions as you type and date filters. |
+| Music player          | Plays your Save to folder, or a phone's own songs: shuffle, repeat, seeking, media keys. WMA and the like are converted losslessly.     |
 | Friendly errors       | Clear messages when a URL is invalid, the video can't be fetched, or the network fails.                                                 |
 | Responsive design     | Works on desktop and mobile, with a polished hero section, animated result card, and history grid.                                      |
 
@@ -43,6 +45,10 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
    - Type in **Search your extractions**. The list narrows as you type — every word must match, in any order, and partial words count ("prog ocea" finds "Progression - Ocean Green"). Pasting a YouTube link finds past downloads of that video.
    - Matching songs are suggested below the box, each listed once (with "2×" if you downloaded it more than once). Pick one — click it, or use the arrow keys and Enter — to show exactly that song; **Show everything** undoes it.
    - Use **All**, **Past week**, **Past month** or **Older** (more than 30 days ago) to narrow by date. These combine with the search.
+7. **Your music**, just above Recent Extractions, is a music player for the songs you have:
+   - On the computer running the app, it lists the songs in your **Save to** folder (subfolders too), newest first — each new download shows up there. Click a song to play the list from there, or use **Play all** and **Shuffle**; **Order** sorts by title or artist instead, and **Filter songs** finds one. No folder chosen yet? **Choose the Save to folder** opens the folder browser.
+   - On your phone (or any other device using the app), tap **Choose songs** and pick songs stored on that device — the songs you downloaded there, say. They play right there: nothing is uploaded. A desktop browser can **Open a folder** instead. The page can't keep them, so pick them again next time. (On the computer running the app, **Open songs** plays other files the same way, next to the folder's.)
+   - The player at the bottom of the page keeps playing while you search and download: play/pause, previous (or back to the start of the song), next, a seek bar, shuffle, repeat (all songs, or this one), volume, and **×** to stop. Your keyboard's media keys and Windows' media controls work too, as do a phone's lock-screen controls.
 
 ## Notes & Limitations
 
@@ -52,6 +58,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 - Spotify: song links work in the link or search box, and playlist or album links in **Spotify playlist** — not artists or podcasts, and not `spotify.link` short links (open one and copy the `open.spotify.com` address instead). No Spotify account is needed, so only public playlists can be opened (in Spotify, a playlist's **…** menu has **Make public**), and Spotify shares only the first 100 songs of a playlist this way; for a later song, paste its own link. Liked Songs isn't a playlist Spotify shares.
 - Songs downloaded for a Spotify song are named "Artist - Title" and tagged with Spotify's title and artists and the song's Spotify id — so the playlist panel recognises them in your folder even if you rename them. For other files, it goes by their names and tags, so a file called just "Track 01.mp3" with no tags can't be recognised. It looks at up to 5,000 songs in a folder (and six folders deep).
 - Every YouTube upload of a song has the same audio quality ceiling for free (about 130 kbps Opus), so for music, the artist's or label's own upload — the ones marked **Official** — is usually the cleanest source.
+- The music player plays each file as it is — the browser decodes it itself, like VLC, so it sounds the same. Browsers don't play every kind of file: on the computer running the app, a song the browser can't play (WMA, APE, WavPack, AIFF in Chrome…) is converted to FLAC first — lossless, so nothing is lost — which takes a few seconds the first time (the app keeps up to 2 GB of conversions in your temp folder). On a phone, the songs never leave it, so one the phone's browser can't play is marked instead. The **Save to** folder's songs play only on the computer running the app, never on other devices on your network.
 - The source video must be publicly accessible on YouTube (age-restricted, private, or members-only videos may fail).
 - Downloaded files are intended for personal use. Please respect YouTube's Terms of Service and the rights of content creators.
 

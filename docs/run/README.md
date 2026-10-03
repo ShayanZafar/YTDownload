@@ -43,7 +43,7 @@ npm.cmd run dev              # http://localhost:5000 — Ctrl+C stops it
 
 ## Using it from your phone
 
-The app only answers this computer until you tell it otherwise. From another device, songs download to that device; **Save to**, **In folder** and **Download all** stay on the computer running the app.
+The app only answers this computer until you tell it otherwise. From another device, songs download to that device, and the music player (**Your music**) plays the songs stored on that device; **Save to**, **In folder**, **Download all** and playing the Save to folder stay on the computer running the app.
 
 - **On the same Wi-Fi:** put `HOST=0.0.0.0` in the `.env` file (copy `.env.example` to `.env` if there isn't one), restart the app, and allow Node.js when Windows Firewall asks. Then open `http://<this PC's IP address>:5000` on the phone; `ipconfig` shows the address.
 - **From anywhere:** install [Tailscale](https://tailscale.com) (free for personal use) on this PC and the phone, signed in to the same account, and set `HOST=0.0.0.0` as above. Open `http://<this PC's Tailscale IP>:5000` — the Tailscale app shows the IP. To use the PC's Tailscale name instead of the IP, add it to `ALLOWED_HOSTS` in `.env`. Only your own devices can reach the app, and YouTube sees your home internet connection, so downloads keep working.

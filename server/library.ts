@@ -20,28 +20,13 @@
 import { promises as fs, type Dirent } from "fs";
 import path from "path";
 import type { IAudioMetadata, IOptions } from "music-metadata";
+import { AUDIO_TYPES } from "@shared/audio-types";
 import { foundByValues, type SongToFind, type SongsInFolder } from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
 import { folderError, isHiddenFolder } from "./folders";
 
-/** Files looked at as songs. */
-export const AUDIO_EXTENSIONS = new Set([
-  ".mp3",
-  ".m4a",
-  ".opus",
-  ".ogg",
-  ".oga",
-  ".flac",
-  ".wav",
-  ".wma",
-  ".aac",
-  ".mka",
-  ".webm",
-  ".aif",
-  ".aiff",
-  ".ape",
-  ".wv",
-]);
+/** Files looked at as songs: .mp3, .m4a, .opus, .flac… (see shared/audio-types.ts). */
+export const AUDIO_EXTENSIONS = new Set(Object.keys(AUDIO_TYPES));
 
 /** The most audio files looked at in one folder (a whole music library can be bigger). */
 export const MAX_SONG_FILES = 5_000;
@@ -63,13 +48,26 @@ export type SongFile = {
   artist?: string;
   /** Spotify songs named in its tags. */
   spotifyIds: string[];
+  /** For the music player: the song's own artists ("Daft Punk, Pharrell Williams"), else the album artist. */
+  trackArtist?: string;
+  album?: string;
+  /** Length in seconds, when the file says without being read all the way through. */
+  duration?: number;
 };
 
-type FileTags = Omit<SongFile, "path">;
+export type FileTags = Omit<SongFile, "path">;
 
 // --- Looking through the folder --------------------------------------------------
 
-type AudioFile = { absolute: string; relative: string; size: number; mtimeMs: number };
+export type AudioFile = {
+  absolute: string;
+  /** Where it is inside the folder: "Queen\Greatest Hits\Bohemian Rhapsody.mp3". */
+  relative: string;
+  size: number;
+  mtimeMs: number;
+  /** When it arrived: made in the folder (a copied file keeps its old change time), or changed since. */
+  addedMs: number;
+};
 
 /**
  * The audio files in `folder` and its subfolders (not hidden or system ones,
@@ -124,6 +122,7 @@ export async function findAudioFiles(
         relative: path.relative(folder, absolute),
         size: stat.size,
         mtimeMs: stat.mtimeMs,
+        addedMs: Math.max(stat.birthtimeMs || 0, stat.mtimeMs),
       });
     });
     if (entries > MAX_ENTRIES || files.length >= maxFiles) {
@@ -141,7 +140,7 @@ export async function findAudioFiles(
 // "bundler" resolution doesn't look at), so the type is spelled out here.
 type ParseFile = (filePath: string, options?: IOptions) => Promise<IAudioMetadata>;
 let parser: Promise<ParseFile> | undefined;
-const parseFile: ParseFile = async (file, options) => {
+export const parseFile: ParseFile = async (file, options) => {
   parser ??= import("music-metadata").then(
     (mm) => (mm as unknown as { parseFile: ParseFile }).parseFile,
   );
@@ -152,16 +151,59 @@ const parseFile: ParseFile = async (file, options) => {
 const tagCache = new Map<string, { size: number; mtimeMs: number; tags: Promise<FileTags> }>();
 const MAX_CACHED = 20_000;
 
-function readTags(file: AudioFile): Promise<FileTags> {
+export function readTags(file: AudioFile): Promise<FileTags> {
   const cached = tagCache.get(file.absolute);
   if (cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs) return cached.tags;
   const tags = parseFile(file.absolute, { duration: false, skipCovers: true, mkvUseIndex: true })
-    .then(tagsFrom)
+    .then(async (metadata) => {
+      const found = tagsFrom(metadata);
+      const { container, codec, sampleRate } = metadata.format;
+      // An Ogg file (.opus, .ogg) only says how long it is at its very end.
+      if (found.duration === undefined && /ogg/i.test(container ?? "")) {
+        // Opus counts in 48 kHz samples, whatever the audio's rate.
+        const rate = /opus/i.test(codec ?? "") ? 48_000 : sampleRate;
+        if (rate) found.duration = await oggDuration(file.absolute, rate).catch(() => undefined);
+      }
+      return found;
+    })
     // Unreadable or damaged: the file still counts by its name.
     .catch((): FileTags => ({ spotifyIds: [] }));
   if (tagCache.size >= MAX_CACHED) tagCache.clear();
   tagCache.set(file.absolute, { size: file.size, mtimeMs: file.mtimeMs, tags });
   return tags;
+}
+
+/** How much of an Ogg file's end is read to find its last page (a page is at most ~64 KB). */
+const OGG_TAIL_BYTES = 70_000;
+
+/**
+ * An Ogg file's length in seconds, from its last page — the position there
+ * counts samples at `rate` — or undefined if the end doesn't look like one.
+ * (music-metadata would read the whole file for this.)
+ */
+export async function oggDuration(file: string, rate: number): Promise<number | undefined> {
+  const handle = await fs.open(file, "r");
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, OGG_TAIL_BYTES);
+    const tail = Buffer.alloc(length);
+    await handle.read(tail, 0, length, size - length);
+    // The last real page ends exactly where the file does ("OggS" can turn up
+    // inside the audio too, so check each candidate from the end).
+    for (let at = tail.lastIndexOf("OggS"); at >= 0; at = tail.lastIndexOf("OggS", at - 1)) {
+      if (at + 27 > length || tail[at + 4] !== 0) continue;
+      const segments = tail[at + 26];
+      if (at + 27 + segments > length) continue;
+      let pageEnd = at + 27 + segments;
+      for (let i = 0; i < segments; i++) pageEnd += tail[at + 27 + i];
+      if (pageEnd !== length) continue;
+      const samples = Number(tail.readBigInt64LE(at + 6));
+      return samples > 0 ? samples / rate : undefined;
+    }
+    return undefined;
+  } finally {
+    await handle.close();
+  }
 }
 
 type TagValue = unknown;
@@ -208,16 +250,27 @@ export function spotifyIdsInTags(native: Record<string, { id: string; value: Tag
   return Array.from(ids);
 }
 
-/** What the matching needs from a file's tags. */
-export function tagsFrom({ common, native }: Pick<IAudioMetadata, "common" | "native">): FileTags {
+/** What the matching (and the music player) needs from a file's tags. */
+export function tagsFrom({
+  common,
+  native,
+  format,
+}: Pick<IAudioMetadata, "common" | "native"> & {
+  format?: Pick<IAudioMetadata["format"], "duration">;
+}): FileTags {
   const trackArtist = common.artists?.length ? common.artists.join(", ") : common.artist;
   const artist = [trackArtist, common.albumartist]
     .filter((a): a is string => !!a?.trim())
     .join(" / ");
+  const duration = format?.duration;
   return {
     title: common.title?.trim() || undefined,
     artist: artist || undefined,
     spotifyIds: spotifyIdsInTags(native),
+    trackArtist: trackArtist?.trim() || common.albumartist?.trim() || undefined,
+    album: common.album?.trim() || undefined,
+    duration:
+      duration !== undefined && Number.isFinite(duration) && duration > 0 ? duration : undefined,
   };
 }
 
@@ -235,13 +288,21 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return results;
 }
 
+/** The audio files in `folder` (and its subfolders), each with its tags. */
+export async function readFolderTags(
+  folder: string,
+): Promise<{ files: (AudioFile & { tags: FileTags })[]; complete: boolean }> {
+  const { files, complete } = await findAudioFiles(folder);
+  const tags = await mapLimit(files, READ_AT_ONCE, readTags);
+  return { files: files.map((file, i) => ({ ...file, tags: tags[i] })), complete };
+}
+
 /** The audio files in `folder` (and its subfolders), with their tags. */
 export async function readSongFiles(
   folder: string,
 ): Promise<{ files: SongFile[]; complete: boolean }> {
-  const { files, complete } = await findAudioFiles(folder);
-  const tags = await mapLimit(files, READ_AT_ONCE, readTags);
-  return { files: files.map((file, i) => ({ path: file.relative, ...tags[i] })), complete };
+  const { files, complete } = await readFolderTags(folder);
+  return { files: files.map((file) => ({ path: file.relative, ...file.tags })), complete };
 }
 
 // --- Matching songs to files ------------------------------------------------------

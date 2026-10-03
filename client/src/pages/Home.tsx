@@ -7,6 +7,7 @@ import { SaveToSetting } from "@/components/save-to-setting";
 import { FolderPicker } from "@/components/folder-picker";
 import { RenameableTitle } from "@/components/renameable-title";
 import { SpotifyPlaylistPanel } from "@/components/spotify-playlist";
+import { MusicLibrary } from "@/components/music-library";
 import {
   useVideoInfo,
   useRecentDownloads,
@@ -18,6 +19,7 @@ import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { useStoredValue } from "@/hooks/use-stored-value";
 import { useSaveSettings } from "@/hooks/use-save-settings";
 import { SONGS_IN_FOLDER_KEY, useSongsInFolder } from "@/hooks/use-songs-in-folder";
+import { MUSIC_KEY } from "@/hooks/use-folder-music";
 import { useDownloadAll, type DownloadAllSummary } from "@/hooks/use-download-all";
 import {
   asLink,
@@ -192,7 +194,10 @@ export default function Home() {
   const folderSongs = useSongsInFolder(playlistLink !== null ? saveTo.folder : null, playlist.data);
   // "Download all": the playlist's missing songs, found and saved one by one.
   const downloadAll = useDownloadAll({
-    onSaved: () => void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] }),
+    onSaved: () => {
+      void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] });
+      void queryClient.invalidateQueries({ queryKey: MUSIC_KEY });
+    },
     onDone: (summary) => {
       void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
       if (summary.problem) void saveTo.refresh();
@@ -434,6 +439,7 @@ export default function Home() {
       toast({ title: `Saved to “${folderName(saved.folder)}”`, description: saved.path });
       void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] });
       void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
+      void queryClient.invalidateQueries({ queryKey: MUSIC_KEY });
     } catch (err) {
       if (controller.signal.aborted) {
         toast({ title: "Download cancelled" });
@@ -944,8 +950,15 @@ export default function Home() {
         </section>
       )}
 
+      {/* The music player's songs: the Save to folder's, or ones on this device */}
+      <MusicLibrary
+        settings={saveTo.settings}
+        folder={saveTo.folder}
+        onChooseFolder={() => setChoosingFolder(true)}
+      />
+
       {/* Recent History */}
-      <section className="mt-12 max-w-4xl mx-auto w-full space-y-4">
+      <section className="max-w-4xl mx-auto w-full space-y-4">
         <div className="flex items-center gap-2 px-2">
           <History className="w-5 h-5 text-muted-foreground" />
           <h2 className="text-xl font-display font-semibold">Recent Extractions</h2>

@@ -10,6 +10,8 @@ const PORT = process.env.E2E_PORT ?? "5099";
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 const HISTORY_FILE = path.join(os.tmpdir(), `yt-audio-e2e-history-${process.pid}.json`);
 const SETTINGS_FILE = path.join(os.tmpdir(), `yt-audio-e2e-settings-${process.pid}.json`);
+// The music player's conversions (songs a browser can't play, as FLAC).
+const PLAYER_CACHE_DIR = path.join(os.tmpdir(), `yt-audio-e2e-player-${process.pid}`);
 
 // Which browser engines to test in: your installed Chrome (Blink) and WebKit
 // (the engine behind Safari) unless E2E_BROWSERS says otherwise. Firefox
@@ -60,7 +62,7 @@ export default defineConfig({
         url: BASE_URL,
         reuseExistingServer: false,
         timeout: 60_000,
-        env: { PORT, HISTORY_FILE, SETTINGS_FILE },
+        env: { PORT, HISTORY_FILE, SETTINGS_FILE, PLAYER_CACHE_DIR },
         stdout: "pipe",
         stderr: "pipe",
       },

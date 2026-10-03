@@ -39,7 +39,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── src/
 │   │   ├── components/        # UI components (the shadcn/ui ones the app uses, in components/ui)
 │   │   ├── hooks/             # Custom React hooks (API calls, remembered choices)
-│   │   ├── lib/               # Helpers (queryClient, utils, format: durations + link detection)
+│   │   ├── lib/               # Helpers (queryClient, utils, format: durations + link detection, music: the player's songs)
 │   │   ├── pages/             # Route pages (Home, NotFound)
 │   │   ├── App.tsx            # Top-level app & router
 │   │   ├── main.tsx           # React entry point
@@ -54,6 +54,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first
 │   ├── spotify.ts             # Spotify song links → title, artists, length (public embed page)
 │   ├── library.ts             # Which of a playlist's songs are in the Save to folder (tags + names)
+│   ├── music.ts               # The music player: the folder's songs by id, FLAC conversions, covers
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
 │   ├── audio.ts               # yt-dlp / ffmpeg: arguments, metadata pass, the download pipeline
 │   ├── save.ts                # POST /api/video/save — saves a download straight into the Save to folder
@@ -67,6 +68,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── schema.ts              # Zod schemas + types (history, search, settings, folders, save progress)
 │   ├── routes.ts              # Typed API route definitions
 │   ├── filename.ts            # safeFileName(): download names Windows accepts
+│   ├── audio-types.ts         # Audio files by extension: MIME type, what to ask canPlayType()
 │   └── spotify-names.ts       # cleanTrackTitle(), spotifyFileName(): "Artist - Title"
 ├── scripts/
 │   ├── build.ts               # Production build (npm run build)
@@ -160,11 +162,21 @@ Browsers always put downloads in their own downloads folder, and a web page can'
 
 **Only a browser on this computer can use it** (`server/local-only.ts`). The folder routes (`PUT /api/settings`, `/api/folders`, `/api/video/save`) answer only requests from a loopback address with no proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`), and only from the app's own page: another website's request is labelled `Sec-Fetch-Site: cross-site` (or carries a different `Origin`) and gets a `403`, and changes must be sent as JSON, which a plain HTML form on another site can't do (`415`). With `HOST=0.0.0.0`, a phone on your Wi-Fi gets `canSaveToFolder: false`: the setting is replaced by a note, and its downloads go to the phone as usual.
 
+### The music player
+
+**Your music** (`client/src/components/music-library.tsx`) lists the songs the page can play, and the player bar (`client/src/components/player-bar.tsx`) plays them. One `<audio>` element plays every song (`PlayerProvider` in `client/src/hooks/use-player.tsx`, around the whole app), so music keeps playing while you search and download. A song starts inside the click that asked for it — phones only let a page start sound on a tap — and the same element then moves on to the next song by itself.
+
+1. **The Save to folder's songs** (in a browser on the computer running the app): `GET /api/music` (`server/music.ts`) lists the folder's audio files with their tags — the same scan and tag cache as the playlist check (`readFolderTags()` in `server/library.ts`: up to 5,000 files, six folders deep) — plus each one's length, album and when it arrived (the later of the file's creation and change times, so a copied file counts from when it was copied). An Ogg file (`.opus`, as **Original audio** saves) only says how long it is on its last page, which music-metadata would read the whole file to reach, so `oggDuration()` reads just the file's end. Each song has an id — its place in the folder, hashed (`musicTrackId()`, 22 characters). The page plays `/api/music/<id>`, which the server maps back to a file the scan found (a request never names a path) and sends with `res.sendFile()`, so range requests work and the player can seek. The list is fetched again when you come back to the page and after each save into the folder (`useFolderMusic()`).
+2. **Songs a browser can't play:** the page asks `canPlayType()` about each kind of file (`AUDIO_TYPES` in `shared/audio-types.ts`). A folder song the browser says it can't play — or that fails to load anyway — is played from `/api/music/<id>/flac` instead: the server converts it with ffmpeg to FLAC (24-bit for a lossy file's decoded audio, so nothing is lost on top of the file) into a cache folder (`PLAYER_CACHE_DIR`, by default `yt-audio-player` in the system's temp folder) and sends that like any file. Requests for the same song share one conversion; if all of them go away before it's done (the song was skipped), ffmpeg is stopped and its `.part` file deleted. The cache keeps at most 2 GB, deleting the conversions played longest ago. Covers come from `/api/music/<id>/cover`: the front cover in the tags, JPEG/PNG/GIF/WebP/BMP only, sent with `X-Content-Type-Options: nosniff` (`204` when there's none).
+3. **Songs on this device** (any browser; on a phone, the only kind): **Choose songs** is a file input (`multiple`, audio types), and **Open a folder** (desktop browsers) the same with `webkitdirectory`. The files never leave the device: their tags and covers are read in the page by music-metadata's browser build (`client/src/lib/device-music.ts`, loaded only once songs are picked — Vite puts it in its own chunks), and they play from `URL.createObjectURL(file)`. A page can't open files again by itself, so they're picked again on the next visit. A song the browser can't play is marked and left out of what plays.
+4. **The player:** the play order (`shuffledOrder()`, `nextPosition()`, `previousPosition()` in `client/src/lib/music.ts`, unit-tested); shuffle and repeat (off, all, one), remembered with the volume; Previous restarting a song that has played for 3 seconds; a song that fails skipped after 2 seconds with the reason shown (unless every song failed); and the Media Session API for media keys, Windows' media overlay and phones' lock screens (where the browser has it). Phones get no volume slider: they use their buttons (and iPhones ignore a page's volume).
+
 ### Works in every browser
 
 Every feature works in current Chrome, Edge, Firefox and Safari, on computers and phones (Save to only on the computer running the app, as above). The build targets Vite's default baseline — Chrome/Edge 107+, Firefox 104+, Safari 16+ — so:
 
 - The page uses no browser-specific APIs; the one it used to (File System Access, for Save to) was replaced by the app saving the file itself. The folder browser is a native `<dialog>`, which all of them have.
+- The music player uses a plain `<audio>` element and asks each browser which files it can play (`canPlayType()`): on the computer running the app, the app converts what a browser can't play; elsewhere, those songs are marked. The Media Session API is used only where the browser has it.
 - Syntax that older Safari rejects at run time is kept out, and `tests/unit/browser-support.test.ts` checks the page's code for it: no regular-expression lookbehind (`(?<=…)`, Safari 16.4+ — history highlighting used one, which would have crashed the page in Safari 16.0–16.3) and no `for await` over a stream (Safari can't).
 - The Playwright tests run in Chrome (Blink) and WebKit (Safari's engine), and in Firefox (Gecko) when asked — see [Browser end-to-end](#browser-end-to-end-playwright).
 
@@ -476,6 +488,10 @@ None of these are problems today. They're listed here so the next person doesn't
 | GET    | `/api/folders`          | Query: `?path=...` (optional; defaults to the **Save to** folder, else Music, else home). Returns `{ path, parent, folders: [{ name, path }], places: [{ name, path }] }`. This computer's own page only.                                                                                                                                                                                                                                              |
 | POST   | `/api/folders`          | Body: `{ parent, name }`. Makes a folder (the name cleaned up like a file name); `201 { name, path }`, `409` if it exists. This computer's own page only.                                                                                                                                                                                                                                                                                              |
 | POST   | `/api/folders/songs`    | Body: `{ songs: [{ id, title, artists }] }` — a playlist's songs (up to 1,000). Returns `{ folder, files, complete, found: { <id>: { file, by } } }`: which of them are in the **Save to** folder or its subfolders, as which file (its path inside the folder), and how they were recognised (`spotify`, `title-artist` or `title`). `409` if no folder is chosen, `404`/`403` if it's gone or off-limits. This computer's own page only.             |
+| GET    | `/api/music`            | The songs in the **Save to** folder and its subfolders, for the music player: `{ folder, complete, tracks: [{ id, path, title, artist, album, duration, addedAt, size }] }`. `409` if no folder is chosen, `404`/`403` if it's gone or off-limits. This computer's own page only.                                                                                                                                                                      |
+| GET    | `/api/music/:id`        | One of those songs, as it is (range requests work). `404` if it isn't in the folder any more, `400` for a malformed id. This computer's own page only.                                                                                                                                                                                                                                                                                                 |
+| GET    | `/api/music/:id/flac`   | The song converted to FLAC (lossless), for a browser that can't play the file itself; converted once and kept in the cache. This computer's own page only.                                                                                                                                                                                                                                                                                             |
+| GET    | `/api/music/:id/cover`  | The song's cover picture from its tags, or `204` if it has none. This computer's own page only.                                                                                                                                                                                                                                                                                                                                                        |
 | GET    | `/api/video/download`   | Query: `?url=...&format=mp3\|original&name=...` (`mp3` is the default; `name` is an optional file name without extension, otherwise the video's title). Streams a 320 kbps MP3, or YouTube's original audio unconverted (`.opus` / `.m4a` / `.mka`), as a download. `spotifyId` (optional) is the Spotify song it's for: kept in the history, and the file is tagged with that song's id and Spotify's title and artists. `400` for an unknown format. |
 
 All JSON errors follow the shape `{ message: string, field?: string }`.
@@ -484,15 +500,16 @@ All JSON errors follow the shape `{ message: string, field?: string }`.
 
 ## Environment Variables
 
-| Variable        | Required | Description                                                                                                       |
-| --------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`      | No       | `development` (default) or `production`. Controls Vite vs static serving.                                         |
-| `PORT`          | No       | Port to bind (default `5000`).                                                                                    |
-| `HOST`          | No       | Interface to listen on (default `127.0.0.1`; use `0.0.0.0` in a container).                                       |
-| `ALLOWED_HOSTS` | No       | Extra host names to answer to, comma-separated (e.g. a Tailscale name). `localhost` and IP addresses always work. |
-| `HISTORY_FILE`  | No       | Where to keep the download history (default `data/history.json`).                                                 |
-| `SETTINGS_FILE` | No       | Where to keep the app's settings — the **Save to** folder (default `data/settings.json`).                         |
-| `FFMPEG_BIN`    | No       | Use this ffmpeg instead of the one `ffmpeg-static` downloads.                                                     |
+| Variable           | Required | Description                                                                                                               |
+| ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`         | No       | `development` (default) or `production`. Controls Vite vs static serving.                                                 |
+| `PORT`             | No       | Port to bind (default `5000`).                                                                                            |
+| `HOST`             | No       | Interface to listen on (default `127.0.0.1`; use `0.0.0.0` in a container).                                               |
+| `ALLOWED_HOSTS`    | No       | Extra host names to answer to, comma-separated (e.g. a Tailscale name). `localhost` and IP addresses always work.         |
+| `HISTORY_FILE`     | No       | Where to keep the download history (default `data/history.json`).                                                         |
+| `SETTINGS_FILE`    | No       | Where to keep the app's settings — the **Save to** folder (default `data/settings.json`).                                 |
+| `FFMPEG_BIN`       | No       | Use this ffmpeg instead of the one `ffmpeg-static` downloads.                                                             |
+| `PLAYER_CACHE_DIR` | No       | Where the music player keeps songs converted to FLAC (default `yt-audio-player` in the system's temp folder; up to 2 GB). |
 
 None are required. To set any, put them in a `.env` file in the project root (copy `.env.example`); `server/env.ts` loads it on startup. Variables already set in your shell or hosting platform take priority over the file.
 
@@ -611,16 +628,18 @@ These tools are installed and configured but have no shortcut script in `package
 
 ## Testing
 
-The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history and settings files, the folder browser, finding a playlist's songs among a folder's files, the host and local-only checks, the page's save client and "Download all" rules, and the UI's small formatting helpers.
+The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history and settings files, the folder browser, finding a playlist's songs among a folder's files, the host and local-only checks, the page's save client and "Download all" rules, the music player (song ids, Ogg lengths, covers, the FLAC conversion and its cache, sorting, filtering and play order), and the UI's small formatting helpers.
 
 ### Layout
 
 ```
 tests/
 ├── api/
-│   └── video.e2e.test.ts        # Vitest + Supertest, hits Express directly
+│   ├── video.e2e.test.ts        # Vitest + Supertest, hits Express directly
+│   └── music.e2e.test.ts        # the music player's routes, on real files (no internet needed)
 ├── browser/
-│   └── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request)
+│   ├── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request)
+│   └── player.spec.ts           # the music player: the folder's songs, and songs picked on a phone
 ├── unit/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
 │   ├── audio.test.ts            # yt-dlp / ffmpeg argument builders
@@ -633,6 +652,8 @@ tests/
 │   ├── settings.test.ts         # settings file (the Save to folder)
 │   ├── folders.test.ts          # folder browser, never-overwrite file names, Windows quick links
 │   ├── library.test.ts          # playlist songs in the folder: tags, names, matching, files the app tagged
+│   ├── music.test.ts            # the player's server side: song ids, Ogg lengths, covers, FLAC conversion + cache
+│   ├── music-player.test.ts     # the player's page side: songs, sorting, filtering, shuffle and repeat
 │   ├── download-all.test.ts     # "Download all": the same-length rule, "Artist - Title" names
 │   ├── local-only.test.ts       # folder routes: this computer's own page only
 │   ├── save-to-folder.test.ts   # the page's save client: progress lines, errors, cancel
@@ -661,6 +682,8 @@ What it checks:
 8. The completed download is recorded in the history and surfaces through `/api/downloads`; a download cancelled part-way through is not. A download for a Spotify song (`spotifyId`) is tagged with Spotify's title and artists ("Bohemian Rhapsody", "Queen") and the song's id.
 9. **Save to** (into a temporary folder): nothing is saved before a folder is chosen (`409`); a missing folder, a file and a relative path are refused; folders can be listed and made. A save streams progress and then `done`, and leaves a valid MP3 (and nothing else) in the folder, recorded in the history; the same name again becomes "… (1).mp3", accents and all; original audio saves too, tagged as the Spotify song it was sent with, which its history entry keeps; `POST /api/folders/songs` then finds that file by the Spotify id in its tags (whatever it's called), the other downloads by title and artist, and nothing for a song that isn't there (and `409` before a folder is chosen); a video YouTube won't give is a `502` with yt-dlp's reason and leaves nothing behind; a save cancelled part-way leaves no file and no history entry; and requests marked as coming from another website, or sent as a form instead of JSON, are refused.
 
+`tests/api/music.e2e.test.ts` does the same for the music player, against real files made with ffmpeg in a temporary **Save to** folder — no internet needed: `/api/music` is `409` before a folder is chosen, then lists the songs with their tags; a song comes back byte for byte, and a range request gets `206` with just those bytes; a WMA comes back as FLAC (`fLaC`), converted once and then served from the cache; a cover picture comes back as `image/png` with `nosniff`, and a song without one gets `204`; an unknown id is a `404` and a path in place of an id a `400`; requests from another website or through a proxy are refused; and once the folder changes, the old folder's songs are gone.
+
 Run it:
 
 ```bash
@@ -686,6 +709,7 @@ What it checks:
 9. A browser on another device (simulated by answering `/api/settings` with `canSaveToFolder: false`) gets a note saying where downloads go, and no **Choose folder** button.
 10. Recent Extractions (with a made-up history served in place of `/api/downloads`): 25 entries at a time with **Show more**; typing narrows the list word by word; suggestions list each song once with its download count; picking one with the keyboard shows exactly that song; the date filters work alone and with a search; and "Clear search and filters" resets everything.
 11. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
+12. **The music player** (`player.spec.ts`, songs made with ffmpeg in a temporary folder — a tagged MP3 and a 24-bit AIFF): with that folder under **Save to**, **Your music** lists both; clicking the MP3 plays it from `/api/music/<id>`, as it is, and Pause pauses it; **Next song** plays the AIFF — converted by the app (`/flac`) in a browser that can't play AIFF; Repeat cycles; and Close stops the song and hides the player. As a phone (`canSaveToFolder: false`), **Choose songs** takes the two files: their tags are read in the page, the AIFF is marked if the browser can't play it, the MP3 plays from a `blob:` address, and nothing is sent to the app. The folder's songs can be put in order by title. (Playwright's WebKit on Windows plays media through Windows Media Foundation, which takes several seconds to open a song — so clicks that start one get longer — and can't play `blob:` addresses at all, so there the test checks that the player says it can't. Safari can.)
 
 The Chrome tests use your installed Google Chrome (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in; WebKit and Firefox are Playwright's own builds. Install whichever are missing (free, one time):
 
@@ -774,6 +798,7 @@ A typical flow:
 - The download endpoint accepts only validated YouTube URLs (`extractVideoId` in `server/youtube-url.ts`, which rebuilds a canonical URL from the video ID) and sanitises the filename before sending it back in `Content-Disposition`. yt-dlp and ffmpeg are run with argument arrays, never through a shell.
 - Request bodies and query strings are validated with Zod schemas before use.
 - **Folder access (`server/local-only.ts`):** the routes that browse folders and save into them only answer this computer's own page — a loopback address with no proxy headers, a same-origin request (`Sec-Fetch-Site`/`Origin`), and changes sent as JSON. Another website you visit can't make the app list your folders, look at what's in them or write files, and neither can another device on your network. Checking which playlist songs are in the folder (`POST /api/folders/songs`) only ever reads the chosen **Save to** folder — the request names songs, not a path. See [Save to a folder](#save-to-a-folder).
+- **Music player:** the routes that list and play the **Save to** folder's songs (`/api/music…`) are local-only in the same way — a phone on your Wi-Fi can't list or play them, and another website can't play them in its own page. A song is asked for by an id the folder scan made, never by a path, so only audio files found in the chosen folder can be sent. A cover picture is sent only if it's an image type browsers won't run as a page. Songs picked on another device never reach the app at all.
 - The server listens on `127.0.0.1` by default and has no authentication; see the note under [Deploying](#deploying).
 
 ---

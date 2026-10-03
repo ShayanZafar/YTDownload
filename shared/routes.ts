@@ -3,6 +3,7 @@ import {
   downloadSchema,
   folderEntrySchema,
   folderListingSchema,
+  musicLibrarySchema,
   saveSettingsSchema,
   searchResultSchema,
   songToFindSchema,
@@ -180,6 +181,23 @@ export const api = {
       }),
       responses: { 200: songsInFolderSchema },
     },
+  },
+  /**
+   * The music player's songs: those in the "Save to" folder, for a browser on
+   * the computer running the app. (A phone plays songs stored on the phone.)
+   */
+  music: {
+    list: {
+      method: "GET" as const,
+      path: "/api/music" as const,
+      responses: { 200: musicLibrarySchema },
+    },
+    /** A song's file, untouched — range requests work, so the player can seek. */
+    audio: { method: "GET" as const, path: "/api/music/:id" as const },
+    /** A song converted to FLAC (lossless), for a browser that can't play the file itself. */
+    flac: { method: "GET" as const, path: "/api/music/:id/flac" as const },
+    /** A song's cover picture, from its tags — 204 when it has none. */
+    cover: { method: "GET" as const, path: "/api/music/:id/cover" as const },
   },
 };
 

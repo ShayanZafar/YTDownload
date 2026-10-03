@@ -39,13 +39,14 @@ export function isSameOriginRequest(req: Pick<Request, "headers">): boolean {
   return true;
 }
 
-export function localOnly(): RequestHandler {
+const NOT_LOCAL =
+  "Saving into a folder only works in a browser on the computer running the app. Here, use the normal download.";
+
+/** `notLocal`: what to tell a browser on another device. */
+export function localOnly(notLocal = NOT_LOCAL): RequestHandler {
   return (req, res, next) => {
     if (!isLocalRequest(req)) {
-      return res.status(403).json({
-        message:
-          "Saving into a folder only works in a browser on the computer running the app. Here, use the normal download.",
-      });
+      return res.status(403).json({ message: notLocal });
     }
     if (!isSameOriginRequest(req)) {
       return res.status(403).json({ message: "Only this app's own page can do that." });

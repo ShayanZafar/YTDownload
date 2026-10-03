@@ -1,4 +1,4 @@
-import type { Express, Response } from "express";
+import type { Express, Request, Response } from "express";
 import { type Server } from "http";
 import youtubedl from "youtube-dl-exec";
 import { storage } from "./storage";
@@ -7,7 +7,8 @@ import { z } from "zod";
 import { extractVideoId, pickThumbnail, type ThumbnailLike } from "./youtube-url";
 import { searchYouTube } from "./search";
 import { safeFileName } from "@shared/filename";
-import type { SaveSettings } from "@shared/schema";
+import { audioTypeOf } from "@shared/audio-types";
+import { musicIdSchema, type SaveSettings } from "@shared/schema";
 import {
   SpotifyError,
   fetchSpotifyPlaylist,
@@ -36,7 +37,8 @@ import {
   placesToSave,
 } from "./folders";
 import { saveIntoFolder } from "./save";
-import { songsInFolder } from "./library";
+import { songsInFolder, type AudioFile } from "./library";
+import { convertedForBrowser, findMusicFile, listMusic, readCover } from "./music";
 
 type YtDlpInfo = ThumbnailLike & { title?: string };
 
@@ -45,6 +47,48 @@ function sendFolderError(res: Response, err: unknown, fallback: string) {
   if (err instanceof FolderError) return res.status(err.status).json({ message: err.message });
   console.error(fallback, err);
   return res.status(500).json({ message: err instanceof Error ? err.message : fallback });
+}
+
+const NO_FOLDER = "Choose a folder to save into first.";
+const SONG_GONE = "That song isn't in the folder any more.";
+const PLAYER_NOT_LOCAL =
+  "The songs in the Save to folder play only in a browser on the computer running the app.";
+
+/**
+ * The song a music request names (by id) in the "Save to" folder — or
+ * undefined, having replied why not.
+ */
+async function songFor(req: Request, res: Response): Promise<AudioFile | undefined> {
+  const id = musicIdSchema.safeParse(req.params.id);
+  if (!id.success) {
+    res.status(400).json({ message: id.error.errors[0].message });
+    return undefined;
+  }
+  const { saveFolder } = await settings.get();
+  if (!saveFolder) {
+    res.status(409).json({ message: NO_FOLDER });
+    return undefined;
+  }
+  const file = await findMusicFile(saveFolder, id.data);
+  if (!file) res.status(404).json({ message: SONG_GONE });
+  return file;
+}
+
+/** Sends an audio file as it is — range requests work, so the player can seek. */
+function sendAudioFile(res: Response, file: string, type: string) {
+  res.sendFile(
+    file,
+    { dotfiles: "allow", headers: { "Content-Type": type, "Cache-Control": "no-cache" } },
+    (err) => {
+      // Sent, or the player hung up part-way (it often does, to jump elsewhere).
+      if (!err || res.headersSent) return;
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: SONG_GONE });
+      }
+      console.error("Couldn't send a song:", err);
+      res.status(500).json({ message: "Couldn't read that song." });
+    },
+  );
 }
 
 /** The first problem zod found, as `{ message, field }`. */
@@ -136,6 +180,76 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(await songsInFolder(saveFolder, input.data.songs));
     } catch (err) {
       sendFolderError(res, err, "Couldn't look through the folder");
+    }
+  });
+
+  // --- Music player ------------------------------------------------------------
+  // Plays the songs in the "Save to" folder, in a browser on this computer
+  // (localOnly). Songs are asked for by id, never by path, so only files the
+  // folder scan found can be played (see music.ts). On a phone the player
+  // plays songs stored on the phone, which never reach the app.
+
+  app.get(api.music.list.path, localOnly(PLAYER_NOT_LOCAL), async (_req, res) => {
+    try {
+      const { saveFolder } = await settings.get();
+      if (!saveFolder) return res.status(409).json({ message: NO_FOLDER });
+      res.json(await listMusic(saveFolder));
+    } catch (err) {
+      sendFolderError(res, err, "Couldn't look through the folder");
+    }
+  });
+
+  // A song's file, untouched.
+  app.get(api.music.audio.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    try {
+      const file = await songFor(req, res);
+      if (file)
+        sendAudioFile(
+          res,
+          file.absolute,
+          audioTypeOf(file.relative)?.mime ?? "application/octet-stream",
+        );
+    } catch (err) {
+      sendFolderError(res, err, "Couldn't play that song");
+    }
+  });
+
+  // A song converted to FLAC — lossless — for a browser that can't play the
+  // file itself. Converting takes a few seconds the first time; if the player
+  // moves on before then, the conversion stops.
+  app.get(api.music.flac.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    const controller = new AbortController();
+    res.on("close", () => {
+      if (!res.writableFinished) controller.abort();
+    });
+    try {
+      const file = await songFor(req, res);
+      if (!file) return;
+      const flac = await convertedForBrowser(file, controller.signal);
+      if (!controller.signal.aborted) sendAudioFile(res, flac, "audio/flac");
+    } catch (err) {
+      if (controller.signal.aborted || res.headersSent) return;
+      if (err instanceof FolderError) return sendFolderError(res, err, "");
+      console.error("Converting a song failed:", err);
+      res.status(500).json({
+        message: `Couldn't convert that song: ${err instanceof Error ? err.message : err}`,
+      });
+    }
+  });
+
+  // A song's cover picture, from its tags (204 when it has none).
+  app.get(api.music.cover.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    try {
+      const file = await songFor(req, res);
+      if (!file) return;
+      const cover = await readCover(file).catch(() => undefined);
+      if (!cover) return res.status(204).end();
+      res
+        .set({ "Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff" })
+        .type(cover.type)
+        .send(Buffer.from(cover.data));
+    } catch (err) {
+      sendFolderError(res, err, "Couldn't read the cover");
     }
   });
 

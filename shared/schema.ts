@@ -145,6 +145,37 @@ export const songsInFolderSchema = z.object({
 
 export type SongsInFolder = z.infer<typeof songsInFolderSchema>;
 
+/** A song's id in the music player: where it is in the folder, hashed (see server/music.ts). */
+export const musicIdSchema = z.string().regex(/^[A-Za-z0-9_-]{22}$/, "That isn't a song id");
+
+/** A song in the "Save to" folder, as the music player lists it. */
+export const musicTrackSchema = z.object({
+  id: z.string(),
+  /** Where it is inside the folder: "Queen\Greatest Hits\Bohemian Rhapsody.mp3". */
+  path: z.string(),
+  /** Its title tag, or else its file name (without the extension). */
+  title: z.string(),
+  artist: z.string().nullable(),
+  album: z.string().nullable(),
+  /** Length in seconds, when the file says. */
+  duration: z.number().nullable(),
+  /** When it arrived in the folder (ISO 8601), for "Recently added". */
+  addedAt: z.string(),
+  size: z.number(),
+});
+
+export type MusicTrack = z.infer<typeof musicTrackSchema>;
+
+/** The songs in the "Save to" folder (and its subfolders), for the music player. */
+export const musicLibrarySchema = z.object({
+  folder: z.string(),
+  /** False if the folder has more files than the app looks at (see MAX_SONG_FILES). */
+  complete: z.boolean(),
+  tracks: z.array(musicTrackSchema),
+});
+
+export type MusicLibrary = z.infer<typeof musicLibrarySchema>;
+
 /**
  * Saving into the folder streams one JSON object per line: progress while the
  * audio arrives, then "done" (or "error").
