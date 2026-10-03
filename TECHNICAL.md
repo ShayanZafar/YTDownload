@@ -44,6 +44,7 @@ This document covers the project's architecture, local development setup, enviro
 │   │   ├── App.tsx            # Top-level app & router
 │   │   ├── main.tsx           # React entry point
 │   │   └── index.css          # Global styles & theme variables
+│   ├── public/                # Icons and the web app manifest (phones' home screens; made by scripts/make-icons.ts)
 │   └── index.html
 ├── server/                    # Backend Express application
 │   ├── index.ts               # App bootstrap, middleware, port binding
@@ -72,7 +73,11 @@ This document covers the project's architecture, local development setup, enviro
 │   └── spotify-names.ts       # cleanTrackTitle(), spotifyFileName(): "Artist - Title"
 ├── scripts/
 │   ├── build.ts               # Production build (npm run build)
-│   └── windows/               # Double-click helpers: start, stop, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
+│   ├── make-icons.ts          # The app's icons, drawn by Chrome (npx tsx scripts/make-icons.ts)
+│   ├── install/               # The install branch's README, .gitignore and Start/Stop/Update shortcuts
+│   └── windows/               # Double-click helpers: start, stop, update, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
+├── .github/workflows/
+│   └── install.yml            # Builds the ready-to-run app onto the install branch after every push to main
 ├── docs/
 │   └── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
 ├── tailwind.config.ts         # Tailwind theme configuration
@@ -170,6 +175,10 @@ Browsers always put downloads in their own downloads folder, and a web page can'
 2. **Songs a browser can't play:** the page asks `canPlayType()` about each kind of file (`AUDIO_TYPES` in `shared/audio-types.ts`). A folder song the browser says it can't play — or that fails to load anyway — is played from `/api/music/<id>/flac` instead: the server converts it with ffmpeg to FLAC (24-bit for a lossy file's decoded audio, so nothing is lost on top of the file) into a cache folder (`PLAYER_CACHE_DIR`, by default `yt-audio-player` in the system's temp folder) and sends that like any file. Requests for the same song share one conversion; if all of them go away before it's done (the song was skipped), ffmpeg is stopped and its `.part` file deleted. The cache keeps at most 2 GB, deleting the conversions played longest ago. Covers come from `/api/music/<id>/cover`: the front cover in the tags, JPEG/PNG/GIF/WebP/BMP only, sent with `X-Content-Type-Options: nosniff` (`204` when there's none).
 3. **Songs on this device** (any browser; on a phone, the only kind): **Choose songs** is a file input (`multiple`, audio types), and **Open a folder** (desktop browsers) the same with `webkitdirectory`. The files never leave the device: their tags and covers are read in the page by music-metadata's browser build (`client/src/lib/device-music.ts`, loaded only once songs are picked — Vite puts it in its own chunks), and they play from `URL.createObjectURL(file)`. A page can't open files again by itself, so they're picked again on the next visit. A song the browser can't play is marked and left out of what plays.
 4. **The player:** the play order (`shuffledOrder()`, `nextPosition()`, `previousPosition()` in `client/src/lib/music.ts`, unit-tested); shuffle and repeat (off, all, one), remembered with the volume; Previous restarting a song that has played for 3 seconds; a song that fails skipped after 2 seconds with the reason shown (unless every song failed); and the Media Session API for media keys, Windows' media overlay and phones' lock screens (where the browser has it). Phones get no volume slider: they use their buttons (and iPhones ignore a page's volume).
+
+### On a phone's home screen
+
+The page has a web app manifest (`client/public/manifest.webmanifest`: name, `display: standalone`, theme colour) and icons — the header's logo, white headphones on a dark tile — so "Add to Home Screen" (iPhone) or "Install app" (Android, over HTTPS) gives it its own icon and window. `scripts/make-icons.ts` draws them with Chrome (through Playwright): `favicon.png` and `icon.svg` for the tab, 192 and 512 px icons, a "maskable" one (the logo inside the circle Android keeps), and `apple-touch-icon.png`. There's no service worker: the page needs the app's server anyway, so working offline wouldn't help, and browsers don't require one to install a web app. iPhones stop a home-screen web app's audio when the phone locks, so the run guide suggests adding it as a Safari bookmark there (iOS 26's **Open as Web App** switch off); Android keeps playing.
 
 ### Works in every browser
 
@@ -628,7 +637,7 @@ These tools are installed and configured but have no shortcut script in `package
 
 ## Testing
 
-The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history and settings files, the folder browser, finding a playlist's songs among a folder's files, the host and local-only checks, the page's save client and "Download all" rules, the music player (song ids, Ogg lengths, covers, the FLAC conversion and its cache, sorting, filtering and play order), and the UI's small formatting helpers.
+The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history and settings files, the folder browser, finding a playlist's songs among a folder's files, the host and local-only checks, the page's save client and "Download all" rules, the music player (song ids, Ogg lengths, covers, the FLAC conversion and its cache, sorting, filtering and play order), the Windows scripts and the install branch's shortcuts, the web app manifest and its icons, and the UI's small formatting helpers.
 
 ### Layout
 
@@ -658,6 +667,8 @@ tests/
 │   ├── local-only.test.ts       # folder routes: this computer's own page only
 │   ├── save-to-folder.test.ts   # the page's save client: progress lines, errors, cancel
 │   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
+│   ├── web-app.test.ts          # the web app manifest and its icons
+│   ├── windows-scripts.test.ts  # the Windows scripts and the install branch's shortcuts: ASCII, CRLF, one line each
 │   └── host-check.test.ts       # DNS-rebinding protection
 └── utils/
     ├── mp3.ts                    # MP3 validator
@@ -771,6 +782,15 @@ npm start   # optionally with PORT / HOST / HISTORY_FILE / SETTINGS_FILE set
 ```
 
 The Express server serves the static client from `dist/public` and the API from the same port.
+
+### The install branch (the ready-to-run app)
+
+`.github/workflows/install.yml` builds the app on GitHub after every push to `main` (or by hand, from the Actions tab) and publishes the result to the `install` branch, which PCs install from (`git clone --depth 1 --branch install …`) and update from (`Update.cmd`) — see [Running the app](docs/run/README.md#installing-the-ready-to-run-app).
+
+- **What's in it:** `dist/`; `package.json` and `package-lock.json`, for `npm ci --omit=dev`, which installs the packages the server runs with — and downloads yt-dlp and ffmpeg, so each PC gets its own and the branch stays small; the Windows scripts, `.env.example` and `.gitattributes` (CRLF for the scripts); and from `scripts/install/` a README (with the build's commit filled in), a `.gitignore` (`node_modules/`, `data/`, `.env`) and `Start.cmd`, `Stop.cmd` and `Update.cmd`, which run the scripts in `scripts\windows`.
+- **One commit:** each build replaces the one before (a fresh commit, force-pushed), so the branch never grows. `Update.cmd` therefore fetches the branch and resets to it (`git fetch --depth 1 origin install`, `git reset --hard FETCH_HEAD`) instead of `git pull`; `node_modules/`, `data/` and `.env` aren't tracked, so they stay. A batch file being run is read a line at a time, and `Update.cmd` replaces the shortcuts while it runs, so each one does its work in a single line.
+- **Two kinds of copy:** the scripts tell them apart by `server\index.ts`. A ready-to-run build (no source) installs with `npm ci --omit=dev` and runs `npm start` — `node dist/index.cjs`, which has `NODE_ENV=production` built in; a copy of the source installs everything and runs the development server.
+- **The build** skips yt-dlp's and ffmpeg's downloads (`npm ci --ignore-scripts`), which building doesn't need. The workflow doesn't run the tests: they're run before pushing to `main`.
 
 ### Deploying
 

@@ -14,5 +14,11 @@ if errorlevel 1 (
 cd /d "%~dp0..\.."
 set NODE_ENV=
 set YOUTUBE_DL_SKIP_PYTHON_CHECK=1
-call npm.cmd run dev
+rem A copy of the source code runs the development server; a ready-to-run build
+rem (installed from the install branch) runs the built app.
+if exist "server\index.ts" (
+  call npm.cmd run dev
+) else (
+  call npm.cmd start
+)
 if errorlevel 1 pause

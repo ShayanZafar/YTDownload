@@ -4,9 +4,9 @@ Small full-stack app: paste a YouTube URL (or search for a song, paste a Spotify
 songs from a Spotify playlist — with a Save to folder, it shows which are already there and downloads
 the rest), preview it, download the audio track — and play your music: the Save to folder's songs
 on the computer running the app, or songs picked on a phone. Developed and run locally on Windows
-(it also works on macOS/Linux). `README.md` is the user guide, `docs/run/README.md` says how to run
-it (scripts, terminal, phone, hosting), `TECHNICAL.md` has architecture, setup and deployment
-details, and `LEARNING.md` maps the stack onto .NET concepts.
+(it also works on macOS/Linux). `README.md` is the user guide, `docs/run/README.md` says how to
+install and run it (the ready-to-run build, scripts, terminal, phone, hosting), `TECHNICAL.md` has
+architecture, setup and deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 
 ## Stack
 
@@ -97,11 +97,22 @@ details, and `LEARNING.md` maps the stack onto .NET concepts.
   (`hooks/use-device-music.ts`, `lib/device-music.ts`: tags read in the page, played from blob URLs);
   `lib/music.ts` has the pure parts (songs, sort/filter, play order; unit-tested)
 - `scripts/build.ts` — the production build (`npm run build`). `scripts/windows/` — double-click
-  helpers for running the app (`start.cmd`, `stop.cmd`, `update-yt-dlp.cmd`, `autostart-on/off.cmd`),
-  all thin wrappers around `app.ps1`. Keep `app.ps1` Windows PowerShell 5.1-compatible and plain
-  ASCII, with CRLF line endings (`.gitattributes`; `tests/unit/windows-scripts.test.ts` checks).
-  `stop` only kills the app's own process tree: from the server's `node.exe` up through its
-  launchers (npm, `cross-env`, `start.cmd`), never the terminal, editor or Explorer above them
+  helpers for running the app (`start.cmd`, `stop.cmd`, `update.cmd`, `update-yt-dlp.cmd`,
+  `autostart-on/off.cmd`), all thin wrappers around `app.ps1`. Keep `app.ps1` Windows PowerShell
+  5.1-compatible and plain ASCII, with CRLF line endings (`.gitattributes`;
+  `tests/unit/windows-scripts.test.ts` checks). `stop` only kills the app's own process tree: from
+  the server's `node.exe` up through its launchers (npm, `cross-env`, `start.cmd`/`Start.cmd`), never
+  the terminal, editor or Explorer above them. The scripts serve two kinds of copy, told apart by
+  `server\index.ts`: the source (installs everything, runs `npm run dev`) and a ready-to-run build
+  (`npm ci --omit=dev`, `npm start`)
+- `.github/workflows/install.yml` — after every push to `main`, builds the app on GitHub and
+  force-pushes the ready-to-run result to the `install` branch as a single commit: `dist/`,
+  `package*.json`, the Windows scripts and `scripts/install/` (README with the build filled in,
+  `.gitignore`, `Start/Stop/Update.cmd` shortcuts — one line each, as `Update.cmd` replaces them
+  while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
+  (no history to merge). Never commit to `install` by hand
+- `client/public/` — `manifest.webmanifest` and the icons (tab, phones' home screens), drawn by
+  `scripts/make-icons.ts` with Chrome (`npx tsx scripts/make-icons.ts`; `tests/unit/web-app.test.ts`)
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
   (Playwright, in Chrome and WebKit; Firefox on request). The player's tests (`music*.test.ts`,
   `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed
@@ -212,4 +223,5 @@ details, and `LEARNING.md` maps the stack onto .NET concepts.
 
 - Commit to `main` after each completed milestone (a feature, fix or cleanup that is done and
   tested) without asking first, then push to `origin/main`. Keep each commit to one milestone with a
-  descriptive message; don't commit half-finished work.
+  descriptive message; don't commit half-finished work. Each push rebuilds the `install` branch that
+  PCs update from (the workflow doesn't run the tests), so only push what passes them.

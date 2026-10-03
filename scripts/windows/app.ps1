@@ -7,6 +7,9 @@
                                 what it needs when needed, and open the
                                 browser once it's up.
     app.ps1 stop                Stop the app, however it was started.
+    app.ps1 update              Get the newest version of the app: the newest
+                                build in a copy installed from the install
+                                branch, the newest code in a copy of the source.
     app.ps1 update-yt-dlp       Get the newest yt-dlp (when YouTube downloads
                                 stop working).
     app.ps1 autostart-on        Start the app (minimized, no browser) whenever
@@ -19,7 +22,7 @@
 #>
 param(
   [Parameter(Position = 0)]
-  [ValidateSet("start", "open", "stop", "update-yt-dlp", "autostart-on", "autostart-off")]
+  [ValidateSet("start", "open", "stop", "update", "update-yt-dlp", "autostart-on", "autostart-off")]
   [string] $Action = "start",
   # start: don't open the browser (starting with Windows does this).
   [switch] $NoBrowser,
@@ -31,13 +34,17 @@ $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location -LiteralPath $Root
 
-# npm skips what only development needs when NODE_ENV=production, and the app
-# runs with the development server, so make sure it isn't set.
+# npm skips what only development needs when NODE_ENV=production, and a copy of
+# the source code runs with the development server, so make sure it isn't set.
 Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
 # yt-dlp's installer asks for Python, which the Windows yt-dlp.exe doesn't use.
 $env:YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
 
 $AppName = "YouTube Audio Extractor"
+# A ready-to-run build (installed from the install branch) has the built app
+# but not its source code. It needs only what the app needs to run.
+$IsBuild = (Test-Path -LiteralPath (Join-Path $Root "dist\index.cjs")) -and
+  -not (Test-Path -LiteralPath (Join-Path $Root "server\index.ts"))
 $script:ExitCode = 0
 
 # --- Settings ----------------------------------------------------------------
@@ -114,7 +121,8 @@ function Test-IsLauncher($proc) {
     return $commandLine -match 'server[\\/]index\.ts|dist[\\/]index\.cjs|npm-cli\.js"?\s+(run\s+dev|start)\b'
   }
   if ($proc.Name -in @("cmd.exe", "powershell.exe", "pwsh.exe")) {
-    return $commandLine -match 'scripts[\\/]windows[\\/](start\.cmd|app\.ps1)|npm(\.cmd)?"?\s+(run\s+dev|start)\b|cross-env NODE_ENV|server[\\/]index\.ts|dist[\\/]index\.cjs'
+    # start.cmd here, or the Start.cmd at the top of an installed build.
+    return $commandLine -match '[\\/]start\.cmd|scripts[\\/]windows[\\/]app\.ps1|npm(\.cmd)?"?\s+(run\s+dev|start)\b|cross-env NODE_ENV|server[\\/]index\.ts|dist[\\/]index\.cjs'
   }
   return $false
 }
@@ -163,7 +171,7 @@ function Start-App {
   }
   if (Test-NeedsInstall) {
     Write-Host "Installing what the app needs (the first time, or after an update) - this takes a minute or two..."
-    & npm.cmd install
+    if ($IsBuild) { & npm.cmd ci --omit=dev } else { & npm.cmd install }
     if ($LASTEXITCODE -ne 0) {
       Write-Host "Installing failed (see above)."
       $script:ExitCode = 1
@@ -187,7 +195,10 @@ function Start-App {
 
 # Packages missing, or package-lock.json changed since they were installed (after a git pull, say).
 function Test-NeedsInstall {
-  foreach ($file in @("node_modules\.bin\tsx.cmd", "node_modules\youtube-dl-exec\bin\yt-dlp.exe", "node_modules\ffmpeg-static\ffmpeg.exe")) {
+  $needed = @("node_modules\youtube-dl-exec\bin\yt-dlp.exe", "node_modules\ffmpeg-static\ffmpeg.exe")
+  # What runs the development server, which a ready-to-run build doesn't use.
+  if (-not $IsBuild) { $needed += "node_modules\.bin\tsx.cmd" }
+  foreach ($file in $needed) {
     if (-not (Test-Path -LiteralPath (Join-Path $Root $file))) { return $true }
   }
   $installed = Join-Path $Root "node_modules\.package-lock.json"
@@ -233,6 +244,56 @@ function Stop-App {
     return
   }
   Write-Host "$AppName stopped."
+}
+
+# Gets the newest version. A copy installed from the install branch gets the
+# newest build, which replaces the old one (the history, settings and .env
+# stay); a copy of the source code gets the newest code (git pull). A running
+# app is stopped first and started again afterwards, installing any new
+# packages as it starts.
+function Update-App {
+  if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
+    Write-Host "Git isn't installed. Install it once with this command, then update again:"
+    Write-Host "  winget install -e --id Git.Git"
+    $script:ExitCode = 1
+    return
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $Root ".git"))) {
+    Write-Host "This copy of $AppName wasn't installed with Git, so it can't update itself."
+    Write-Host "Install it again with git clone, as its README.md says."
+    $script:ExitCode = 1
+    return
+  }
+  $app = Get-App
+  $wasRunning = @(Find-Servers $app.Port).Count -gt 0
+  if ($wasRunning) {
+    Stop-App
+    if ($script:ExitCode -ne 0) { return }
+  }
+  $branch = ([string] (& git.exe rev-parse --abbrev-ref HEAD)).Trim()
+  $before = ([string] (& git.exe rev-parse HEAD)).Trim()
+  if ($branch -eq "install") {
+    Write-Host "Getting the newest build..."
+    # Each build replaces the one before on the install branch (it keeps no
+    # history), so switch to the new one rather than merging it.
+    & git.exe fetch --depth 1 origin install
+    if ($LASTEXITCODE -eq 0) { & git.exe reset --hard --quiet FETCH_HEAD }
+  } else {
+    Write-Host "Getting the newest code ($branch)..."
+    & git.exe pull --ff-only
+  }
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "Couldn't update (see above). Check the internet connection, and that Git is signed in to GitHub."
+    $script:ExitCode = 1
+  } elseif (([string] (& git.exe rev-parse HEAD)).Trim() -eq $before) {
+    Write-Host "$AppName is up to date."
+  } else {
+    Write-Host "Updated ${AppName}: $([string] (& git.exe log -1 --format=%s))"
+  }
+  if ($wasRunning) {
+    Write-Host "Starting it again..."
+    Start-Process -FilePath (Join-Path $PSScriptRoot "start.cmd") -ArgumentList "-NoBrowser" -WindowStyle Minimized
+  }
 }
 
 function Update-YtDlp {
@@ -287,6 +348,7 @@ switch ($Action) {
   "start" { Start-App }
   "open" { Open-WhenReady }
   "stop" { Stop-App }
+  "update" { Update-App }
   "update-yt-dlp" { Update-YtDlp }
   "autostart-on" { Set-Autostart $true }
   "autostart-off" { Set-Autostart $false }

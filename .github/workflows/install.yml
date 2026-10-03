@@ -1,0 +1,82 @@
+# Builds the app and puts the ready-to-run result on the `install` branch, which
+# PCs install from and update from (docs/run/README.md: "Installing the
+# ready-to-run app"). Runs after every push to main, or by hand from the
+# Actions tab (Run workflow).
+#
+# The branch holds the built app (dist/), what npm needs to install the
+# packages it runs with (package.json, package-lock.json), the Windows scripts,
+# and scripts/install/'s README, .gitignore and Start/Stop/Update shortcuts.
+# Not yt-dlp or ffmpeg: each PC downloads its own when it installs the
+# packages. Each build replaces the one before (the branch keeps a single
+# commit, so it stays small), which is why Update.cmd fetches it rather than
+# merging it.
+name: Install branch
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# A newer push replaces a build that's still running.
+concurrency:
+  group: install-branch
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Building needs no yt-dlp or ffmpeg, so their downloads are skipped.
+      - name: Install the build tools
+        run: npm ci --ignore-scripts
+
+      - name: Build
+        run: npm run build
+
+      - name: Put the ready-to-run app together
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/install"
+          mkdir -p "$out/scripts"
+          cp -R dist package.json package-lock.json .env.example .gitattributes "$out/"
+          cp -R scripts/windows "$out/scripts/windows"
+          cp scripts/install/Start.cmd scripts/install/Stop.cmd scripts/install/Update.cmd scripts/install/.gitignore "$out/"
+          # The README, with this build's details filled in.
+          node -e '
+            const fs = require("fs");
+            const { execSync } = require("child_process");
+            const values = {
+              REPO: process.env.GITHUB_REPOSITORY,
+              SHA: process.env.GITHUB_SHA,
+              SHORT_SHA: process.env.GITHUB_SHA.slice(0, 7),
+              DATE: new Date().toISOString().slice(0, 10),
+              SUBJECT: execSync("git log -1 --format=%s").toString().trim(),
+            };
+            const template = fs.readFileSync("scripts/install/README.md", "utf8");
+            fs.writeFileSync(process.argv[1], template.replace(/\{\{(\w+)\}\}/g, (all, key) => values[key] ?? all));
+          ' "$out/README.md"
+
+      - name: Publish it to the install branch
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          subject="$(git log -1 --format=%s)"
+          cd "$RUNNER_TEMP/install"
+          git init -q -b install
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build of main ${GITHUB_SHA::7}: $subject"
+          git push -q --force "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:install

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -25,6 +25,7 @@ describe("the Windows scripts", () => {
       "start.cmd",
       "stop.cmd",
       "update-yt-dlp.cmd",
+      "update.cmd",
     ]);
   });
 
@@ -43,6 +44,46 @@ describe("the Windows scripts", () => {
       const action = /app\.ps1" ([\w-]+)/.exec(bytes.toString("ascii"))?.[1];
       expect(action, name).toBe(name.replace(/\.cmd$/, ""));
       expect(actions).toContain(action);
+    }
+  });
+});
+
+/**
+ * The shortcuts at the top of the install branch (the ready-to-run build that
+ * .github/workflows/install.yml makes): each runs its script in scripts\windows.
+ * Update.cmd replaces them while it runs, and cmd.exe reads a batch file a
+ * line at a time, so each does its work in one line.
+ */
+describe("the install branch's shortcuts", () => {
+  const INSTALL = fileURLToPath(new URL("../../scripts/install", import.meta.url));
+  const shortcuts = readdirSync(INSTALL)
+    .filter((name) => name.endsWith(".cmd"))
+    .sort();
+
+  it("are Start, Stop and Update", () => {
+    expect(shortcuts).toEqual(["Start.cmd", "Stop.cmd", "Update.cmd"]);
+  });
+
+  it.each(shortcuts)("%s runs its script in scripts\\windows, in one line", (name) => {
+    const bytes = readFileSync(path.join(INSTALL, name));
+    expect(bytes.every((byte) => byte < 0x80)).toBe(true);
+    const text = bytes.toString("ascii");
+    expect(text.replace(/\r\n/g, "").includes("\n")).toBe(false);
+    const target = /^call "%~dp0scripts\\windows\\([\w-]+\.cmd)" %\* & exit \/b\r$/m.exec(
+      text,
+    )?.[1];
+    expect(target).toBe(name.toLowerCase());
+    expect(files.map((f) => f.name)).toContain(target);
+  });
+
+  it("are what the workflow puts in the branch, with the README and .gitignore", () => {
+    const workflow = readFileSync(
+      fileURLToPath(new URL("../../.github/workflows/install.yml", import.meta.url)),
+      "utf8",
+    );
+    for (const file of [...shortcuts, ".gitignore", "README.md"]) {
+      expect(existsSync(path.join(INSTALL, file)), file).toBe(true);
+      expect(workflow).toContain(`scripts/install/${file}`);
     }
   });
 });
