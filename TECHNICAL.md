@@ -8,11 +8,11 @@ This document covers the project's architecture, local development setup, enviro
 
 ### Frontend
 
-- **React 18** with TypeScript
-- **Vite 7** as the dev server and build tool
+- **React 19** with TypeScript 6
+- **Vite 8** (Rolldown) as the dev server and build tool
 - **Wouter** for client-side routing
 - **TanStack Query v5** for server-state management and caching
-- **Tailwind CSS 3** with shadcn/ui components for styling
+- **Tailwind CSS 4** (through `@tailwindcss/vite`; the theme is in `client/src/index.css`, `tw-animate-css` for animations) with shadcn/ui components for styling
 - **Framer Motion** for animations
 - **Lucide React** for icons
 
@@ -20,10 +20,10 @@ This document covers the project's architecture, local development setup, enviro
 
 - **Node.js** with **Express 5**
 - **TypeScript** (executed via `tsx` in development, bundled with `esbuild` in production)
-- **youtube-dl-exec** wrapping a bundled **yt-dlp** binary for YouTube video info & audio stream extraction. On Linux/macOS the binary is a Python script and needs Python 3.10+; on Windows it's a standalone `.exe`. yt-dlp is told to use Node (`--js-runtimes node`) as the JavaScript runtime YouTube now requires, so nothing extra needs installing for that.
+- **youtube-dl-exec** wrapping a bundled **yt-dlp** binary for YouTube video info & audio stream extraction. On every system it's yt-dlp's standalone build, so no Python is needed: youtube-dl-exec downloads `yt-dlp.exe` on Windows, and `scripts/yt-dlp.mjs` swaps in the standalone build on macOS and Linux (see [Local Development Setup](#local-development-setup)). yt-dlp is told to use Node (`--js-runtimes node`) as the JavaScript runtime YouTube now requires, so nothing extra needs installing for that.
 - **ffmpeg-static** — an ffmpeg binary fetched by `npm install` (any OS, no system install) that converts the audio to MP3 on the fly. Set `FFMPEG_BIN` to use a different ffmpeg.
 - **music-metadata** — reads the tags (title, artist, Spotify song) of the audio files in the **Save to** folder, so the playlist panel can tell which songs are there
-- **Zod** for request validation
+- **Zod 4** for request validation
 
 ### Storage
 
@@ -82,7 +82,6 @@ This document covers the project's architecture, local development setup, enviro
 │   └── tests.yml              # Type-check, lint and unit tests on Linux and Windows (macOS weekly)
 ├── docs/
 │   └── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
-├── tailwind.config.ts         # Tailwind theme configuration
 ├── vite.config.ts             # Vite configuration
 ├── tests/                     # unit, api (Vitest) and browser (Playwright) tests
 ├── CLAUDE.md                  # Project notes Claude Code reads automatically
@@ -184,11 +183,11 @@ The page has a web app manifest (`client/public/manifest.webmanifest`: name, `di
 
 ### Works in every browser
 
-Every feature works in current Chrome, Edge, Firefox and Safari, on computers and phones (Save to only on the computer running the app, as above). The build targets Vite's default baseline — Chrome/Edge 107+, Firefox 104+, Safari 16+ — so:
+Every feature works in current Chrome, Edge, Firefox and Safari, on computers and phones (Save to only on the computer running the app, as above). The build targets Vite 8's default baseline — Chrome/Edge 111+, Firefox 114+, Safari 16.4+ — and Tailwind CSS 4 needs Firefox 128+, so those are the oldest browsers it supports. And:
 
 - The page uses no browser-specific APIs; the one it used to (File System Access, for Save to) was replaced by the app saving the file itself. The folder browser is a native `<dialog>`, which all of them have.
 - The music player uses a plain `<audio>` element and asks each browser which files it can play (`canPlayType()`): on the computer running the app, the app converts what a browser can't play; elsewhere, those songs are marked. The Media Session API is used only where the browser has it.
-- Syntax that older Safari rejects at run time is kept out, and `tests/unit/browser-support.test.ts` checks the page's code for it: no regular-expression lookbehind (`(?<=…)`, Safari 16.4+ — history highlighting used one, which would have crashed the page in Safari 16.0–16.3) and no `for await` over a stream (Safari can't).
+- Syntax that older Safari rejects at run time is kept out, and `tests/unit/browser-support.test.ts` checks the page's code for it: no `for await` over a stream (Safari can't). (Regular-expression lookbehind, which Safari before 16.4 rejected, is fine since the baseline moved to 16.4.)
 - The Playwright tests run in Chrome (Blink) and WebKit (Safari's engine), and in Firefox (Gecko) when asked — see [Browser end-to-end](#browser-end-to-end-playwright).
 
 ### Searching the history
@@ -821,8 +820,8 @@ A typical flow:
 
 ## Security Notes
 
-- **Dependencies:** unused packages from the original template were removed (and the unused shadcn/ui components with them), and everything was updated within its current major version. `npm audit` reported 0 vulnerabilities as of September 2026. Re-check any time with `npm audit`.
-- **Updating dependencies:** npm 10 crashes (`Cannot read properties of null (reading 'edgesOut')`) when resolving this project's dependency tree from scratch; use npm 11+ for that, e.g. `npx npm@11 update`. Installing from the existing lockfile works with npm 10.
+- **Dependencies:** unused packages from the original template were removed (and the unused shadcn/ui components with them), and in October 2026 everything was upgraded to its newest version — except TypeScript, which stays on 6.0 because typescript-eslint (the linter's TypeScript support) doesn't support TypeScript 7's native compiler yet, and `@types/node`, which follows the Node version the app runs on (24). `npm audit` reported 0 vulnerabilities after the upgrade. Re-check any time with `npm audit`.
+- **Updating dependencies:** use npm 11 or newer (npm 10 crashes resolving this tree from scratch, and drops the lockfile's `libc` fields, which pick the right native packages on Linux). `package.json`'s `allowScripts` lists the packages whose install scripts may run — `esbuild`, `ffmpeg-static` (downloads ffmpeg) and `youtube-dl-exec` (downloads yt-dlp) — by name, so new versions stay approved; npm 12 blocks every other package's install scripts, and npm 11 warns about them.
 - **Host check (`server/host-check.ts`):** the server only answers requests addressed to `localhost`, an IP address, or a name in `ALLOWED_HOSTS`, in both dev and production. This blocks DNS-rebinding attacks, where a malicious website points its own domain at `127.0.0.1` to reach servers on your PC. Vite's dev server applies the same rule to its files, and its `fs.deny` list keeps dotfiles such as `.env` from being served.
 - **Dev server errors don't stop the server:** Vite errors (a refused file, a syntax error while editing) are logged and shown in the browser overlay.
 - The download endpoint accepts only validated YouTube URLs (`extractVideoId` in `server/youtube-url.ts`, which rebuilds a canonical URL from the video ID) and sanitises the filename before sending it back in `Content-Disposition`. yt-dlp and ffmpeg are run with argument arrays, never through a shell.

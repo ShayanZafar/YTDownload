@@ -166,7 +166,7 @@ export function FolderPicker({ onChoose, onClose }: FolderPickerProps) {
         // while selecting text) closes it.
         if (event.target === dialogRef.current && pressedOnBackdrop.current) close();
       }}
-      className="m-auto w-[calc(100%-2rem)] max-w-xl border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50 backdrop:backdrop-blur-sm"
+      className="m-auto w-[calc(100%-2rem)] max-w-xl border-0 bg-transparent p-0 text-foreground backdrop:bg-black/50 backdrop:backdrop-blur-xs"
     >
       <div className="flex max-h-[85vh] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
         {/* Title */}
@@ -244,7 +244,7 @@ export function FolderPicker({ onChoose, onClose }: FolderPickerProps) {
               value={typedPath}
               onChange={(event) => setTypedPath(event.target.value)}
               placeholder="Type or paste a folder path"
-              className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-3 font-mono text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/25"
+              className="h-9 min-w-0 flex-1 rounded-lg border border-border bg-background px-3 font-mono text-xs text-foreground focus:outline-hidden focus:ring-2 focus:ring-primary/25"
             />
             <button
               type="submit"
@@ -261,7 +261,7 @@ export function FolderPicker({ onChoose, onClose }: FolderPickerProps) {
             className="mx-5 mt-3 flex items-start gap-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
           >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">{error}</span>
+            <span className="min-w-0 wrap-break-word">{error}</span>
           </p>
         )}
 
@@ -269,7 +269,7 @@ export function FolderPicker({ onChoose, onClose }: FolderPickerProps) {
         <div
           aria-busy={loading}
           className={cn(
-            "mx-5 mt-3 min-h-[12rem] flex-1 overflow-y-auto rounded-xl border border-border transition-opacity",
+            "mx-5 mt-3 min-h-48 flex-1 overflow-y-auto rounded-xl border border-border transition-opacity",
             loading && listing && "opacity-60",
           )}
         >
@@ -289,7 +289,7 @@ export function FolderPicker({ onChoose, onClose }: FolderPickerProps) {
                 value={newName}
                 onFocus={(event) => event.target.select()}
                 onChange={(event) => setNewName(event.target.value)}
-                className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/25"
+                className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm focus:outline-hidden focus:ring-2 focus:ring-primary/25"
               />
               <button
                 type="submit"
@@ -334,7 +334,7 @@ export function FolderPicker({ onChoose, onClose }: FolderPickerProps) {
                   <button
                     type="button"
                     onClick={() => void browse(folder.path)}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
+                    className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-hidden transition-colors"
                   >
                     <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{folder.name}</span>

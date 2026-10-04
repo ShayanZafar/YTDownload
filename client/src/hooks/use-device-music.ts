@@ -17,7 +17,7 @@ export function useDeviceMusic() {
   const [reading, setReading] = useState(0);
   const keys = useRef(new Set<string>());
   const pending = useRef(new Map<string, DeviceTags>());
-  const flushTimer = useRef<ReturnType<typeof setTimeout>>();
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const generation = useRef(0);
 
   // Tags read so far go into the list together, not one re-render per song.

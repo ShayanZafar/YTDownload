@@ -53,7 +53,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
   try {
     const input = api.video.save.input.safeParse(req.body);
     if (!input.success) {
-      const [issue] = input.error.errors;
+      const [issue] = input.error.issues;
       return res.status(400).json({ message: issue.message, field: issue.path.join(".") });
     }
     const { url, format, name, spotifyId } = input.data;

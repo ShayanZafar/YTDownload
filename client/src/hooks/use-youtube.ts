@@ -6,10 +6,10 @@ import { z } from "zod";
  * Safely parse data and log detailed errors if validation fails.
  * This ensures frontend doesn't silently fail when backend shapes change.
  */
-function parseWithLogging<T>(schema: z.ZodSchema<T>, data: unknown, label: string): T {
+function parseWithLogging<T>(schema: z.ZodType<T>, data: unknown, label: string): T {
   const result = schema.safeParse(data);
   if (!result.success) {
-    console.error(`[Zod] ${label} validation failed:`, result.error.format());
+    console.error(`[Zod] ${label} validation failed:`, z.prettifyError(result.error));
     throw new Error(`Data validation failed for ${label}`);
   }
   return result.data;

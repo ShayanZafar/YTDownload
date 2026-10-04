@@ -51,7 +51,8 @@ export async function readDeviceCover(file: File): Promise<Blob | undefined> {
     const cover = selectCover(common.picture);
     if (!cover) return undefined;
     const type = cover.format.toLowerCase() === "image/jpg" ? "image/jpeg" : cover.format;
-    return PICTURE_TYPE.test(type) ? new Blob([cover.data], { type }) : undefined;
+    // A copy: the picture's bytes may sit in a view of a bigger buffer, which a Blob won't take.
+    return PICTURE_TYPE.test(type) ? new Blob([new Uint8Array(cover.data)], { type }) : undefined;
   } catch {
     return undefined;
   }

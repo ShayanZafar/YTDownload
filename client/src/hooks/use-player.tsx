@@ -151,7 +151,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const loaded = useRef<{ key: string; src: string; converted: boolean } | null>(null);
   const objectUrl = useRef<string | null>(null);
   const failuresInARow = useRef(0);
-  const skipTimer = useRef<ReturnType<typeof setTimeout>>();
+  const skipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const current = queue.tracks[queue.order[queue.position]] ?? null;
 

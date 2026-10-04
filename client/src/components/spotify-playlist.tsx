@@ -352,7 +352,7 @@ export function SpotifyPlaylistPanel({
                   className={cn(
                     "rounded-full px-3 py-1 text-xs font-medium transition-colors",
                     show === value
-                      ? "bg-card text-foreground shadow-sm"
+                      ? "bg-card text-foreground shadow-xs"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
@@ -432,7 +432,7 @@ export function SpotifyPlaylistPanel({
                 placeholder="Filter songs"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
-                className="h-9 min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                className="h-9 min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden"
               />
             </label>
           </div>
@@ -451,7 +451,7 @@ export function SpotifyPlaylistPanel({
             ))}
           </div>
         ) : playlist && shown.length > 0 ? (
-          <ol className="max-h-[26rem] divide-y divide-border/60 overflow-y-auto">
+          <ol className="max-h-104 divide-y divide-border/60 overflow-y-auto">
             {shown.map(({ track, index }) => {
               const active = track.id === activeTrackId;
               const here = inFolder(track.id);

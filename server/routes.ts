@@ -61,7 +61,7 @@ const PLAYER_NOT_LOCAL =
 async function songFor(req: Request, res: Response): Promise<AudioFile | undefined> {
   const id = musicIdSchema.safeParse(req.params.id);
   if (!id.success) {
-    res.status(400).json({ message: id.error.errors[0].message });
+    res.status(400).json({ message: id.error.issues[0].message });
     return undefined;
   }
   const { saveFolder } = await settings.get();
@@ -93,7 +93,7 @@ function sendAudioFile(res: Response, file: string, type: string) {
 
 /** The first problem zod found, as `{ message, field }`. */
 function validationError(error: z.ZodError) {
-  const [issue] = error.errors;
+  const [issue] = error.issues;
   return { message: issue.message, field: issue.path.join(".") };
 }
 
@@ -289,8 +289,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({
-          message: err.errors[0].message,
-          field: err.errors[0].path.join("."),
+          message: err.issues[0].message,
+          field: err.issues[0].path.join("."),
         });
       }
       res.status(500).json({ message: ytDlpFailure(err) });
@@ -302,7 +302,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get(api.video.search.path, async (req, res) => {
     const query = api.video.search.query.safeParse(req.query);
     if (!query.success) {
-      return res.status(400).json({ message: query.error.errors[0].message, field: "q" });
+      return res.status(400).json({ message: query.error.issues[0].message, field: "q" });
     }
     const { q } = query.data;
     try {
@@ -365,7 +365,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const query = api.video.download.query.safeParse(req.query);
       if (!query.success) {
-        return res.status(400).send(query.error.errors[0].message);
+        return res.status(400).send(query.error.issues[0].message);
       }
       const { url, format, name, spotifyId } = query.data;
       const videoId = extractVideoId(url);

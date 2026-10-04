@@ -102,7 +102,7 @@ export function HistorySearch({ entries, value, exact, onChange, onPick }: Histo
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={onKeyDown}
-        className="w-full h-10 rounded-xl border border-border bg-card pl-9 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/15 [&::-webkit-search-cancel-button]:hidden"
+        className="w-full h-10 rounded-xl border border-border bg-card pl-9 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:ring-2 focus:ring-primary/15 [&::-webkit-search-cancel-button]:hidden"
       />
       {value && (
         <button

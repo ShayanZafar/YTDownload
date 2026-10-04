@@ -100,7 +100,7 @@ export function RenameableTitle({
               }
             }}
             onBlur={() => finish(true)}
-            className="min-w-0 flex-1 resize-none overflow-hidden bg-transparent font-display text-xl font-bold leading-snug text-foreground focus:outline-none md:text-2xl"
+            className="min-w-0 flex-1 resize-none overflow-hidden bg-transparent font-display text-xl font-bold leading-snug text-foreground focus:outline-hidden md:text-2xl"
           />
           <span
             className="shrink-0 pb-1 text-base font-medium text-muted-foreground"
@@ -126,7 +126,7 @@ export function RenameableTitle({
           onClick={start}
           aria-label={`Rename file: ${shown}`}
           title="Click to rename the downloaded file"
-          className="group -mx-1.5 rounded-lg px-1.5 text-center transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 md:text-left"
+          className="group -mx-1.5 rounded-lg px-1.5 text-center transition-colors hover:bg-primary/5 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25 md:text-left"
         >
           <span className="line-clamp-3 underline decoration-muted-foreground/40 decoration-dashed decoration-2 underline-offset-[6px] group-hover:decoration-foreground/60">
             {shown}

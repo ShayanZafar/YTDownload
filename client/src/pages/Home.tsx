@@ -506,7 +506,7 @@ export default function Home() {
 
         <h1 className="text-3xl sm:text-4xl md:text-6xl font-display font-extrabold tracking-tight text-foreground leading-[1.1]">
           Convert any YouTube video to{" "}
-          <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary/80 to-primary">
+          <span className="text-transparent bg-clip-text bg-linear-to-r from-primary/80 to-primary">
             pure audio.
           </span>
         </h1>
@@ -532,7 +532,7 @@ export default function Home() {
               className={cn(
                 "inline-flex items-center gap-1.5 sm:gap-2 rounded-full px-3 sm:px-4 py-2 text-sm font-medium transition-colors",
                 mode === value
-                  ? "bg-card text-foreground shadow-sm"
+                  ? "bg-card text-foreground shadow-xs"
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
@@ -554,7 +554,7 @@ export default function Home() {
               aria-label={input.label}
               placeholder={input.placeholder}
               enterKeyHint={input.enterKeyHint}
-              className="flex-1 w-0 min-w-0 bg-transparent border-none text-foreground placeholder:text-muted-foreground h-14 px-2 text-base sm:text-lg focus:outline-none"
+              className="flex-1 w-0 min-w-0 bg-transparent border-none text-foreground placeholder:text-muted-foreground h-14 px-2 text-base sm:text-lg focus:outline-hidden"
               value={text}
               onChange={(e) => {
                 setText(e.target.value);
@@ -568,7 +568,7 @@ export default function Home() {
               aria-label={
                 mode === "link" ? "Extract" : mode === "search" ? "Search" : "Open playlist"
               }
-              className="h-14 shrink-0 px-4 sm:px-6 md:px-8 rounded-xl bg-primary text-primary-foreground font-semibold flex items-center gap-2 hover-elevate disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:-translate-y-0 transition-all"
+              className="h-14 shrink-0 px-4 sm:px-6 md:px-8 rounded-xl bg-primary text-primary-foreground font-semibold flex items-center gap-2 hover-elevate disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 transition-all"
             >
               {isBusy ? (
                 <>
@@ -598,7 +598,7 @@ export default function Home() {
         </form>
 
         {/* Where downloads go — visible before a video is opened, and used by Redownload too. */}
-        <div className="w-full !mt-4">
+        <div className="w-full mt-4!">
           <SaveToSetting
             settings={saveTo.settings}
             onChoose={() => setChoosingFolder(true)}
@@ -653,7 +653,7 @@ export default function Home() {
             transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
             className="w-full max-w-3xl mx-auto scroll-mt-24"
           >
-            <div className="glass-card rounded-[2rem] p-4 md:p-6 flex flex-col md:flex-row gap-6 items-center">
+            <div className="glass-card rounded-4xl p-4 md:p-6 flex flex-col md:flex-row gap-6 items-center">
               {/* Thumbnail */}
               <div className="w-full md:w-1/2 aspect-video relative rounded-2xl overflow-hidden shadow-md group">
                 <img
@@ -661,7 +661,7 @@ export default function Home() {
                   alt={selected.title}
                   className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                 />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                <div className="absolute inset-0 bg-linear-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
                 <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-md text-white text-xs font-semibold px-2.5 py-1 rounded-md flex items-center gap-1.5">
                   <Music className="w-3 h-3" /> Audio Track
                 </div>
@@ -1007,7 +1007,7 @@ export default function Home() {
                     className={cn(
                       "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
                       historyRange === range
-                        ? "bg-card text-foreground shadow-sm"
+                        ? "bg-card text-foreground shadow-xs"
                         : "text-muted-foreground hover:text-foreground",
                     )}
                   >

@@ -140,7 +140,7 @@ export const songsInFolderSchema = z.object({
   /** False if the folder has more files than the app looks at (see MAX_SONG_FILES). */
   complete: z.boolean(),
   /** Song id → the file that is that song (its path inside the folder). */
-  found: z.record(z.object({ file: z.string(), by: z.enum(foundByValues) })),
+  found: z.record(z.string(), z.object({ file: z.string(), by: z.enum(foundByValues) })),
 });
 
 export type SongsInFolder = z.infer<typeof songsInFolderSchema>;

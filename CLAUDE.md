@@ -11,7 +11,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 
 ## Stack
 
-- **Frontend:** React 18 + Vite, wouter (routing), TanStack Query, shadcn/ui, Tailwind — `client/`
+- **Frontend:** React 19 + Vite 8, wouter (routing), TanStack Query, shadcn/ui, Tailwind CSS 4 — `client/`
 - **Backend:** Express 5 + TypeScript (`tsx` in dev, esbuild bundle in prod) — `server/`
 - **Storage:** no database — the download history is `data/history.json` and the settings are
   `data/settings.json` (both git-ignored), written by `server/storage.ts` and `server/settings.ts`;
@@ -214,9 +214,9 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   Playwright's WebKit on Windows plays media through Media Foundation: opening a song blocks the page
   for several seconds (give such clicks a long timeout), it can't play blob: URLs, and it plays WMA
   but not Ogg/Opus or AIFF — `player.spec.ts` asks the browser instead of assuming.
-- Every feature must work in current Chrome, Edge, Firefox and Safari (build target: Safari 16+). No
-  browser-only APIs; no regex lookbehind (Safari < 16.4 throws) and no `for await` over streams —
-  `tests/unit/browser-support.test.ts` checks. Playwright runs every test in Chrome and WebKit, and
+- Every feature must work in current Chrome, Edge, Firefox and Safari (oldest: Chrome/Edge 111,
+  Firefox 128, Safari 16.4 — Vite 8's build target and Tailwind CSS 4's minimum). No browser-only APIs,
+  and no `for await` over streams — `tests/unit/browser-support.test.ts` checks. Playwright runs every test in Chrome and WebKit, and
   in Firefox only via `E2E_BROWSERS`: on this Windows 10 PC Playwright's Firefox and Chromium builds
   fail to start (side-by-side configuration error), which is also why Chrome is the installed one
   (`channel: "chrome"`). The installed Firefox works over BiDi (`channel: "moz-firefox"`), but BiDi's
@@ -231,10 +231,15 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm run update-yt-dlp`.
 - Prettier config is in `.prettierrc` (`endOfLine: auto`, so CRLF checkouts on Windows are fine).
 - Dependencies: runtime imports only in `dependencies`, everything else in `devDependencies`.
-  `npm audit` should stay at 0. npm 10 crashes resolving this tree from scratch (`edgesOut`), so
-  add/update packages with `npx npm@11 …`; plain `npm install` from the lockfile is fine.
-  If a newer npm blocks install scripts, approve the ones the app needs:
-  `npm install-scripts approve esbuild ffmpeg-static youtube-dl-exec` (they fetch esbuild, ffmpeg, yt-dlp).
+  `npm audit` should stay at 0. Use npm 11+ (npm 10 crashes resolving this tree from scratch and drops
+  the lockfile's `libc` fields). `allowScripts` in package.json approves, by name, the install scripts
+  the app needs — esbuild, ffmpeg-static (ffmpeg), youtube-dl-exec (yt-dlp); npm 12 blocks all others.
+  Everything is on its newest version except TypeScript (6.0: typescript-eslint supports < 6.1, not
+  the native TypeScript 7 yet) and `@types/node` (follows the Node the app runs on, 24).
+- Tailwind CSS 4: no `tailwind.config.ts` — the theme is `@theme` in `client/src/index.css`, which
+  scans `client/` only (`source('..')`); custom classes are `@utility`; animations come from
+  `tw-animate-css`; the plugin is `@tailwindcss/vite` (no PostCSS config). Zod 4: messages go in an
+  `error` option, errors are `.issues`, `z.record()` takes a key schema.
 - Don't make Vite errors exit the process (the old Replit template did) — a refused request or a
   half-saved file would kill the dev server.
 

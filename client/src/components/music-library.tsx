@@ -269,9 +269,9 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                   aria-pressed={source === value}
                   onClick={() => setSource(value)}
                   className={cn(
-                    "max-w-[14rem] truncate rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                    "max-w-56 truncate rounded-full px-3 py-1 text-xs font-medium transition-colors",
                     source === value
-                      ? "bg-card text-foreground shadow-sm"
+                      ? "bg-card text-foreground shadow-xs"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
@@ -299,7 +299,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
         {tracks.length > 0 && (
           <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
             {tracks.length >= FILTER_FROM && (
-              <label className="flex min-w-[10rem] flex-1 items-center gap-2 rounded-lg bg-secondary/50 px-3">
+              <label className="flex min-w-40 flex-1 items-center gap-2 rounded-lg bg-secondary/50 px-3">
                 <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <input
                   type="search"
@@ -307,7 +307,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                   placeholder="Filter songs"
                   value={filter}
                   onChange={(event) => setFilter(event.target.value)}
-                  className="h-9 min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                  className="h-9 min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-hidden"
                 />
               </label>
             )}
@@ -366,7 +366,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
             ))}
           </div>
         ) : listed.length > 0 ? (
-          <ol className="max-h-[28rem] divide-y divide-border/60 overflow-y-auto">
+          <ol className="max-h-112 divide-y divide-border/60 overflow-y-auto">
             {listed.map((track, index) => {
               const isCurrent = player.current?.key === track.key;
               const isPlaying = isCurrent && player.status === "playing";

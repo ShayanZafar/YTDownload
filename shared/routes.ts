@@ -49,7 +49,7 @@ export const api = {
     info: {
       method: "POST" as const,
       path: "/api/video/info" as const,
-      input: z.object({ url: z.string().url() }),
+      input: z.object({ url: z.url() }),
       responses: {
         200: z.object({
           title: z.string(),
@@ -65,10 +65,7 @@ export const api = {
       path: "/api/search" as const,
       query: z.object({
         q: z
-          .string({
-            required_error: "Type something to search for",
-            invalid_type_error: "Type something to search for",
-          })
+          .string({ error: "Type something to search for" })
           .trim()
           .min(1, "Type something to search for")
           .max(200, "That search is too long"),
@@ -91,9 +88,7 @@ export const api = {
       query: z.object({
         url: z.string().min(1, "Missing YouTube URL"),
         format: z
-          .enum(downloadFormats, {
-            errorMap: () => ({ message: 'format must be "mp3" or "original"' }),
-          })
+          .enum(downloadFormats, { error: 'format must be "mp3" or "original"' })
           .default("mp3"),
         /** File name to save as (without extension); the video's title if left out. */
         name: z.string().max(300, "That file name is too long").optional(),
@@ -108,9 +103,7 @@ export const api = {
       input: z.object({
         url: z.string().min(1, "Missing YouTube URL"),
         format: z
-          .enum(downloadFormats, {
-            errorMap: () => ({ message: 'format must be "mp3" or "original"' }),
-          })
+          .enum(downloadFormats, { error: 'format must be "mp3" or "original"' })
           .default("mp3"),
         name: z.string().max(300, "That file name is too long").optional(),
         spotifyId: spotifyIdSchema.optional(),
@@ -124,10 +117,7 @@ export const api = {
       path: "/api/spotify/playlist" as const,
       query: z.object({
         link: z
-          .string({
-            required_error: "Paste a Spotify playlist link",
-            invalid_type_error: "Paste a Spotify playlist link",
-          })
+          .string({ error: "Paste a Spotify playlist link" })
           .trim()
           .min(1, "Paste a Spotify playlist link")
           .max(500, "That link is too long"),
