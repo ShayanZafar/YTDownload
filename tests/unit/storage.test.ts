@@ -9,7 +9,7 @@ let file: string;
 let store: FileStorage;
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "history-test-"));
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-storage-"));
   file = path.join(dir, "nested", "history.json"); // folder doesn't exist yet
   store = new FileStorage(() => file);
 });

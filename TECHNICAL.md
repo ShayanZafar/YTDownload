@@ -614,12 +614,13 @@ npm start                        # serves dist/ on http://localhost:5000
 
 ### Wired-up npm scripts
 
-| Script          | What it does                                                                      |
-| --------------- | --------------------------------------------------------------------------------- |
-| `npm run dev`   | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode. |
-| `npm run build` | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).     |
-| `npm start`     | Runs the production build from `dist/index.cjs` (production mode is baked in).    |
-| `npm run check` | Type-checks the entire project with `tsc`.                                        |
+| Script          | What it does                                                                                   |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| `npm run dev`   | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode.              |
+| `npm run build` | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).                  |
+| `npm start`     | Runs the production build from `dist/index.cjs` (production mode is baked in).                 |
+| `npm run check` | Type-checks the entire project with `tsc`.                                                     |
+| `npm run clean` | Removes what test runs leave behind (see [Cleaning up after tests](#cleaning-up-after-tests)). |
 
 ### Tests, linting, and formatting
 
@@ -677,6 +678,7 @@ tests/
 │   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
 │   ├── web-app.test.ts          # the web app manifest and its icons
 │   ├── yt-dlp-script.test.ts    # scripts/yt-dlp.mjs: the standalone yt-dlp for each system
+│   ├── clean-script.test.ts     # scripts/clean.ts: it recognises every temp name the tests use
 │   ├── windows-scripts.test.ts  # the Windows scripts and the install branch's shortcuts: ASCII, CRLF, one line each
 │   ├── dev-server.test.ts       # the dev server sends the page's files, never data/, dotfiles or the rest
 │   └── host-check.test.ts       # DNS-rebinding protection
@@ -686,6 +688,10 @@ tests/
 ```
 
 Configuration files: `vitest.config.ts` and `playwright.config.ts`.
+
+### Cleaning up after tests
+
+The tests keep their files in the system's temp folder, named `yt-audio-<what>-…`, and a run that's stopped part-way (or the Playwright test server, whose history, settings and player cache outlive each run) leaves some behind, as does a browser Playwright couldn't close. `npm run clean` (`scripts/clean.ts`) removes them, along with Playwright's `test-results/` and `playwright-report/`; `npm run clean -- --dry-run` lists them first. It never touches `data/`, `dist/`, the music player's cache (`yt-audio-player`) or a Save to folder. Run it when no tests are running. A new test's temp files must follow the same naming — `clean-script.test.ts` fails otherwise.
 
 ### API end-to-end (Vitest + Supertest)
 

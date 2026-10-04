@@ -123,7 +123,9 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   `scripts/make-icons.ts` with Chrome (`npx tsx scripts/make-icons.ts`; `tests/unit/web-app.test.ts`)
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
   (Playwright, in Chrome and WebKit; Firefox on request). The player's tests (`music*.test.ts`,
-  `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed
+  `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed. Tests name their temp
+  files `yt-audio-<what>-` + `fs.mkdtemp()`'s suffix, so `scripts/clean.ts` finds what interrupted
+  runs leave (`clean-script.test.ts` checks every name)
 
 ## Commands
 
@@ -138,6 +140,9 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - `npx eslint .` and `npx prettier --check .`
 - `npm run build`, then `npm start` — production bundle
 - `npm run update-yt-dlp` — the newest yt-dlp, on any system (Windows: `update-yt-dlp.cmd` too)
+- `npm run clean` — removes what test runs leave behind: their temp files, Playwright's
+  `test-results/`, `playwright-report/` and leftover browser profiles (`-- --dry-run` lists them).
+  Never `data/`, `dist/`, the player's cache or a Save to folder; run it when no tests are running
 
 ## Local setup (Windows, macOS, Linux)
 

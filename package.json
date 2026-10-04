@@ -8,6 +8,7 @@
     "build": "tsx scripts/build.ts",
     "start": "node dist/index.cjs",
     "check": "tsc",
+    "clean": "tsx scripts/clean.ts",
     "postinstall": "node scripts/yt-dlp.mjs",
     "update-yt-dlp": "node scripts/yt-dlp.mjs --update"
   },
