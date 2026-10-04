@@ -500,7 +500,7 @@ export default function Home() {
       {/* Hero Section */}
       <section className="flex flex-col items-center text-center space-y-6 w-full max-w-2xl mx-auto pt-8">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-secondary text-secondary-foreground text-sm font-medium border border-border">
-          <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse" />
+          <span className="flex h-2 w-2 rounded-full bg-primary" />
           High Quality Audio Extraction
         </div>
 
