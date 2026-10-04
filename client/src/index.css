@@ -111,13 +111,13 @@ layer(base);
     hsl(var(--primary) / 0.007) 78%,
     transparent
   );
+  /* On a narrow screen the blur spread the glow thinner. */
   @media (max-width: 639px) {
     opacity: 0.65;
   }
 }
 
 @utility glass-card {
-  /* On a narrow screen the blur spread the glow thinner. */
   @apply bg-card/70 backdrop-blur-xl border border-white/20 shadow-xl shadow-black/5 dark:bg-card/40 dark:border-white/10;
 }
 
