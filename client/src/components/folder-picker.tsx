@@ -71,12 +71,15 @@ export function FolderPicker({ onChoose, onClose }: FolderPickerProps) {
     const controller = new AbortController();
     request.current = controller;
     focusListNext.current = !!listRef.current?.contains(document.activeElement);
+    // A path typed while this loads (say, pasted while the picker is still
+    // opening) stays in the box when the answer comes: Enter opens what was typed.
+    const pathShown = typedPath;
     setLoading(true);
     setError(null);
     try {
       const next = await listFolders(path, controller.signal);
       setListing(next);
-      setTypedPath(next.path);
+      setTypedPath((shown) => (shown === pathShown ? next.path : shown));
       setNewName(null);
     } catch (err) {
       if (!controller.signal.aborted) setError(messageOf(err));

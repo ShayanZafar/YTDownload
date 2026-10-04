@@ -390,7 +390,15 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
 
   test("Save to: pick a folder in the app's folder browser; downloads are saved into it", async ({
     page,
+    browserName,
   }) => {
+    // Playwright's WebKit on Windows draws in software: the page's background
+    // blurs, repainted for its animations, take ~1 s a frame there, and it waits
+    // for 5 still frames before each click (other browsers: 1). So each click
+    // takes ~10 s, and this test's dozen clicks and two downloads need more
+    // than 2 minutes. Safari draws with the GPU and isn't slowed down.
+    test.slow(browserName === "webkit" && process.platform === "win32", "~10 s per click");
+
     // A real folder on this computer: the app writes into it itself, so this
     // works the same in every browser.
     const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-"));
@@ -452,6 +460,41 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     // Back to the browser's own downloads.
     await page.getByRole("button", { name: /use the browser's downloads folder instead/i }).click();
     await expect(page.getByText(/your browser's downloads folder/i)).toBeVisible();
+    await fs.rm(folder, { recursive: true, force: true });
+  });
+
+  test("Save to: a path typed while the folder browser is still opening isn't replaced", async ({
+    page,
+  }) => {
+    const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-"));
+    await fs.mkdir(path.join(folder, "Albums"));
+    // The folder browser first asks the app for the folder it opens on, which
+    // can take seconds (on Windows the app looks up where Music and the other
+    // quick links are). Hold that answer until a path has been typed.
+    let pathTyped!: () => void;
+    const typed = new Promise<void>((resolve) => (pathTyped = resolve));
+    await page.route(
+      (url) => url.pathname === "/api/folders" && !url.search,
+      async (route) => {
+        await typed;
+        await route.continue();
+      },
+    );
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /choose folder/i }).click();
+    const picker = page.getByRole("dialog", { name: /choose where to save/i });
+    const pathBox = picker.getByRole("textbox", { name: /folder path/i });
+    await pathBox.fill(folder);
+    pathTyped();
+
+    // The late answer brings the quick links, but leaves the typed path alone…
+    await expect(picker.getByRole("group", { name: "Places" })).toBeVisible();
+    await expect(pathBox).toHaveValue(folder);
+    // …so Enter opens it.
+    await pathBox.press("Enter");
+    await expect(picker.getByRole("button", { name: "Albums", exact: true })).toBeVisible();
+    await expect(pathBox).toHaveValue(folder);
     await fs.rm(folder, { recursive: true, force: true });
   });
 
