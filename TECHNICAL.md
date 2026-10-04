@@ -74,10 +74,12 @@ This document covers the project's architecture, local development setup, enviro
 ├── scripts/
 │   ├── build.ts               # Production build (npm run build)
 │   ├── make-icons.ts          # The app's icons, drawn by Chrome (npx tsx scripts/make-icons.ts)
+│   ├── yt-dlp.mjs             # After npm install: yt-dlp's standalone build on macOS/Linux; npm run update-yt-dlp
 │   ├── install/               # The install branch's README, .gitignore and Start/Stop/Update shortcuts
 │   └── windows/               # Double-click helpers: start, stop, update, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
 ├── .github/workflows/
-│   └── install.yml            # Builds the ready-to-run app onto the install branch after every push to main
+│   ├── install.yml            # Builds the ready-to-run app onto the install branch after every push to main
+│   └── tests.yml              # Type-check, lint and unit tests on Linux and Windows (macOS weekly)
 ├── docs/
 │   └── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
 ├── tailwind.config.ts         # Tailwind theme configuration
@@ -526,36 +528,39 @@ None are required. To set any, put them in a `.env` file in the project root (co
 
 ## Local Development Setup
 
+The app is developed the same way on Windows, macOS and Linux: the npm scripts are cross-platform (`cross-env`), the server reads `.env` itself, and on every system yt-dlp is a standalone program, so **Python isn't needed**. GitHub Actions checks it on Linux and Windows after every push, and on macOS every week ([Continuous integration](#continuous-integration)).
+
 ### Prerequisites
 
-- **Node.js 20** or newer
-- **npm** (bundled with Node)
-- **Python 3.10+** on `PATH` (Linux/macOS only — Windows uses the standalone `yt-dlp.exe`) — required by `yt-dlp`, which the download endpoint shells out to. Without it, `/api/video/download` will fail at runtime with `python3: No such file or directory`.
-  - macOS: `brew install python@3.11`
-  - Debian/Ubuntu: `sudo apt install python3`
-  - Fedora/RHEL: `sudo dnf install python3`
-  - Verify with `python3 --version` (should be 3.10+).
+- **Node.js 24 (LTS)**, the version the tests run on, with the npm that comes with it. macOS: `brew install node` or the installer from nodejs.org; Linux: your distribution's Node 24 packages, NodeSource, or `nvm`; Windows: `winget install -e --id OpenJS.NodeJS.LTS`.
+- **Git.**
+- For the browser tests only: Google Chrome and Playwright's WebKit — `npx playwright install chrome webkit` (on Linux, `npx playwright install --with-deps chrome webkit`, which installs the system libraries they need).
 
 ### Steps
 
 1. **Clone the repository**
 
    ```bash
-   git clone <your-repo-url>
-   cd <project-directory>
+   git clone https://github.com/ShayanZafar/YTDownload.git
+   cd YTDownload
    ```
 
 2. **Install dependencies**
 
    ```bash
+   export YOUTUBE_DL_SKIP_PYTHON_CHECK=1   # PowerShell: $env:YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
    npm install
    ```
+
+   youtube-dl-exec's installer stops unless it finds Python 3.9+ or that variable is set — but the app doesn't use Python. On macOS and Linux the installer downloads the Python version of yt-dlp (which needs Python 3.10+: a Mac has none, or 3.9), so after the install `scripts/yt-dlp.mjs` (the `postinstall` script) swaps it for yt-dlp's standalone build for the system: `yt-dlp_macos`, `yt-dlp_linux` or `yt-dlp_linux_aarch64` (`yt-dlp_musllinux…` on Alpine). On Windows the installer downloads the standalone `yt-dlp.exe` to begin with. To set the variable for good, add the `export` to your shell's profile (`setx YOUTUBE_DL_SKIP_PYTHON_CHECK 1` on Windows).
 
 3. **Start the dev server**
    ```bash
    npm run dev
    ```
    The app is available at `http://localhost:5000`. The frontend hot-reloads via Vite; restart the command after changing server files. No configuration is needed — `.env` is optional (see [Environment Variables](#environment-variables)).
+
+When YouTube downloads stop working, `npm run update-yt-dlp` gets the newest yt-dlp (it updates itself in place). On macOS and Linux, use that rather than `npm rebuild youtube-dl-exec`, which brings back the Python version (`node scripts/yt-dlp.mjs` swaps it again).
 
 ---
 
@@ -598,7 +603,7 @@ npm start                        # serves dist/ on http://localhost:5000
 
 - **Port 5000 is in use.** Set `PORT=5001` (or any free port) in `.env`. Find what's holding 5000 with `Get-NetTCPConnection -LocalPort 5000`.
 - **Reaching it from your phone or another PC.** The server only listens on this computer by default. Set `HOST=0.0.0.0` in `.env` (Windows Firewall will ask to allow Node) and open `http://<your PC's IP>:5000`. To use a host name instead of the IP (e.g. a Tailscale name), add it to `ALLOWED_HOSTS`.
-- **Downloads stop working after a while.** YouTube changes things regularly; run `npm rebuild youtube-dl-exec` to fetch the latest yt-dlp (with `YOUTUBE_DL_SKIP_PYTHON_CHECK` set, as above).
+- **Downloads stop working after a while.** YouTube changes things regularly; run `npm run update-yt-dlp` (or `scripts\windows\update-yt-dlp.cmd`) to get the newest yt-dlp.
 - **`npm install` skips dev dependencies** (e.g. `'tsx' is not recognized`). `NODE_ENV=production` is set in that terminal — clear it (`Remove-Item Env:NODE_ENV`) and reinstall.
 - **Long file paths in `node_modules`.** If `npm install` fails with `ENAMETOOLONG`, enable Windows long-path support: `New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force` (elevated PowerShell, then reboot).
 - **Keep the project path free of spaces** (e.g. `C:\Code\...`, not `C:\My Projects\...`). The yt-dlp wrapper falls back to running through a shell when its path contains spaces, which is more fragile.
@@ -639,6 +644,10 @@ These tools are installed and configured but have no shortcut script in `package
 
 The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history and settings files, the folder browser, finding a playlist's songs among a folder's files, the host and local-only checks, the page's save client and "Download all" rules, the music player (song ids, Ogg lengths, covers, the FLAC conversion and its cache, sorting, filtering and play order), the Windows scripts and the install branch's shortcuts, the web app manifest and its icons, and the UI's small formatting helpers.
 
+### Continuous integration
+
+`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, `npm run check`, the unit tests and the music player's API test (which makes its own songs), and, on Linux, ESLint and Prettier. The other API and browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
+
 ### Layout
 
 ```
@@ -668,6 +677,7 @@ tests/
 │   ├── save-to-folder.test.ts   # the page's save client: progress lines, errors, cancel
 │   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
 │   ├── web-app.test.ts          # the web app manifest and its icons
+│   ├── yt-dlp-script.test.ts    # scripts/yt-dlp.mjs: the standalone yt-dlp for each system
 │   ├── windows-scripts.test.ts  # the Windows scripts and the install branch's shortcuts: ASCII, CRLF, one line each
 │   └── host-check.test.ts       # DNS-rebinding protection
 └── utils/

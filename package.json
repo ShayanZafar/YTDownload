@@ -7,7 +7,9 @@
     "dev": "cross-env NODE_ENV=development tsx server/index.ts",
     "build": "tsx scripts/build.ts",
     "start": "node dist/index.cjs",
-    "check": "tsc"
+    "check": "tsc",
+    "postinstall": "node scripts/yt-dlp.mjs",
+    "update-yt-dlp": "node scripts/yt-dlp.mjs --update"
   },
   "dependencies": {
     "@radix-ui/react-label": "^2.1.3",

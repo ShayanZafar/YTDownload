@@ -57,5 +57,14 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off",
     },
   },
+  {
+    // Plain-JavaScript scripts Node runs (scripts/yt-dlp.mjs, after npm install).
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: { ...globals.node },
+    },
+  },
   prettier,
 );

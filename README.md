@@ -64,7 +64,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 
 ## Looking For Setup Or Deployment Info?
 
-To install the app on a PC, start it, run it with Windows, use it from your phone or host it elsewhere, see [Running the app](docs/run/README.md). For architecture details, local development setup, environment variables, and deployment instructions, see [TECHNICAL.md](./TECHNICAL.md).
+To install the app on a PC, start it, run it with Windows, use it from your phone or host it elsewhere, see [Running the app](docs/run/README.md). For architecture details, local development setup (on Windows, macOS or Linux), environment variables, and deployment instructions, see [TECHNICAL.md](./TECHNICAL.md).
 
 ## Coming From A Different Stack?
 

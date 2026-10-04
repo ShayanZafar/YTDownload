@@ -1,0 +1,65 @@
+# Keeps the app easy to work on from any system: installs it, checks that
+# yt-dlp and ffmpeg run, type-checks, lints and runs the unit tests — on Linux
+# and Windows after every push to main (and on pull requests), and on macOS
+# too every Monday or when run by hand (Actions tab, Run workflow): macOS
+# minutes count ten times against GitHub's free allowance.
+#
+# The API and browser tests that talk to YouTube aren't run here — YouTube
+# often refuses GitHub's machines — but the music player's API test is: it
+# makes its own songs.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# A newer push replaces a run that's still going.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      # youtube-dl-exec's installer looks for Python, which the app doesn't use
+      # (scripts/yt-dlp.mjs installs yt-dlp's standalone build).
+      YOUTUBE_DL_SKIP_PYTHON_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: yt-dlp and ffmpeg run
+        run: >-
+          node -e "const { execFileSync: run } = require('child_process');
+          const ytDlp = require('youtube-dl-exec').constants.YOUTUBE_DL_PATH;
+          console.log('yt-dlp', run(ytDlp, ['--version']).toString().trim(), '(' + ytDlp + ')');
+          console.log(run(require('ffmpeg-static'), ['-version']).toString().split('\n')[0]);"
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Unit tests
+        run: npx vitest run tests/unit tests/api/music.e2e.test.ts
+
+      - name: Lint and formatting
+        if: runner.os == 'Linux'
+        run: |
+          npx eslint .
+          npx prettier --check .

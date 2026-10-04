@@ -33,6 +33,8 @@ This build: [`{{SHORT_SHA}}`](https://github.com/{{REPO}}/commit/{{SHA}}), {{DAT
 | `scripts\windows\`           | The rest: `update-yt-dlp.cmd` when YouTube downloads stop working, `autostart-on.cmd` and `autostart-off.cmd` to start it with Windows. |
 | `.env` (copy `.env.example`) | Settings, like the port, or `HOST=0.0.0.0` to let your phone use the app.                                                               |
 
-Your phone uses the app running on this PC — see [Using it from your phone](https://github.com/{{REPO}}/blob/main/docs/run/README.md#using-it-from-your-phone). On macOS or Linux, install with `npm ci --omit=dev` and start with `npm start`.
+Your phone uses the app running on this PC — see [Using it from your phone](https://github.com/{{REPO}}/blob/main/docs/run/README.md#using-it-from-your-phone).
+
+On macOS or Linux (no Python needed): install with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1 npm ci --omit=dev`, start with `npm start`, and update with `git fetch --depth 1 origin install && git reset --hard FETCH_HEAD` (then install again). `npm run update-yt-dlp` gets the newest yt-dlp.
 
 More: [Running the app](https://github.com/{{REPO}}/blob/main/docs/run/README.md) and the [user guide](https://github.com/{{REPO}}/blob/main/README.md).

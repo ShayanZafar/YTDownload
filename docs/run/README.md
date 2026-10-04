@@ -50,7 +50,7 @@ They're `.cmd` files so a double-click runs them whatever PowerShell's script se
 
 ## Running it from a terminal
 
-The scripts run these commands for you. They work on macOS and Linux too, with `npm` instead of `npm.cmd`.
+The scripts run these commands for you on Windows. On macOS and Linux — where the app works the same, without the double-click scripts — type them yourself, with `npm` instead of `npm.cmd`.
 
 ```powershell
 cd C:\Code\YTDownload
@@ -58,9 +58,10 @@ npm.cmd run dev              # http://localhost:5000 — Ctrl+C stops it
 ```
 
 - The first time, and after an update that changes the packages, install them first:
-  `$env:YOUTUBE_DL_SKIP_PYTHON_CHECK="1"; npm.cmd install`. The variable stops yt-dlp's installer from asking for Python, which the Windows yt-dlp doesn't use.
+  `$env:YOUTUBE_DL_SKIP_PYTHON_CHECK="1"; npm.cmd install` (on macOS and Linux: `YOUTUBE_DL_SKIP_PYTHON_CHECK=1 npm install`). The variable stops yt-dlp's installer from asking for Python, which the app doesn't use: Windows gets the standalone `yt-dlp.exe`, and on macOS and Linux the install puts yt-dlp's standalone build in place.
 - In PowerShell, plain `npm` may be blocked by the script setting — that's why these use `npm.cmd`.
 - A lighter way to run it every day: `npm.cmd run build` once (and again after each update), then `npm.cmd start`.
+- `npm.cmd run update-yt-dlp` gets the newest yt-dlp, like `update-yt-dlp.cmd`.
 - After changing `.env`, restart the app (`stop.cmd`, then `start.cmd`).
 
 ## Using it from your phone
@@ -98,7 +99,7 @@ The app treats requests through that address as another device's, even from the 
 
 ## Keeping it working
 
-- **YouTube downloads fail** ("Sign in to confirm you're not a bot", "HTTP Error 403", or "Video unavailable" for a video that plays fine on YouTube): run `update-yt-dlp.cmd`.
+- **YouTube downloads fail** ("Sign in to confirm you're not a bot", "HTTP Error 403", or "Video unavailable" for a video that plays fine on YouTube): run `update-yt-dlp.cmd` (on macOS and Linux, `npm run update-yt-dlp`).
 - **New versions of the app:** double-click `Update.cmd` in the ready-to-run app, or `scripts\windows\update.cmd` in a copy of the source code (it runs `git pull`). The next start installs any new packages by itself.
 
 ## Hosting it somewhere else

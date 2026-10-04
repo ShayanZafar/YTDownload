@@ -3,8 +3,9 @@
 Small full-stack app: paste a YouTube URL (or search for a song, paste a Spotify song link, or pick
 songs from a Spotify playlist — with a Save to folder, it shows which are already there and downloads
 the rest), preview it, download the audio track — and play your music: the Save to folder's songs
-on the computer running the app, or songs picked on a phone. Developed and run locally on Windows
-(it also works on macOS/Linux). `README.md` is the user guide, `docs/run/README.md` says how to
+on the computer running the app, or songs picked on a phone. Developed on Windows, and works the same
+on macOS and Linux (CI checks Linux and Windows on every push, macOS weekly — `.github/workflows/tests.yml`).
+`README.md` is the user guide, `docs/run/README.md` says how to
 install and run it (the ready-to-run build, scripts, terminal, phone, hosting), `TECHNICAL.md` has
 architecture, setup and deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
 
@@ -111,6 +112,13 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   `.gitignore`, `Start/Stop/Update.cmd` shortcuts — one line each, as `Update.cmd` replaces them
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
   (no history to merge). Never commit to `install` by hand
+- `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, type-check, unit tests + the music API
+  test, lint on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
+  10×). The YouTube API and browser tests aren't run there (GitHub's machines get refused)
+- `scripts/yt-dlp.mjs` — the `postinstall`: on macOS/Linux, swaps youtube-dl-exec's Python yt-dlp
+  (needs Python 3.10+) for yt-dlp's standalone build (`yt-dlp_macos`, `yt-dlp_linux[_aarch64]`,
+  musl builds); a no-op on Windows (`yt-dlp.exe` is standalone). `--update` (`npm run
+update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch ships it too
 - `client/public/` — `manifest.webmanifest` and the icons (tab, phones' home screens), drawn by
   `scripts/make-icons.ts` with Chrome (`npx tsx scripts/make-icons.ts`; `tests/unit/web-app.test.ts`)
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
@@ -129,18 +137,24 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   First time: `npx playwright install chrome webkit firefox`
 - `npx eslint .` and `npx prettier --check .`
 - `npm run build`, then `npm start` — production bundle
+- `npm run update-yt-dlp` — the newest yt-dlp, on any system (Windows: `update-yt-dlp.cmd` too)
 
-## Local setup (Windows)
+## Local setup (Windows, macOS, Linux)
 
-- No setup beyond `npm install`. `.env` is optional (`PORT`, `HOST`, `HISTORY_FILE`, `SETTINGS_FILE`,
-  `FFMPEG_BIN`, `PLAYER_CACHE_DIR`); shell variables override it. Delete `data/history.json` to clear
-  the history.
+- No setup beyond `npm install` (Node 24 LTS; no Python on any system). `.env` is optional (`PORT`,
+  `HOST`, `HISTORY_FILE`, `SETTINGS_FILE`, `FFMPEG_BIN`, `PLAYER_CACHE_DIR`); shell variables override
+  it. Delete `data/history.json` to clear the history.
 - The API tests point `HISTORY_FILE`/`SETTINGS_FILE` at a temp folder, and the Playwright config starts its
   own server on port 5099 with a temp history and settings, so tests never touch the real ones.
+- `npm install` needs `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment on a system without Python
+  3.9+: youtube-dl-exec's installer demands it though the app doesn't use Python (`yt-dlp.exe` on
+  Windows; `scripts/yt-dlp.mjs` installs the standalone build on macOS/Linux afterwards). Don't use
+  `npm rebuild youtube-dl-exec` on macOS/Linux — it brings back the Python yt-dlp until
+  `node scripts/yt-dlp.mjs` runs again; `npm run update-yt-dlp` updates it in place.
 - In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
-- `npm install` / `npm rebuild youtube-dl-exec` need `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment:
-  the package's installer demands Python 3.9+ even though Windows' `yt-dlp.exe` doesn't use it.
 - If `npm install` skips dev dependencies, `NODE_ENV=production` is set in that shell — unset it.
+- This PC's global npm is 10.8.1 (not Node 24's npm 11): `npm install` rewrites `package-lock.json`
+  without the `libc` fields — make lockfile changes with `npx npm@11 …`.
 
 ## Conventions and gotchas
 
@@ -212,8 +226,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   each click takes ~10 s, so long tests need `test.slow()` there — and the slow frames delay network
   answers too, so a late answer must never undo what the user did meanwhile.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
-- If extraction suddenly breaks, update yt-dlp before debugging code: `npm rebuild youtube-dl-exec`
-  (with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` set).
+- If extraction suddenly breaks, update yt-dlp before debugging code: `npm run update-yt-dlp`.
 - Prettier config is in `.prettierrc` (`endOfLine: auto`, so CRLF checkouts on Windows are fine).
 - Dependencies: runtime imports only in `dependencies`, everything else in `devDependencies`.
   `npm audit` should stay at 0. npm 10 crashes resolving this tree from scratch (`edgesOut`), so
