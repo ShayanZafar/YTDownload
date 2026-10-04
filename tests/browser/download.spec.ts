@@ -390,15 +390,7 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
 
   test("Save to: pick a folder in the app's folder browser; downloads are saved into it", async ({
     page,
-    browserName,
   }) => {
-    // Playwright's WebKit on Windows draws in software: the page's background
-    // blurs, repainted for its animations, take ~1 s a frame there, and it waits
-    // for 5 still frames before each click (other browsers: 1). So each click
-    // takes ~10 s, and this test's dozen clicks and two downloads need more
-    // than 2 minutes. Safari draws with the GPU and isn't slowed down.
-    test.slow(browserName === "webkit" && process.platform === "win32", "~10 s per click");
-
     // A real folder on this computer: the app writes into it itself, so this
     // works the same in every browser.
     const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-"));

@@ -107,6 +107,31 @@
 }
 
 @layer utilities {
+  /* The page's soft background glow: a gradient that fades like the blurred
+     shape it replaced (filter: blur(120px)), reaching 240px past it. A blur
+     that size is slow to repaint without a GPU: in Playwright's WebKit on
+     Windows the page managed about a frame a second. */
+  .ambient-glow {
+    @apply absolute pointer-events-none;
+    width: calc(40% + 480px);
+    height: calc(40% + 480px);
+    background: radial-gradient(
+      closest-side,
+      hsl(var(--primary) / 0.046),
+      hsl(var(--primary) / 0.038) 30%,
+      hsl(var(--primary) / 0.022) 55%,
+      hsl(var(--primary) / 0.007) 78%,
+      transparent
+    );
+  }
+
+  /* On a narrow screen the blur spread the glow thinner. */
+  @media (max-width: 639px) {
+    .ambient-glow {
+      opacity: 0.65;
+    }
+  }
+
   .glass-card {
     @apply bg-card/70 backdrop-blur-xl border border-white/20 shadow-xl shadow-black/5 dark:bg-card/40 dark:border-white/10;
   }

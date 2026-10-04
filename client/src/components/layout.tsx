@@ -7,8 +7,8 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden">
       {/* Subtle ambient background glow */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px] pointer-events-none" />
+      <div className="ambient-glow top-[calc(-10%_-_240px)] left-[calc(-10%_-_240px)]" />
+      <div className="ambient-glow bottom-[calc(-10%_-_240px)] right-[calc(-10%_-_240px)]" />
 
       <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-background/60 backdrop-blur-xl">
         <div className="max-w-5xl mx-auto flex h-16 items-center px-6">

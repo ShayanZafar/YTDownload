@@ -221,10 +221,11 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   fail to start (side-by-side configuration error), which is also why Chrome is the installed one
   (`channel: "chrome"`). The installed Firefox works over BiDi (`channel: "moz-firefox"`), but BiDi's
   `fill()` doesn't reach React inputs — type with `pressSequentially()` there. Playwright's WebKit on
-  Windows draws in software, where this page manages ~1 frame a second (the background's big blurs
-  repaint for every animation frame), and waits for 5 still frames before each click (1 elsewhere):
-  each click takes ~10 s, so long tests need `test.slow()` there — and the slow frames delay network
-  answers too, so a late answer must never undo what the user did meanwhile.
+  Windows draws in software and waits for 5 still frames before each click (1 elsewhere), and the
+  hero's pulsing dot makes the page repaint every frame — so whatever is costly to paint slows every
+  click there: a `blur(120px)` background glow (now a gradient, `.ambient-glow`) made clicks take
+  ~10 s and long tests time out. Avoid big `blur()` areas. Slow frames delay network answers too,
+  so a late answer must never undo what the user did meanwhile.
 - yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
 - If extraction suddenly breaks, update yt-dlp before debugging code: `npm run update-yt-dlp`.
 - Prettier config is in `.prettierrc` (`endOfLine: auto`, so CRLF checkouts on Windows are fine).
