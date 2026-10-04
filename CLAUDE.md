@@ -153,8 +153,8 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   `node scripts/yt-dlp.mjs` runs again; `npm run update-yt-dlp` updates it in place.
 - In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
 - If `npm install` skips dev dependencies, `NODE_ENV=production` is set in that shell — unset it.
-- This PC's global npm is 10.8.1 (not Node 24's npm 11): `npm install` rewrites `package-lock.json`
-  without the `libc` fields — make lockfile changes with `npx npm@11 …`.
+- This PC's global npm is 11.21 (npm 12 needs Node 24.15+; this PC has 24.13). npm 10 rewrote
+  `package-lock.json` without the `libc` fields — never use it on this repo.
 
 ## Conventions and gotchas
 
