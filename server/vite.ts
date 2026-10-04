@@ -1,5 +1,5 @@
 import { type Express } from "express";
-import { createServer as createViteServer, createLogger } from "vite";
+import { createServer as createViteServer, createLogger, type ViteDevServer } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
 import fs from "fs";
@@ -9,8 +9,10 @@ import { allowedHostsFromEnv } from "./host-check";
 
 const viteLogger = createLogger();
 
-export async function setupVite(server: Server, app: Express) {
+export async function setupVite(server: Server, app: Express): Promise<ViteDevServer> {
   const serverOptions = {
+    // vite.config.ts's options too — among them `fs`, the files Vite may send.
+    ...viteConfig.server,
     middlewareMode: true,
     hmr: { server, path: "/vite-hmr" },
     // Vite only answers localhost, IP addresses and these names (see host-check.ts).
@@ -46,4 +48,6 @@ export async function setupVite(server: Server, app: Express) {
       next(e);
     }
   });
+
+  return vite;
 }
