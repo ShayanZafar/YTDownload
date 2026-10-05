@@ -38,8 +38,8 @@ This document covers the project's architecture, local development setup, enviro
 ├── client/                    # Frontend React application
 │   ├── src/
 │   │   ├── components/        # UI components (the shadcn/ui ones the app uses, in components/ui)
-│   │   ├── hooks/             # Custom React hooks (API calls, remembered choices)
-│   │   ├── lib/               # Helpers (queryClient, utils, format: durations + link detection, music: the player's songs)
+│   │   ├── hooks/             # Custom React hooks (API calls, remembered choices, a copied link)
+│   │   ├── lib/               # Helpers (queryClient, utils, format: durations + link detection, music: the player's songs, clipboard: Paste + copied links)
 │   │   ├── pages/             # Route pages (Home, NotFound)
 │   │   ├── App.tsx            # Top-level app & router
 │   │   ├── main.tsx           # React entry point
@@ -51,7 +51,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── env.ts                 # Loads .env before anything reads settings
 │   ├── host-check.ts          # Refuses requests for unknown host names (DNS rebinding)
 │   ├── routes.ts              # API route handlers
-│   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers
+│   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers (the parsing is shared/youtube-link.ts)
 │   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first
 │   ├── spotify.ts             # Spotify song links → title, artists, length (public embed page)
 │   ├── library.ts             # Which of a playlist's songs are in the Save to folder (tags + names)
@@ -69,6 +69,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── schema.ts              # Zod schemas + types (history, search, settings, folders, save progress)
 │   ├── routes.ts              # Typed API route definitions
 │   ├── filename.ts            # safeFileName(): download names Windows accepts
+│   ├── youtube-link.ts        # extractVideoId(): which links are YouTube videos (server checks, page spots copied ones)
 │   ├── audio-types.ts         # Audio files by extension: MIME type, what to ask canPlayType()
 │   └── spotify-names.ts       # cleanTrackTitle(), spotifyFileName(): "Artist - Title"
 ├── scripts/
@@ -181,6 +182,15 @@ Browsers always put downloads in their own downloads folder, and a web page can'
 
 The page has a web app manifest (`client/public/manifest.webmanifest`: name, `display: standalone`, theme colour) and icons — the header's logo, white headphones on a dark tile — so "Add to Home Screen" (iPhone) or "Install app" (Android, over HTTPS) gives it its own icon and window. `scripts/make-icons.ts` draws them with Chrome (through Playwright): `favicon.png` and `icon.svg` for the tab, 192 and 512 px icons, a "maskable" one (the logo inside the circle Android keeps), and `apple-touch-icon.png`. There's no service worker: the page needs the app's server anyway, so working offline wouldn't help, and browsers don't require one to install a web app. iPhones stop a home-screen web app's audio when the phone locks, so the run guide suggests adding it as a Safari bookmark there (iOS 26's **Open as Web App** switch off); Android keeps playing.
 
+### The clipboard
+
+The main box has a **Paste** button, and suggests a link you've copied (`client/src/lib/clipboard.ts`, `client/src/hooks/use-clipboard-link.ts`):
+
+- **Reading it:** `navigator.clipboard.readText()`, which browsers offer only in a secure context — `http://localhost` on the computer running the app, or https. Over plain http from a phone there's no `navigator.clipboard`, so no **Paste** button either (`canReadClipboard()`).
+- **Paste** reads it inside the click: Chrome and Edge ask once for the clipboard-read permission, and Firefox and Safari show a small Paste button of their own every time. The text goes into the box on one line (`textToPaste()`: spaces and line breaks collapsed, trimmed, up to 300 characters) and is submitted as if typed — the same `submit()` as the form, so a YouTube link opens, a Spotify playlist or album link opens the panel, and anything else is searched for. Refused, it depends on why: when you dismiss the browser's own question (Firefox's or Safari's Paste button, or Chrome's "Allow?") nothing happens; when Chrome or Edge is set to block the clipboard (the permission is `denied`), a toast says where to allow it, or to press Ctrl+V (⌘V on a Mac) in the box. No text on the clipboard gets a toast too.
+- **The suggestion** only where the page may read the clipboard unasked: `navigator.permissions.query({ name: "clipboard-read" })` answers `granted` — Chrome and Edge, once allowed; Firefox and Safari don't know that permission. The page looks when it opens, when it comes to the front (`focus`, `visibilitychange`) and when the empty box gets focus, and reads nothing otherwise, so the browser never asks. `findCopiedLink()` looks through the copied text — its first 5,000 characters, word by word, without the punctuation around a link — for a YouTube video link, by the same rules the server checks links with (`extractVideoId()` in `shared/youtube-link.ts`), or a Spotify song, playlist or album link; only that link is shown, shortened (`youtu.be/<id>`), never the rest of the text. It's offered under the empty box as **Link you copied**, following the ARIA combobox pattern: the box becomes a `combobox` (while the page may look) and the link is its one `option`, already active, so Enter or a click opens it and Esc or its × dismisses it. A link that was opened or dismissed is remembered (`localStorage`, by video id or Spotify id, so other links to the same video count too) and not suggested again until something else is copied; nor is the video or playlist that's open.
+- Nothing read from the clipboard leaves the page unless you open the link.
+
 ### Works in every browser
 
 Every feature works in current Chrome, Edge, Firefox and Safari, on computers and phones (Save to only on the computer running the app, as above). The build targets Vite 8's default baseline — Chrome/Edge 111+, Firefox 114+, Safari 16.4+ — and Tailwind CSS 4 needs Firefox 128+, so those are the oldest browsers it supports. And:
@@ -188,6 +198,7 @@ Every feature works in current Chrome, Edge, Firefox and Safari, on computers an
 - The page uses no browser-specific APIs; the one it used to (File System Access, for Save to) was replaced by the app saving the file itself. The folder browser is a native `<dialog>`, which all of them have.
 - The music player uses a plain `<audio>` element and asks each browser which files it can play (`canPlayType()`): on the computer running the app, the app converts what a browser can't play; elsewhere, those songs are marked. The Media Session API is used only where the browser has it.
 - Syntax that older Safari rejects at run time is kept out, and `tests/unit/browser-support.test.ts` checks the page's code for it: no `for await` over a stream (Safari can't). (Regular-expression lookbehind, which Safari before 16.4 rejected, is fine since the baseline moved to 16.4.)
+- The clipboard: **Paste** works in all of them (where the page may read the clipboard at all — see [The clipboard](#the-clipboard)); a copied link is suggested by itself only in Chrome and Edge, the browsers that let a page read the clipboard without asking each time.
 - The Playwright tests run in Chrome (Blink) and WebKit (Safari's engine), and in Firefox (Gecko) when asked — see [Browser end-to-end](#browser-end-to-end-playwright).
 
 ### Searching the history
@@ -658,6 +669,7 @@ tests/
 ├── browser/
 │   ├── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request)
 │   ├── player.spec.ts           # the music player: the folder's songs, and songs picked on a phone
+│   ├── clipboard.spec.ts        # Paste and the copied-link suggestion (a stand-in clipboard, no YouTube)
 │   └── test-server-files.ts     # the test server's temp history, settings and player cache; deleted as the run ends
 ├── unit/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
@@ -667,6 +679,7 @@ tests/
 │   ├── filename.test.ts         # safe download file names
 │   ├── spotify.test.ts          # Spotify links, song + playlist embed parsing, title clean-up, same-length ranking
 │   ├── format.test.ts           # durations + link-vs-search detection
+│   ├── clipboard.test.ts        # links found in copied text, text pasted into the box, when the page may read it
 │   ├── storage.test.ts          # history file
 │   ├── settings.test.ts         # settings file (the Save to folder)
 │   ├── folders.test.ts          # folder browser, never-overwrite file names, Windows quick links
@@ -738,6 +751,7 @@ What it checks:
 10. Recent Extractions (with a made-up history served in place of `/api/downloads`): 25 entries at a time with **Show more**; typing narrows the list word by word; suggestions list each song once with its download count; picking one with the keyboard shows exactly that song; the date filters work alone and with a search; and "Clear search and filters" resets everything.
 11. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 12. **The music player** (`player.spec.ts`, songs made with ffmpeg in a temporary folder — a tagged MP3 and a 24-bit AIFF): with that folder under **Save to**, **Your music** lists both; clicking the MP3 plays it from `/api/music/<id>`, as it is, and Pause pauses it; **Next song** plays the AIFF — converted by the app (`/flac`) in a browser that can't play AIFF; Repeat cycles; and Close stops the song and hides the player. As a phone (`canSaveToFolder: false`), **Choose songs** takes the two files: their tags are read in the page, the AIFF is marked if the browser can't play it, the MP3 plays from a `blob:` address, and nothing is sent to the app. The folder's songs can be put in order by title. (Playwright's WebKit on Windows plays media through Windows Media Foundation, which takes several seconds to open a song — so clicks that start one get longer — and can't play `blob:` addresses at all, so there the test checks that the player says it can't. Safari can.)
+13. **The clipboard** (`clipboard.spec.ts`, with a stand-in `navigator.clipboard` and clipboard-read permission inside the page — never this computer's real clipboard — and the answers for a video, a search and a playlist given by the test): **Paste** opens a copied YouTube link, opens a copied Spotify playlist in the panel, and searches for other text, put in the box on one line; it says so when there's no text, says how to allow the clipboard when Chrome or Edge blocks it, and does nothing when the browser's own question is dismissed; and there's no **Paste** button without the Clipboard API or a secure context. Once the permission is `granted`, a copied link — just the link, never the rest of the text — is offered under the empty box: typing hides it, a click or Enter opens it (a Spotify playlist in the panel), Esc or its × dismisses it, and a link that was opened or dismissed isn't offered again — even after a reload — until something else is copied. With the permission `prompt`, `denied` or unknown, nothing is offered, and the clipboard isn't even read.
 
 The Chrome tests use your installed Google Chrome (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in; WebKit and Firefox are Playwright's own builds. Install whichever are missing (free, one time):
 

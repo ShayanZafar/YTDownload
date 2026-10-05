@@ -21,6 +21,7 @@ import { useSaveSettings } from "@/hooks/use-save-settings";
 import { SONGS_IN_FOLDER_KEY, useSongsInFolder } from "@/hooks/use-songs-in-folder";
 import { MUSIC_KEY } from "@/hooks/use-folder-music";
 import { useDownloadAll, type DownloadAllSummary } from "@/hooks/use-download-all";
+import { useClipboardLink } from "@/hooks/use-clipboard-link";
 import {
   asLink,
   formatBytes,
@@ -30,6 +31,13 @@ import {
   timeAgo,
   validDate,
 } from "@/lib/format";
+import {
+  canReadClipboard,
+  clipboardPermission,
+  findCopiedLink,
+  pasteKeys,
+  textToPaste,
+} from "@/lib/clipboard";
 import { ApiError, folderName, saveOnServer } from "@/lib/save-to-folder";
 import { queryClient } from "@/lib/queryClient";
 import {
@@ -65,6 +73,7 @@ import {
   ListMusic,
   BadgeCheck,
   Check,
+  ClipboardPaste,
   Timer,
   X,
 } from "lucide-react";
@@ -179,6 +188,11 @@ export default function Home() {
   const { toast } = useToast();
   const [pending, setPending] = useState<PendingDownload[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The clipboard: a Paste button where the page may read it, and a link you've
+  // copied suggested under the empty box where it may look unasked (lib/clipboard.ts).
+  const copied = useClipboardLink();
+  const [canPaste] = useState(canReadClipboard);
+  const [isBoxFocused, setBoxFocused] = useState(false);
   const previewRef = useRef<HTMLElement>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
   const saveTo = useSaveSettings();
@@ -229,6 +243,12 @@ export default function Home() {
   const spotify = searchData?.spotify;
   const isBusy = isFetchingInfo || isSearching;
   const input = inputFor[mode];
+  // A copied link, suggested while the box is empty — unless it's already open.
+  const openLinks = [selected?.url, playlistLink].map((link) => link && findCopiedLink(link)?.key);
+  const suggestion =
+    copied.link && !text.trim() && !isBusy && !openLinks.includes(copied.link.key)
+      ? copied.link
+      : null;
 
   // Searching and filtering Recent Extractions (all in the browser).
   const [historyQuery, setHistoryQuery] = useState("");
@@ -352,10 +372,10 @@ export default function Home() {
   // link opens the playlist panel, and anything else is searched for —
   // switching the toggle to match, so pasting a link into the search box
   // works. A Spotify song link is a search for that song.
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const value = text.trim();
-    if (!value) return;
+  const submit = (value: string) => {
+    // A link opened here isn't suggested again (until something else is copied).
+    const copiedLink = findCopiedLink(value);
+    if (copiedLink) copied.handle(copiedLink.key);
 
     if (isSpotifyPlaylistLink(value)) {
       if (mode !== "playlist") setMode("playlist");
@@ -369,6 +389,67 @@ export default function Home() {
     } else {
       if (mode !== "search") setMode("search");
       runSearch(value);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const value = text.trim();
+    if (value) submit(value);
+  };
+
+  // A link or text put in the box for you (Paste, or the copied link
+  // suggested under it), then handled as if typed and submitted.
+  const fillAndSubmit = (value: string) => {
+    setText(value);
+    if (infoError) resetInfo();
+    if (searchError) resetSearch();
+    submit(value);
+  };
+
+  // Paste: the clipboard's text goes in the box, on one line, and on as if
+  // typed — a YouTube link opens, a Spotify playlist opens in the panel, and
+  // anything else is searched for.
+  const pasteFromClipboard = async () => {
+    let clipboardText: string;
+    try {
+      clipboardText = await navigator.clipboard.readText();
+    } catch {
+      // Refused. Dismissing the browser's own question — Firefox's and
+      // Safari's Paste button, or Chrome's and Edge's "Allow?" the first
+      // time — is a no: nothing happens. Chrome and Edge also refuse when
+      // they're set to block the clipboard ("denied"): then say how to allow it.
+      const permission = (await clipboardPermission())?.state;
+      if (permission !== "denied" && permission !== "granted") return;
+      const keys = pasteKeys(navigator.platform);
+      inputRef.current?.focus();
+      toast(
+        permission === "denied"
+          ? {
+              title: "The browser blocked the clipboard",
+              description: `To allow it, click the icon left of the address bar and turn on Clipboard. Or press ${keys} in the box.`,
+            }
+          : {
+              title: "Couldn't read the clipboard",
+              description: `Press ${keys} in the box instead.`,
+            },
+      );
+      return;
+    }
+    const value = textToPaste(clipboardText);
+    if (value) fillAndSubmit(value);
+    else toast({ title: "Nothing to paste", description: "The clipboard has no text." });
+  };
+
+  // The copied link suggested under the empty box: Enter opens it, Esc dismisses it.
+  const onBoxKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!suggestion || e.nativeEvent.isComposing) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      fillAndSubmit(suggestion.url);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      copied.handle(suggestion.key);
     }
   };
 
@@ -552,6 +633,14 @@ export default function Home() {
               ref={inputRef}
               type={input.type}
               aria-label={input.label}
+              // Where a copied link can be suggested, the box is a combobox: the
+              // link is its one option, picked with Enter (or a click).
+              role={copied.canSuggest ? "combobox" : undefined}
+              aria-autocomplete={copied.canSuggest ? "list" : undefined}
+              aria-expanded={copied.canSuggest ? suggestion !== null : undefined}
+              aria-controls={suggestion ? "copied-link-list" : undefined}
+              aria-activedescendant={suggestion ? "copied-link" : undefined}
+              aria-describedby={suggestion ? "copied-link-keys" : undefined}
               placeholder={input.placeholder}
               enterKeyHint={input.enterKeyHint}
               className="flex-1 w-0 min-w-0 bg-transparent border-none text-foreground placeholder:text-muted-foreground h-14 px-2 text-base sm:text-lg focus:outline-hidden"
@@ -561,7 +650,26 @@ export default function Home() {
                 if (infoError) resetInfo();
                 if (searchError) resetSearch();
               }}
+              onKeyDown={onBoxKeyDown}
+              onFocus={() => {
+                setBoxFocused(true);
+                if (!text.trim()) void copied.check();
+              }}
+              onBlur={() => setBoxFocused(false)}
             />
+            {canPaste && (
+              <button
+                type="button"
+                onClick={() => void pasteFromClipboard()}
+                disabled={isBusy}
+                aria-label="Paste from the clipboard"
+                title="Paste from the clipboard"
+                className="h-14 shrink-0 mr-1 sm:mr-2 px-3 sm:px-4 rounded-xl font-medium text-muted-foreground hover:text-foreground hover:bg-secondary flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ClipboardPaste className="w-5 h-5" />
+                <span className="hidden md:inline">Paste</span>
+              </button>
+            )}
             <button
               type="submit"
               disabled={isBusy || !text.trim()}
@@ -595,6 +703,67 @@ export default function Home() {
               )}
             </button>
           </div>
+          {/* A link you've copied, suggested under the empty box (Chrome and Edge, once allowed). */}
+          {suggestion && (
+            <div className="relative mt-2 flex items-stretch rounded-xl border border-border bg-card text-sm shadow-lg shadow-black/5">
+              <ul
+                id="copied-link-list"
+                role="listbox"
+                aria-label="Link you copied"
+                className="flex min-w-0 flex-1"
+              >
+                <li
+                  id="copied-link"
+                  role="option"
+                  aria-selected
+                  aria-label={`Link you copied: ${suggestion.label}`}
+                  title={suggestion.url}
+                  // Clicking it leaves the focus where it is.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => fillAndSubmit(suggestion.url)}
+                  // Its icon and text line up with the box's.
+                  className={cn(
+                    "flex min-w-0 flex-1 cursor-pointer items-center gap-3.5 rounded-l-xl py-2.5 pl-[22px] pr-3 text-left transition-colors hover:bg-secondary sm:gap-5 sm:pl-7 sm:pr-4",
+                    isBoxFocused && "bg-secondary",
+                  )}
+                >
+                  <ClipboardPaste className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="flex min-w-0 items-baseline gap-2">
+                    <span className="shrink-0 text-foreground/70">Link you copied</span>
+                    <span className="min-w-0 truncate font-medium text-foreground">
+                      {suggestion.label}
+                    </span>
+                  </span>
+                  {isBoxFocused && (
+                    <kbd
+                      aria-hidden
+                      className="ml-auto hidden shrink-0 rounded border border-border bg-card px-1.5 py-0.5 font-sans text-[11px] font-medium text-muted-foreground sm:inline"
+                    >
+                      Enter
+                    </kbd>
+                  )}
+                </li>
+              </ul>
+              <button
+                type="button"
+                aria-label="Dismiss the link you copied"
+                title="Dismiss"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                  // From the keyboard, the focus goes back to the box as this goes away.
+                  const hadFocus = document.activeElement === e.currentTarget;
+                  copied.handle(suggestion.key);
+                  if (hadFocus) inputRef.current?.focus();
+                }}
+                className="shrink-0 rounded-r-xl border-l border-border px-3 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+              <span id="copied-link-keys" className="sr-only">
+                Press Enter to open it, or Escape to dismiss it.
+              </span>
+            </div>
+          )}
         </form>
 
         {/* Where downloads go — visible before a video is opened, and used by Redownload too. */}
