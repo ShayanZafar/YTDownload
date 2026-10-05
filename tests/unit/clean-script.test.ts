@@ -21,9 +21,9 @@ const mkdtempPrefixes = testFiles.flatMap((text) =>
     (m) => m[1],
   ),
 );
-// The test server's files, named after the Playwright run's process id.
+// The Playwright test server's files, named after the run's process id.
 const playwrightNames = [
-  ...read("../../playwright.config.ts").matchAll(/os\.tmpdir\(\),\s*`([^`]+)`/g),
+  ...read("../browser/test-server-files.ts").matchAll(/os\.tmpdir\(\),\s*`([^`]+)`/g),
 ].map((m) => m[1].replace("${process.pid}", "13128"));
 
 describe("npm run clean", () => {

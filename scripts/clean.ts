@@ -16,8 +16,9 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 
 /**
  * A name the tests give their temp files: "yt-audio-<what>-" and fs.mkdtemp()'s six random
- * characters, or the id of the Playwright run (playwright.config.ts names the test server's
- * history, settings and player cache that way). The app's own "yt-audio-player" has neither.
+ * characters, or the id of the Playwright run (tests/browser/test-server-files.ts names the
+ * test server's history, settings and player cache that way, and deletes them when the run
+ * ends — unless it's stopped first). The app's own "yt-audio-player" has neither.
  */
 export function isTestLeftover(name: string): boolean {
   return (

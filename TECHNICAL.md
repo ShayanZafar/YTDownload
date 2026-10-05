@@ -657,7 +657,8 @@ tests/
 │   └── music.e2e.test.ts        # the music player's routes, on real files (no internet needed)
 ├── browser/
 │   ├── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request)
-│   └── player.spec.ts           # the music player: the folder's songs, and songs picked on a phone
+│   ├── player.spec.ts           # the music player: the folder's songs, and songs picked on a phone
+│   └── test-server-files.ts     # the test server's temp history, settings and player cache; deleted as the run ends
 ├── unit/
 │   ├── youtube-url.test.ts      # URL parsing + thumbnail picking
 │   ├── audio.test.ts            # yt-dlp / ffmpeg argument builders
@@ -691,7 +692,7 @@ Configuration files: `vitest.config.ts` and `playwright.config.ts`.
 
 ### Cleaning up after tests
 
-The tests keep their files in the system's temp folder, named `yt-audio-<what>-…`, and a run that's stopped part-way (or the Playwright test server, whose history, settings and player cache outlive each run) leaves some behind, as does a browser Playwright couldn't close. `npm run clean` (`scripts/clean.ts`) removes them, along with Playwright's `test-results/` and `playwright-report/`; `npm run clean -- --dry-run` lists them first. It never touches `data/`, `dist/`, the music player's cache (`yt-audio-player`) or a Save to folder. Run it when no tests are running. A new test's temp files must follow the same naming — `clean-script.test.ts` fails otherwise.
+The tests keep their files in the system's temp folder, named `yt-audio-<what>-…`, and delete them afterwards, even when a test fails or times out (a save it left running is cancelled first). A run that's stopped part-way leaves some behind, as does a browser Playwright couldn't close. `npm run clean` (`scripts/clean.ts`) removes them, along with Playwright's `test-results/` and `playwright-report/`; `npm run clean -- --dry-run` lists them first. It never touches `data/`, `dist/`, the music player's cache (`yt-audio-player`) or a Save to folder. Run it when no tests are running. A new test's temp files must follow the same naming — `clean-script.test.ts` fails otherwise.
 
 ### API end-to-end (Vitest + Supertest)
 
@@ -721,7 +722,7 @@ The tests point `HISTORY_FILE` and `SETTINGS_FILE` at a temporary folder, so the
 
 ### Browser end-to-end (Playwright)
 
-Drives the app in real browser engines, headless, running every test in each: your installed Google Chrome and WebKit (the engine behind Safari) by default, plus Firefox if you ask for it (below). `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 with a throwaway `HISTORY_FILE` and `SETTINGS_FILE`, so the tests never touch your real history or settings and can run while your own copy is up on port 5000. Set `E2E_BASE_URL` to test an already-running server instead.
+Drives the app in real browser engines, headless, running every test in each: your installed Google Chrome and WebKit (the engine behind Safari) by default, plus Firefox if you ask for it (below). `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 with a throwaway `HISTORY_FILE`, `SETTINGS_FILE` and `PLAYER_CACHE_DIR`, so the tests never touch your real history or settings and can run while your own copy is up on port 5000. Those files are named after the run (`tests/browser/test-server-files.ts`), which deletes them as it ends — once Playwright has stopped that copy, and never another run's. Set `E2E_BASE_URL` to test an already-running server instead.
 
 What it checks:
 

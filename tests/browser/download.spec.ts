@@ -23,6 +23,22 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await request.put("/api/settings", { data: { saveFolder: null } });
   });
 
+  // Temp folders a test makes, deleted after it, even if it failed or timed out.
+  const tempFolders: string[] = [];
+  const deletedAfterTest = (folder: string) => {
+    tempFolders.push(folder);
+    return folder;
+  };
+  test.afterEach(async ({ page }) => {
+    if (!tempFolders.length) return;
+    // Close the page first: a save it left running is cancelled, so the app stops writing
+    // into the folder and deletes its unfinished file (retried meanwhile).
+    await page.close();
+    for (const folder of tempFolders.splice(0)) {
+      await fs.rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  });
+
   test("user pastes a URL, previews the video, and downloads a valid MP3", async ({ page }) => {
     await page.goto("/");
 
@@ -67,7 +83,9 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     // Saved under the new name (":" isn't allowed in Windows file names).
     expect(download.suggestedFilename()).toBe("Zoo clip - the first video.mp3");
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-browser-test-"));
+    const tmpDir = deletedAfterTest(
+      await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-browser-test-")),
+    );
     const savedPath = path.join(tmpDir, download.suggestedFilename());
     await download.saveAs(savedPath);
 
@@ -81,8 +99,6 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
 
     // 6. Once the download has finished, it shows up in Recent Extractions by itself.
     await expect(historyRows(page)).toHaveCount(rowsBefore + 1, { timeout: 20_000 });
-
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   test("the Original audio toggle downloads YouTube's own stream, unconverted", async ({
@@ -109,12 +125,13 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     const ext = /\.(opus|m4a|mka)$/i.exec(download.suggestedFilename())?.[1];
     expect(ext, `unexpected filename: ${download.suggestedFilename()}`).toBeDefined();
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-browser-test-"));
+    const tmpDir = deletedAfterTest(
+      await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-browser-test-")),
+    );
     const savedPath = path.join(tmpDir, download.suggestedFilename());
     await download.saveAs(savedPath);
     const verdict = await verifyOriginalAudioFile(savedPath, ext!.toLowerCase());
     expect(verdict.isValid, `Not a valid .${ext}: ${verdict.reason}`).toBe(true);
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   test("user searches for a song, picks a result, and gets its download link", async ({ page }) => {
@@ -289,7 +306,7 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     request,
   }) => {
     // A real folder that has one of the songs already, in a subfolder.
-    const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-playlist-"));
+    const folder = deletedAfterTest(await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-playlist-")));
     await fs.mkdir(path.join(folder, "Queen"));
     await fs.writeFile(path.join(folder, "Queen", "Bohemian Rhapsody.mp3"), "");
     await request.put("/api/settings", { data: { saveFolder: folder } });
@@ -385,7 +402,6 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     // Saved as "Artist - Title", a real MP3.
     const verdict = await verifyMp3File(path.join(folder, "jawed - Me at the zoo.mp3"));
     expect(verdict.isValid, `Not a valid MP3: ${verdict.reason}`).toBe(true);
-    await fs.rm(folder, { recursive: true, force: true });
   });
 
   test("Save to: pick a folder in the app's folder browser; downloads are saved into it", async ({
@@ -393,7 +409,7 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
   }) => {
     // A real folder on this computer: the app writes into it itself, so this
     // works the same in every browser.
-    const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-"));
+    const folder = deletedAfterTest(await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-")));
     await fs.mkdir(path.join(folder, "Albums"));
     const target = path.join(folder, "Test Music");
     let browserDownloads = 0;
@@ -452,13 +468,12 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     // Back to the browser's own downloads.
     await page.getByRole("button", { name: /use the browser's downloads folder instead/i }).click();
     await expect(page.getByText(/your browser's downloads folder/i)).toBeVisible();
-    await fs.rm(folder, { recursive: true, force: true });
   });
 
   test("Save to: a path typed while the folder browser is still opening isn't replaced", async ({
     page,
   }) => {
-    const folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-"));
+    const folder = deletedAfterTest(await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-save-to-")));
     await fs.mkdir(path.join(folder, "Albums"));
     // The folder browser first asks the app for the folder it opens on, which
     // can take seconds (on Windows the app looks up where Music and the other
@@ -487,7 +502,6 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await pathBox.press("Enter");
     await expect(picker.getByRole("button", { name: "Albums", exact: true })).toBeVisible();
     await expect(pathBox).toHaveValue(folder);
-    await fs.rm(folder, { recursive: true, force: true });
   });
 
   test("another device (like a phone) is told where its downloads go", async ({ page }) => {

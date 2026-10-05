@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, onTestFinished } from "vitest";
 import express from "express";
 import http, { createServer, type Server } from "http";
 import type { AddressInfo } from "net";
@@ -19,6 +19,14 @@ let httpServer: Server;
 let app: express.Express;
 let historyDir: string;
 
+// The replies still being sent. A test that fails or times out can leave a download or a save
+// running; it's cancelled (as if its page had closed) before the temp folders are deleted, so
+// the app stops writing into them.
+const replying = new Set<express.Response>();
+const cancelRequestsStillGoing = () => {
+  for (const res of replying) res.destroy();
+};
+
 beforeAll(async () => {
   // Keep test downloads out of your real history and settings: point the
   // app's files at a throwaway folder for this run.
@@ -32,6 +40,11 @@ beforeAll(async () => {
   const { registerRoutes } = await import("../../server/routes");
 
   app = express();
+  app.use((_req, res, next) => {
+    replying.add(res);
+    res.on("close", () => replying.delete(res));
+    next();
+  });
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
   httpServer = createServer(app);
@@ -39,9 +52,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  cancelRequestsStillGoing();
   delete process.env.HISTORY_FILE;
   delete process.env.SETTINGS_FILE;
-  await fs.rm(historyDir, { recursive: true, force: true });
+  await fs.rm(historyDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 type HistoryRow = { id: number; url: string; title: string };
@@ -220,6 +234,7 @@ describe("YouTube → MP3 end-to-end (API)", () => {
 
   it("downloads a valid MP3 audio file from /api/video/download", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-test-"));
+    onTestFinished(() => fs.rm(tmpDir, { recursive: true, force: true }));
     const outPath = path.join(tmpDir, "out.mp3");
 
     const res = await download({ url: TEST_VIDEO_URL });
@@ -236,8 +251,6 @@ describe("YouTube → MP3 end-to-end (API)", () => {
       `Downloaded file is not a valid MP3: ${verdict.reason} (size=${verdict.size})`,
     ).toBe(true);
     expect(verdict.size).toBeGreaterThan(10_000); // at least 10KB of audio
-
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("saves under a new name with ?name=, keeping accents and non-Latin letters", async () => {
@@ -267,12 +280,12 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(res.headers["content-type"]).toContain(contentTypes[ext!]);
 
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-test-"));
+    onTestFinished(() => fs.rm(tmpDir, { recursive: true, force: true }));
     const outPath = path.join(tmpDir, `out.${ext}`);
     await fs.writeFile(outPath, res.body as Buffer);
     const verdict = await verifyOriginalAudioFile(outPath, ext!);
     expect(verdict.isValid, `Not a valid .${ext}: ${verdict.reason}`).toBe(true);
     expect(verdict.size).toBeGreaterThan(10_000);
-    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("rejects a malformed Spotify song id", async () => {
@@ -347,7 +360,10 @@ describe("Save to folder (API)", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(saveDir, { recursive: true, force: true });
+    // A save still going is cancelled first: the app stops writing into the folder and
+    // deletes its unfinished file (retried meanwhile).
+    cancelRequestsStillGoing();
+    await fs.rm(saveDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   type SaveEvent = { type: string; [key: string]: unknown };
