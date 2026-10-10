@@ -76,6 +76,23 @@ describe("findCopiedLink", () => {
     expect(findCopiedLink(`open.spotify.com/track/${SONG}`)?.key).toBe(`spotify:track:${SONG}`);
   });
 
+  it("finds YouTube playlist links, which open in the playlist panel", () => {
+    expect(
+      findCopiedLink("A mix for you: youtube.com/playlist?list=PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb"),
+    ).toEqual({
+      kind: "youtube",
+      url: "https://youtube.com/playlist?list=PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb",
+      key: "youtube:playlist:PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb",
+      label: "youtube.com/playlist?list=PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb",
+    });
+    // A video played in a playlist is that video.
+    expect(
+      findCopiedLink(
+        `https://www.youtube.com/watch?v=${ID}&list=PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb`,
+      )?.key,
+    ).toBe(`youtube:${ID}`);
+  });
+
   it("finds Spotify's short links, which lead to a song, playlist or album", () => {
     expect(findCopiedLink("Listen on Spotify: https://spotify.link/AbCdEfGhIj")).toEqual({
       kind: "spotify",
@@ -103,7 +120,6 @@ describe("findCopiedLink", () => {
     "daft punk one more time",
     "https://vimeo.com/76979871",
     "https://www.youtube.com/@YouTube",
-    "https://www.youtube.com/playlist?list=PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb",
     `https://www.youtube.com/watch?v=${ID.slice(0, 10)}`,
     `https://notyoutube.com/watch?v=${ID}`,
     `https://youtube.com.example.com/watch?v=${ID}`,

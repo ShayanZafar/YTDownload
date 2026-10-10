@@ -205,14 +205,14 @@ export function ytDlpSearchArgs(query: string): string[] {
  * Runs yt-dlp directly — never through a shell — so text from the search box
  * can't be interpreted as a command, and parses its JSON output.
  */
-function runYtDlpJson(args: string[]): Promise<unknown> {
+export function runYtDlpJson(args: string[], timeoutMs = SEARCH_TIMEOUT_MS): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const child = spawn(YT_DLP_PATH, args, { windowsHide: true });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
-    const timer = setTimeout(() => child.kill(), SEARCH_TIMEOUT_MS);
+    const timer = setTimeout(() => child.kill(), timeoutMs);
     child.on("error", (e) => {
       clearTimeout(timer);
       reject(e);

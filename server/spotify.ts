@@ -357,6 +357,7 @@ export function parsePlaylistPage(
 
   const by = typeof entity.subtitle === "string" ? entity.subtitle.trim() : "";
   return {
+    source: "spotify",
     kind,
     id,
     url: `https://open.spotify.com/${kind}/${id}`,

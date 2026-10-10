@@ -191,8 +191,8 @@ test.describe("Paste", () => {
     await pasteButton(page).click();
     const panel = page.getByRole("region", { name: /spotify playlist/i });
     await expect(panel.getByRole("heading", { name: "Clipboard Mix" })).toBeVisible();
-    await expect(mode(page, "Spotify playlist")).toHaveAttribute("aria-pressed", "true");
-    await expect(box(page, "Spotify playlist link")).toHaveValue(PLAYLIST_LINK);
+    await expect(mode(page, "Playlist")).toHaveAttribute("aria-pressed", "true");
+    await expect(box(page, "Playlist link")).toHaveValue(PLAYLIST_LINK);
     expect(asked.playlists).toEqual([PLAYLIST_LINK]);
   });
 
@@ -204,7 +204,7 @@ test.describe("Paste", () => {
     await pasteButton(page).click();
     const panel = page.getByRole("region", { name: /spotify playlist/i });
     await expect(panel.getByRole("heading", { name: "Clipboard Mix" })).toBeVisible();
-    await expect(mode(page, "Spotify playlist")).toHaveAttribute("aria-pressed", "true");
+    await expect(mode(page, "Playlist")).toHaveAttribute("aria-pressed", "true");
     expect(asked.playlists).toEqual([PLAYLIST.url]);
 
     // A short link to a song searches for that song.
@@ -329,7 +329,7 @@ test.describe("a copied link, suggested under the empty box", () => {
     await playlist.click();
     const panel = page.getByRole("region", { name: /spotify playlist/i });
     await expect(panel.getByRole("heading", { name: "Clipboard Mix" })).toBeVisible();
-    await expect(box(page, "Spotify playlist link")).toHaveValue(PLAYLIST_LINK);
+    await expect(box(page, "Playlist link")).toHaveValue(PLAYLIST_LINK);
     expect(asked.playlists).toEqual([PLAYLIST_LINK]);
   });
 

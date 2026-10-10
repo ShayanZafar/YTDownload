@@ -38,6 +38,7 @@ import {
   placesToSave,
 } from "./folders";
 import { saveIntoFolder } from "./save";
+import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import { songsInFolder, type AudioFile } from "./library";
 import { convertedForBrowser, findMusicFile, listMusic, readCover } from "./music";
 
@@ -367,6 +368,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(err.status).json({ message: err.message });
       }
       console.error("Reading the Spotify playlist failed:", err);
+      res.status(500).json({ message: err instanceof Error ? err.message : "Couldn't read it" });
+    }
+  });
+
+  // The videos in a public YouTube playlist, for the playlist panel. Picking
+  // one opens it like a pasted link; "Download" saves the ticked ones as they are.
+  app.get(api.youtube.playlist.path, async (req, res) => {
+    const query = api.youtube.playlist.query.safeParse(req.query);
+    if (!query.success) return res.status(400).json(validationError(query.error));
+    try {
+      res.json(await fetchYouTubePlaylist(query.data.link));
+    } catch (err) {
+      if (err instanceof YouTubePlaylistError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      console.error("Reading the YouTube playlist failed:", err);
       res.status(500).json({ message: err instanceof Error ? err.message : "Couldn't read it" });
     }
   });

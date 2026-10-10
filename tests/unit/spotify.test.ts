@@ -252,6 +252,7 @@ describe("parsePlaylistPage", () => {
   it("lists the songs with their artists, length and whether they're explicit", () => {
     const html = embedPage({ state: { data: { entity: playlistEntity } } });
     expect(parsePlaylistPage(html, "playlist", PLAYLIST)).toEqual({
+      source: "spotify",
       kind: "playlist",
       id: PLAYLIST,
       url: `https://open.spotify.com/playlist/${PLAYLIST}`,

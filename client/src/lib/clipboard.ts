@@ -1,4 +1,4 @@
-import { extractVideoId } from "@shared/youtube-link";
+import { extractPlaylistId, extractVideoId, isYouTubePlaylistLink } from "@shared/youtube-link";
 import { asLink } from "@/lib/format";
 
 /**
@@ -42,7 +42,7 @@ const SPOTIFY_LINK =
   /^(?:spotify:(track|playlist|album):([A-Za-z0-9]{22})|(?:https?:\/\/)?(?:open|play)\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:embed\/)?(track|playlist|album)\/([A-Za-z0-9]{22})(?:[/?#]\S*)?)$/i;
 
 /**
- * The first YouTube video link or Spotify song, playlist or album link in some
+ * The first YouTube video or playlist link or Spotify song, playlist or album link in some
  * copied text — a link on its own, or in a message shared from an app.
  */
 export function findCopiedLink(text: string): CopiedLink | undefined {
@@ -57,6 +57,15 @@ export function findCopiedLink(text: string): CopiedLink | undefined {
         url: link,
         key: `youtube:${videoId}`,
         label: `youtu.be/${videoId}`,
+      };
+    }
+    const playlistId = link && isYouTubePlaylistLink(link) ? extractPlaylistId(link) : null;
+    if (link && playlistId) {
+      return {
+        kind: "youtube",
+        url: link,
+        key: `youtube:playlist:${playlistId}`,
+        label: `youtube.com/playlist?list=${playlistId}`,
       };
     }
     const spotify = SPOTIFY_LINK.exec(candidate);

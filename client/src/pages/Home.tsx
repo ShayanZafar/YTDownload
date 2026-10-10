@@ -13,11 +13,12 @@ import {
   useRecentDownloads,
   useSongSearch,
   useSpotifyLink,
-  useSpotifyPlaylist,
+  usePlaylist,
 } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { useStoredValue } from "@/hooks/use-stored-value";
+import { extractVideoId } from "@shared/youtube-link";
 import { useSaveSettings } from "@/hooks/use-save-settings";
 import { SONGS_IN_FOLDER_KEY, useSongsInFolder } from "@/hooks/use-songs-in-folder";
 import { MUSIC_KEY } from "@/hooks/use-folder-music";
@@ -28,7 +29,7 @@ import {
   formatBytes,
   formatDuration,
   isSpotifyLink,
-  isSpotifyPlaylistLink,
+  playlistSourceOf,
   isSpotifyShortLink,
   timeAgo,
   validDate,
@@ -80,7 +81,7 @@ import {
   X,
 } from "lucide-react";
 
-// Paste a link, search by song title, or open a Spotify playlist to pick songs
+// Paste a link, search by song title, or open a Spotify or YouTube playlist to pick songs
 // from. The last one used is remembered.
 const inputModes = ["link", "search", "playlist"] as const;
 type InputMode = (typeof inputModes)[number];
@@ -88,7 +89,7 @@ type InputMode = (typeof inputModes)[number];
 const modeOptions = [
   { mode: "link", label: "Paste a link", short: "Link", Icon: Link2 },
   { mode: "search", label: "Search by song", short: "Search", Icon: Search },
-  { mode: "playlist", label: "Spotify playlist", short: "Playlist", Icon: ListMusic },
+  { mode: "playlist", label: "Playlist", short: "Playlist", Icon: ListMusic },
 ] as const;
 
 // The main box, for each mode.
@@ -109,8 +110,8 @@ const inputFor = {
   },
   playlist: {
     type: "url",
-    label: "Spotify playlist link",
-    placeholder: "Paste a Spotify playlist or album link",
+    label: "Playlist link",
+    placeholder: "A Spotify playlist or album, or a YouTube playlist",
     enterKeyHint: "go",
     Icon: ListMusic,
   },
@@ -201,9 +202,11 @@ export default function Home() {
   const [choosingFolder, setChoosingFolder] = useState(false);
   const [saves, setSaves] = useState<Record<string, ActiveSave>>({});
   const isSaving = Object.keys(saves).length > 0;
-  // The Spotify playlist (or album) open in the panel, remembered for next time.
+  // The Spotify playlist (or album) or YouTube playlist open in the panel,
+  // remembered for next time.
   const [playlistLink, setPlaylistLink] = useStoredValue("spotify-playlist");
-  const playlist = useSpotifyPlaylist(playlistLink);
+  const playlist = usePlaylist(playlistLink);
+  const playlistSource = (playlistLink !== null && playlistSourceOf(playlistLink)) || "spotify";
   // The playlist song being looked for on YouTube.
   const [pendingTrackId, setPendingTrackId] = useState<string>();
   // With a "Save to" folder: which of the playlist's songs are in it already.
@@ -279,9 +282,15 @@ export default function Home() {
     setHistoryLimit(HISTORY_PAGE);
   };
   const error = infoError ?? searchError;
-  // Songs in the history by their Spotify id, so the playlist can mark them.
-  const downloadedSpotifyIds = useMemo(
-    () => new Set(allHistory.flatMap((d) => (d.spotifyId ? [d.spotifyId] : []))),
+  // Songs in the history by their Spotify id, and videos by their YouTube id,
+  // so the playlist can mark them.
+  const downloadedIds = useMemo(
+    () =>
+      new Set(
+        allHistory.flatMap((d) =>
+          [d.spotifyId, extractVideoId(d.url)].filter((id): id is string => !!id),
+        ),
+      ),
     [allHistory],
   );
 
@@ -362,19 +371,33 @@ export default function Home() {
     });
   };
 
-  // Opens a Spotify playlist or album in the panel (or reloads it, if it's open).
+  // Opens a Spotify playlist or album, or a YouTube playlist, in the panel (or
+  // reloads it, if it's open).
   const openPlaylist = (link: string) => {
     if (link === playlistLink) void playlist.refetch();
     else setPlaylistLink(link);
   };
 
-  // A song picked in the playlist panel: find it on YouTube, like its Spotify link.
-  const findPlaylistSong = (track: SpotifyPlaylistTrack) => runSearch(track.url, track.id);
+  // A song picked in the playlist panel: a Spotify song is found on YouTube,
+  // like its Spotify link; a YouTube playlist's video opens straight away.
+  const pickPlaylistSong = (track: SpotifyPlaylistTrack) => {
+    if (playlist.data?.source !== "youtube") return runSearch(track.url, track.id);
+    resetSearch();
+    pick({
+      id: track.id,
+      url: track.url,
+      title: track.title,
+      channel: track.artists,
+      duration: track.duration,
+      thumbnail: track.thumbnail ?? `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`,
+      official: false,
+    });
+  };
 
   // Whatever the mode, a YouTube link is opened, a Spotify playlist or album
-  // link opens the playlist panel, and anything else is searched for —
-  // switching the toggle to match, so pasting a link into the search box
-  // works. A Spotify song link is a search for that song.
+  // link or a YouTube playlist link opens the playlist panel, and anything
+  // else is searched for — switching the toggle to match, so pasting a link
+  // into the search box works. A Spotify song link is a search for that song.
   const submit = (value: string) => {
     // A link opened here isn't suggested again (until something else is copied).
     const copiedLink = findCopiedLink(value);
@@ -395,9 +418,10 @@ export default function Home() {
       });
       return;
     }
-    if (isSpotifyPlaylistLink(value)) {
+    const playlistFrom = playlistSourceOf(value);
+    if (playlistFrom) {
       if (mode !== "playlist") setMode("playlist");
-      openPlaylist(value);
+      openPlaylist(playlistFrom === "youtube" ? (asLink(value) ?? value) : value);
       return;
     }
     const link = isSpotifyLink(value) ? undefined : asLink(value);
@@ -797,16 +821,23 @@ export default function Home() {
         )}
       </section>
 
-      {/* Spotify playlist panel: open while a playlist or album is loaded */}
+      {/* Playlist panel: open while a playlist or album is loaded */}
       {playlistLink !== null && (
         <SpotifyPlaylistPanel
+          source={playlistSource}
           playlist={playlist.data}
           isLoading={playlist.isLoading}
           isRefreshing={playlist.isFetching && !playlist.isLoading}
           error={playlist.error}
-          activeTrackId={isSearching ? pendingTrackId : (spotify?.id ?? selected?.spotifyId)}
+          activeTrackId={
+            playlistSource === "youtube"
+              ? (selected && extractVideoId(selected.url)) || undefined
+              : isSearching
+                ? pendingTrackId
+                : (spotify?.id ?? selected?.spotifyId)
+          }
           isSearching={isSearching}
-          downloadedIds={downloadedSpotifyIds}
+          downloadedIds={downloadedIds}
           folder={
             saveTo.folder
               ? {
@@ -820,9 +851,9 @@ export default function Home() {
           canChooseFolder={saveTo.settings?.canSaveToFolder === true}
           statuses={downloadAll.statuses}
           progress={downloadAll.progress}
-          onDownloadAll={(songs) => void downloadAll.start(songs, format)}
+          onDownloadAll={(songs) => void downloadAll.start(songs, format, playlistSource)}
           onStop={downloadAll.stop}
-          onPick={findPlaylistSong}
+          onPick={pickPlaylistSong}
           onRefresh={() => void playlist.refetch()}
           onClose={() => setPlaylistLink(null)}
         />

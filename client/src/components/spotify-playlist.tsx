@@ -3,6 +3,7 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Download,
   ExternalLink,
@@ -13,7 +14,12 @@ import {
   Square,
   X,
 } from "lucide-react";
-import type { SongsInFolder, SpotifyPlaylist, SpotifyPlaylistTrack } from "@shared/schema";
+import type {
+  PlaylistSource,
+  SongsInFolder,
+  SpotifyPlaylist,
+  SpotifyPlaylistTrack,
+} from "@shared/schema";
 import type { SongStatus } from "@/hooks/use-download-all";
 import { formatBytes, formatDuration } from "@/lib/format";
 import { searchableText } from "@/lib/history-filter";
@@ -21,6 +27,8 @@ import { folderName } from "@/lib/save-to-folder";
 import { cn } from "@/lib/utils";
 
 type SpotifyPlaylistPanelProps = {
+  /** Where the playlist is from (known before it has loaded, from its link). */
+  source: PlaylistSource;
   /** The playlist or album, once it has loaded. */
   playlist?: SpotifyPlaylist;
   isLoading: boolean;
@@ -29,7 +37,10 @@ type SpotifyPlaylistPanelProps = {
   /** The song whose YouTube matches are showing (or being looked for). */
   activeTrackId?: string;
   isSearching: boolean;
-  /** Spotify ids of the songs in the download history (marked when there's no Save to folder). */
+  /**
+   * Spotify ids and YouTube video ids of the songs in the download history
+   * (marked when there's no Save to folder).
+   */
   downloadedIds: ReadonlySet<string>;
   /**
    * The "Save to" folder, and which of the songs are in it — undefined when
@@ -150,15 +161,17 @@ function markFor(
 }
 
 /**
- * The songs in a Spotify playlist or album. Clicking one looks for it on
- * YouTube, exactly like pasting that song's Spotify link: the best match is
- * picked, ready to download, with the other matches listed below it.
+ * The songs in a Spotify playlist or album, or the videos in a YouTube
+ * playlist. Clicking a Spotify song looks for it on YouTube, exactly like
+ * pasting that song's Spotify link: the best match is picked, ready to
+ * download, with the other matches listed below it. Clicking a video opens it.
  *
  * With a "Save to" folder, each song says whether it's already in the folder,
  * the list can show just the missing ones, and "Download" fetches the ticked
  * ones (all missing songs, to begin with) one after another.
  */
 export function SpotifyPlaylistPanel({
+  source,
   playlist,
   isLoading,
   isRefreshing,
@@ -189,6 +202,8 @@ export function SpotifyPlaylistPanel({
 
   const tracks = useMemo(() => playlist?.tracks ?? [], [playlist]);
   const kind = playlist?.kind ?? "playlist";
+  const isYouTube = source === "youtube";
+  const from = isYouTube ? "YouTube" : "Spotify";
   const running = progress !== null;
   // Folder mode: once the folder has been looked through.
   const found = folder?.songs?.found;
@@ -235,7 +250,7 @@ export function SpotifyPlaylistPanel({
   const where = folder ? `“${folderName(folder.path)}”` : "";
 
   return (
-    <section aria-label={`Spotify ${kind}`} className="max-w-3xl mx-auto w-full">
+    <section aria-label={`${from} ${kind}`} className="max-w-3xl mx-auto w-full">
       <div className="rounded-2xl border border-border bg-card overflow-hidden">
         <div className="flex items-center gap-3 border-b border-border px-4 py-3">
           {playlist?.image ? (
@@ -251,7 +266,7 @@ export function SpotifyPlaylistPanel({
           )}
           <div className="min-w-0 flex-1">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Spotify {kind}
+              {from} {kind}
             </p>
             <h2 className="truncate text-base font-semibold text-foreground">
               {playlist?.name ?? (isLoading ? "Opening…" : "Couldn't open it")}
@@ -278,8 +293,8 @@ export function SpotifyPlaylistPanel({
                 href={playlist.url}
                 target="_blank"
                 rel="noreferrer"
-                aria-label="Open in Spotify"
-                title="Open in Spotify"
+                aria-label={`Open in ${from}`}
+                title={`Open in ${from}`}
                 className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
               >
                 <ExternalLink className="h-4 w-4" />
@@ -290,8 +305,8 @@ export function SpotifyPlaylistPanel({
                 type="button"
                 onClick={onRefresh}
                 disabled={isRefreshing}
-                aria-label="Reload the list from Spotify"
-                title="Reload the list from Spotify"
+                aria-label={`Reload the list from ${from}`}
+                title={`Reload the list from ${from}`}
                 className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-60"
               >
                 <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
@@ -300,7 +315,7 @@ export function SpotifyPlaylistPanel({
             <button
               type="button"
               onClick={onClose}
-              aria-label={`Close the Spotify ${kind}`}
+              aria-label={`Close the ${from} ${kind}`}
               title={running ? "Close (stops the downloads)" : "Close"}
               className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             >
@@ -394,7 +409,11 @@ export function SpotifyPlaylistPanel({
                   type="button"
                   disabled={tickedCount === 0}
                   onClick={() => onDownloadAll(ticked)}
-                  title={`Find each ticked song on YouTube and save it into ${where}`}
+                  title={
+                    isYouTube
+                      ? `Save each ticked video into ${where}`
+                      : `Find each ticked song on YouTube and save it into ${where}`
+                  }
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
                   <Download className="h-3.5 w-3.5" />
@@ -493,7 +512,7 @@ export function SpotifyPlaylistPanel({
                     ]
                       .filter(Boolean)
                       .join(", ")}
-                    title="Find this song on YouTube"
+                    title={isYouTube ? "Open this video" : "Find this song on YouTube"}
                     className={cn(
                       "flex min-w-0 flex-1 items-center gap-3 py-2.5 pr-4 text-left transition-colors",
                       found ? "pl-3" : "pl-4",
@@ -538,7 +557,14 @@ export function SpotifyPlaylistPanel({
                         {formatDuration(track.duration)}
                       </span>
                     )}
-                    {active && isSearching ? (
+                    {isYouTube ? (
+                      <ChevronRight
+                        className={cn(
+                          "h-4 w-4 shrink-0",
+                          active ? "text-primary" : "text-muted-foreground/60",
+                        )}
+                      />
+                    ) : active && isSearching ? (
                       <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
                     ) : (
                       <Search
@@ -556,7 +582,7 @@ export function SpotifyPlaylistPanel({
         ) : playlist ? (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">
             {tracks.length === 0
-              ? `This ${kind} has no songs Spotify shares.`
+              ? `This ${kind} has no songs ${from} shares.`
               : show === "missing" && missingIds.length === 0
                 ? `Every song is in ${where}.`
                 : `No songs match “${filter.trim()}”.`}
@@ -565,8 +591,9 @@ export function SpotifyPlaylistPanel({
 
         {playlist?.maybeMore && (
           <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
-            Spotify shares only the first 100 songs of a playlist. For a later one, copy its link in
-            Spotify (Share → Copy Song Link) and paste it in the search box.
+            {isYouTube
+              ? "The app lists the first 500 videos of a playlist. For a later one, copy its link on YouTube and paste it in the box."
+              : "Spotify shares only the first 100 songs of a playlist. For a later one, copy its link in Spotify (Share → Copy Song Link) and paste it in the search box."}
           </p>
         )}
         {playlist && !folder && canChooseFolder && tracks.length > 0 && (
