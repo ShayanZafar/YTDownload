@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractVideoId, pickThumbnail } from "../../server/youtube-url";
+import { youtubeEmbedUrl } from "../../shared/youtube-link";
 
 describe("extractVideoId", () => {
   describe("valid URLs", () => {
@@ -91,4 +92,17 @@ describe("pickThumbnail", () => {
     pickThumbnail({ thumbnails });
     expect(JSON.stringify(thumbnails)).toBe(snapshot);
   });
+});
+
+describe("youtubeEmbedUrl", () => {
+  it("embeds a video id, playing at once", () => {
+    expect(youtubeEmbedUrl("jNQXAC9IVRw")).toBe(
+      "https://www.youtube-nocookie.com/embed/jNQXAC9IVRw?autoplay=1&rel=0&playsinline=1",
+    );
+  });
+
+  it.each(["", "short", "jNQXAC9IVRw/../x", "jNQXAC9IVR?", "https://youtu.be/jNQXAC9IVRw"])(
+    "refuses %j",
+    (id) => expect(youtubeEmbedUrl(id)).toBeNull(),
+  );
 });
