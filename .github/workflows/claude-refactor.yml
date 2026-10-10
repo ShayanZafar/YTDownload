@@ -1,0 +1,50 @@
+# Once a month, Claude runs the repo's /refactor skill (.claude/skills/refactor):
+# it measures complexity, duplication, dead code and churn, applies at most three
+# behavior-preserving cleanups with npm run verify passing, and opens a pull
+# request. The Claude Code Review workflow then reviews that PR like any other,
+# and nothing merges without you. Runs on the Claude subscription through the
+# CLAUDE_CODE_OAUTH_TOKEN secret. Run it any time from the Actions tab.
+name: Claude Refactor
+
+on:
+  schedule:
+    - cron: "17 13 1 * *" # the 1st of the month, 13:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+  id-token: write
+
+concurrency:
+  group: claude-refactor
+  cancel-in-progress: false
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # youtube-dl-exec's installer looks for Python, which the app doesn't use.
+      YOUTUBE_DL_SKIP_PYTHON_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: "/refactor"
+          claude_args: >-
+            --max-turns 120
+            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm run verify),Bash(npm run check),Bash(npx *),Bash(git *),Bash(gh pr *),Bash(wc *),Bash(sort *),Bash(uniq *),Bash(head *),Bash(tail *),Bash(xargs *)"
