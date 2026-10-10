@@ -124,8 +124,10 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
   (Playwright, in Chrome and WebKit; Firefox on request). The player's tests (`music*.test.ts`,
   `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed. Tests name their temp
-  files `yt-audio-<what>-` + `fs.mkdtemp()`'s suffix, so `scripts/clean.ts` finds what interrupted
-  runs leave (`clean-script.test.ts` checks every name)
+  files `yt-audio-<what>-` + `fs.mkdtemp()`'s suffix and delete them afterwards; each run's
+  `globalSetup` (`scripts/leftovers.ts`) deletes what stopped runs left (a Playwright run's server
+  files once its process is gone, other test folders a day old), and `scripts/clean.ts` everything
+  at once (`clean-script.test.ts` checks every name)
 
 ## Commands
 

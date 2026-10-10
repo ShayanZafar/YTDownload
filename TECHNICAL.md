@@ -692,7 +692,7 @@ tests/
 │   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
 │   ├── web-app.test.ts          # the web app manifest and its icons
 │   ├── yt-dlp-script.test.ts    # scripts/yt-dlp.mjs: the standalone yt-dlp for each system
-│   ├── clean-script.test.ts     # scripts/clean.ts: it recognises every temp name the tests use
+│   ├── clean-script.test.ts     # scripts/clean.ts + leftovers.ts: every temp name the tests use; what a run deletes as it starts
 │   ├── windows-scripts.test.ts  # the Windows scripts and the install branch's shortcuts: ASCII, CRLF, one line each
 │   ├── dev-server.test.ts       # the dev server sends the page's files, never data/, dotfiles or the rest
 │   └── host-check.test.ts       # DNS-rebinding protection
@@ -705,7 +705,7 @@ Configuration files: `vitest.config.ts` and `playwright.config.ts`.
 
 ### Cleaning up after tests
 
-The tests keep their files in the system's temp folder, named `yt-audio-<what>-…`, and delete them afterwards, even when a test fails or times out (a save it left running is cancelled first). A run that's stopped part-way leaves some behind, as does a browser Playwright couldn't close. `npm run clean` (`scripts/clean.ts`) removes them, along with Playwright's `test-results/` and `playwright-report/`; `npm run clean -- --dry-run` lists them first. It never touches `data/`, `dist/`, the music player's cache (`yt-audio-player`) or a Save to folder. Run it when no tests are running. A new test's temp files must follow the same naming — `clean-script.test.ts` fails otherwise.
+The tests keep their files in the system's temp folder, named `yt-audio-<what>-…`, and delete them afterwards, even when a test fails or times out (a save it left running is cancelled first). A run that's stopped part-way (Ctrl+C, a closed terminal) leaves some behind, so each run also deletes, as it starts, what stopped runs left (`removeAbandonedLeftovers()` in `scripts/leftovers.ts`, the `globalSetup` of both `vitest.config.ts` and `playwright.config.ts`): a Playwright run's test server files once that run's process is gone, any other test folder once it's a day old — never a run that's still going. A browser profile Playwright couldn't delete (`playwright_<browser>dev_profile-…`) stays, as Playwright's own name doesn't say which project made it. `npm run clean` (`scripts/clean.ts`) removes all of these right away, along with Playwright's `test-results/` and `playwright-report/`; `npm run clean -- --dry-run` lists them first. It never touches `data/`, `dist/`, the music player's cache (`yt-audio-player`) or a Save to folder. Run it when no tests are running. A new test's temp files must follow the same naming — `clean-script.test.ts` fails otherwise.
 
 ### API end-to-end (Vitest + Supertest)
 
