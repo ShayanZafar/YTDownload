@@ -4,7 +4,9 @@ import {
   folderEntrySchema,
   folderListingSchema,
   musicLibrarySchema,
+  playlistFileSongSchema,
   saveSettingsSchema,
+  savedPlaylistFileSchema,
   searchResultSchema,
   songToFindSchema,
   songsInFolderSchema,
@@ -214,6 +216,26 @@ export const api = {
         songs: z.array(songToFindSchema).max(1000, "That's too many songs to look for at once"),
       }),
       responses: { 200: songsInFolderSchema },
+    },
+    /**
+     * Writes a playlist's songs that are in the "Save to" folder into it as an
+     * .m3u8 playlist file, in the playlist's order (see server/playlist-file.ts).
+     */
+    playlistFile: {
+      method: "POST" as const,
+      path: "/api/folders/playlist-file" as const,
+      input: z.object({
+        name: z
+          .string()
+          .trim()
+          .min(1, "The playlist needs a name")
+          .max(300, "That playlist name is too long"),
+        songs: z
+          .array(playlistFileSongSchema)
+          .min(1, "The playlist has no songs")
+          .max(1000, "That's too many songs for one playlist file"),
+      }),
+      responses: { 201: savedPlaylistFileSchema },
     },
   },
   /**

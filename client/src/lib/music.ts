@@ -132,6 +132,32 @@ export function filterTracks(tracks: readonly PlayerTrack[], query: string): Pla
   });
 }
 
+// --- A playlist's songs in the folder -----------------------------------------------
+
+/**
+ * A playlist's songs that are in the "Save to" folder, as the player's songs,
+ * in the playlist's order: `found` says which file each song is (from
+ * `POST /api/folders/songs`), `folderTracks` are the folder's songs. Each file
+ * comes once, though a playlist can have a song twice.
+ */
+export function playlistQueue(
+  songs: readonly { id: string }[],
+  found: Readonly<Record<string, { file: string }>>,
+  folderTracks: readonly PlayerTrack[],
+): PlayerTrack[] {
+  const byFile = new Map(folderTracks.map((track) => [track.fileName, track]));
+  const queue: PlayerTrack[] = [];
+  const added = new Set<string>();
+  for (const song of songs) {
+    const file = found[song.id]?.file;
+    const track = file !== undefined ? byFile.get(file) : undefined;
+    if (!track || added.has(track.key)) continue;
+    added.add(track.key);
+    queue.push(track);
+  }
+  return queue;
+}
+
 // --- What plays next ------------------------------------------------------------------
 
 export const repeatModes = ["off", "all", "one"] as const;

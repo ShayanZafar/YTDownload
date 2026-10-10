@@ -11,11 +11,14 @@ import {
   folderListingSchema,
   saveEventSchema,
   saveSettingsSchema,
+  savedPlaylistFileSchema,
   songsInFolderSchema,
   type FolderEntry,
   type FolderListing,
+  type PlaylistFileSong,
   type SaveEvent,
   type SaveSettings,
+  type SavedPlaylistFile,
   type SongToFind,
   type SongsInFolder,
 } from "@shared/schema";
@@ -97,6 +100,20 @@ export function findSongsInFolder(
     method: api.folders.songs.method,
     json: { songs },
     signal,
+  });
+}
+
+/**
+ * Writes the playlist's songs that are in the "Save to" folder into it as
+ * "<name>.m3u8", in the playlist's order (replacing one the app wrote before).
+ */
+export function savePlaylistFile(
+  name: string,
+  songs: PlaylistFileSong[],
+): Promise<SavedPlaylistFile> {
+  return requestJson(savedPlaylistFileSchema, api.folders.playlistFile.path, {
+    method: api.folders.playlistFile.method,
+    json: { name, songs },
   });
 }
 

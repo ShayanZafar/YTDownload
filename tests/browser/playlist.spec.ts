@@ -1,7 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { spawn } from "child_process";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
+import ffmpegPath from "ffmpeg-static";
 
 // YouTube playlists in the playlist panel. The playlist and the saves are the
 // test's own answers (no YouTube); the Save to folder, and the check of which
@@ -35,6 +37,28 @@ const PLAYLIST = {
     thumbnail: THUMBNAIL,
   })),
 };
+
+/** Makes a short MP3 with no tags at `file` (recognised by its name, like a video saved as it is). */
+function makeSong(file: string, seconds: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      ffmpegPath!,
+      [
+        ...["-hide_banner", "-loglevel", "error", "-y"],
+        ...["-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`],
+        ...["-c:a", "libmp3lame", "-b:a", "128k", file],
+      ],
+      { windowsHide: true },
+    );
+    let err = "";
+    child.stderr.on("data", (chunk) => (err += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg: ${err}`))));
+  });
+}
+
+// Opening a song can block WebKit on Windows for several seconds (see CLAUDE.md).
+const START_SONG = { timeout: 90_000 };
 
 test.describe("a YouTube playlist", () => {
   test.beforeEach(async ({ request }) => {
@@ -159,5 +183,43 @@ test.describe("a YouTube playlist", () => {
     ]);
     expect(saved.every((s) => s.name === undefined && s.spotifyId === undefined)).toBe(true);
     expect(searches).toBe(0);
+  });
+
+  test("with a Save to folder, plays the songs in it in the playlist's order, and saves a playlist file", async ({
+    page,
+    request,
+  }) => {
+    folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-yt-playlist-"));
+    // Two of the three videos, as the app saves them; the newer one listed first in Your music.
+    await makeSong(path.join(folder, "Bohemian Rhapsody.mp3"), 20);
+    await makeSong(path.join(folder, "Me at the zoo.mp3"), 20);
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    await page.route("**/api/youtube/playlist?*", (route) => route.fulfill({ json: PLAYLIST }));
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Playlist", exact: true }).click();
+    await page.getByRole("textbox", { name: /playlist link/i }).fill(LINK);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+
+    const panel = page.getByRole("region", { name: /youtube playlist/i });
+    const play = panel.getByRole("button", { name: "Play 2 songs" });
+    await expect(play).toBeVisible({ timeout: 30_000 });
+
+    // Play: the playlist's order (the zoo first), not the folder's.
+    await play.click(START_SONG);
+    const player = page.getByRole("region", { name: "Music player" });
+    await expect(player.getByTestId("player-title")).toHaveText("Me at the zoo");
+    await player.getByRole("button", { name: "Next song" }).click(START_SONG);
+    await expect(player.getByTestId("player-title")).toHaveText("Bohemian Rhapsody");
+    await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
+
+    // Save playlist file: an .m3u8 in the folder, in the playlist's order.
+    await panel.getByRole("button", { name: "Save playlist file" }).click();
+    await expect(page.getByText("Saved “Road Trip.m3u8”").first()).toBeVisible();
+    const text = await fs.readFile(path.join(folder, "Road Trip.m3u8"), "utf8");
+    expect(text.split(/\r?\n/).filter((line) => line && !line.startsWith("#"))).toEqual([
+      "Me at the zoo.mp3",
+      "Bohemian Rhapsody.mp3",
+    ]);
   });
 });
