@@ -11,6 +11,7 @@ export default tseslint.config(
       "node_modules/**",
       ".cache/**",
       ".git/**",
+      ".claude/**",
       "client/src/components/ui/**",
       "playwright-report/**",
       "test-results/**",
