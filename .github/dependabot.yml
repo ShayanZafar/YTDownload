@@ -1,0 +1,21 @@
+# Monthly dependency updates, grouped into one pull request per ecosystem so
+# the Tests workflow checks them together. Security updates still arrive as
+# soon as GitHub publishes an advisory.
+#
+# If a grouped npm update's lockfile won't install, close the PR and run the
+# upgrade locally with `npx npm@11 update` instead (see CLAUDE.md on npm 10).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      npm-dependencies:
+        patterns: ["*"]
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
