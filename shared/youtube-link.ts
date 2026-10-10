@@ -52,3 +52,13 @@ export function extractVideoId(rawUrl: string): string | null {
 
   return null;
 }
+
+/**
+ * YouTube's own embedded player for a video id, set to start playing at once
+ * (it's opened by a click). The privacy-enhanced host sets no cookies until
+ * the video plays. Null for anything that isn't a video id.
+ */
+export function youtubeEmbedUrl(videoId: string): string | null {
+  if (!VIDEO_ID_RE.test(videoId)) return null;
+  return `https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&playsinline=1`;
+}

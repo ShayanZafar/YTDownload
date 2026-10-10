@@ -8,6 +8,7 @@ import { FolderPicker } from "@/components/folder-picker";
 import { RenameableTitle } from "@/components/renameable-title";
 import { SpotifyPlaylistPanel } from "@/components/spotify-playlist";
 import { MusicLibrary } from "@/components/music-library";
+import { VideoPreview } from "@/components/video-preview";
 import {
   useVideoInfo,
   useRecentDownloads,
@@ -22,6 +23,7 @@ import { SONGS_IN_FOLDER_KEY, useSongsInFolder } from "@/hooks/use-songs-in-fold
 import { MUSIC_KEY } from "@/hooks/use-folder-music";
 import { useDownloadAll, type DownloadAllSummary } from "@/hooks/use-download-all";
 import { useClipboardLink } from "@/hooks/use-clipboard-link";
+import { usePlayer } from "@/hooks/use-player";
 import {
   asLink,
   formatBytes,
@@ -54,6 +56,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { api, buildDownloadUrl, type DownloadFormat } from "@shared/routes";
 import { spotifyFileName } from "@shared/spotify-names";
+import { extractVideoId } from "@shared/youtube-link";
 import {
   SAME_LENGTH_SECONDS,
   type SearchResult,
@@ -75,6 +78,7 @@ import {
   Check,
   ClipboardPaste,
   Timer,
+  Play,
   X,
 } from "lucide-react";
 
@@ -240,6 +244,10 @@ export default function Home() {
     pending.length > 0 ? HISTORY_POLL_MS : false,
   );
   const results = searchData?.results;
+  // The search result whose video plays in the list (one at a time), by its id.
+  const [previewing, setPreviewing] = useState<string | null>(null);
+  useEffect(() => setPreviewing(null), [searchData]);
+  const player = usePlayer();
   const spotify = searchData?.spotify;
   const isBusy = isFetchingInfo || isSearching;
   const input = inputFor[mode];
@@ -472,6 +480,14 @@ export default function Home() {
       fileTitle: song ? spotifyFileName(song) : undefined,
     });
     setScrollRequest((n) => n + 1);
+  };
+
+  // Opens a result's video in the list (closing any other), or closes it. The
+  // app's own player pauses, so the two don't play over each other.
+  const togglePreview = (id: string) => {
+    if (previewing === id) return setPreviewing(null);
+    if (player.status === "playing") player.toggle();
+    setPreviewing(id);
   };
 
   const clear = () => {
@@ -1032,76 +1048,122 @@ export default function Home() {
                   spotify?.duration != null &&
                   result.duration != null &&
                   Math.abs(result.duration - spotify.duration) <= SAME_LENGTH_SECONDS;
+                const videoId = extractVideoId(result.url);
+                const isPreviewing = videoId !== null && previewing === result.id;
                 return (
-                  <li key={result.id}>
-                    <button
-                      type="button"
-                      onClick={() => pick(result, spotify)}
-                      aria-pressed={isPicked}
-                      aria-label={[
-                        result.title,
-                        result.channel && `by ${result.channel}`,
-                        result.official && "official upload",
-                        sameLength && "same length as the Spotify song",
-                        result.duration != null && formatDuration(result.duration),
-                      ]
-                        .filter(Boolean)
-                        .join(", ")}
-                      className={cn(
-                        "w-full flex items-center gap-4 px-4 py-3 text-left transition-colors",
-                        isPicked ? "bg-primary/5" : "hover:bg-secondary/40",
-                      )}
-                    >
-                      <div className="relative w-24 sm:w-28 aspect-video shrink-0 overflow-hidden rounded-lg bg-secondary">
-                        <img
-                          src={result.thumbnail}
-                          alt=""
-                          loading="lazy"
-                          className="w-full h-full object-cover"
-                        />
-                        {result.duration != null && (
-                          <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1 text-[10px] font-semibold text-white">
-                            {formatDuration(result.duration)}
-                          </span>
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-foreground line-clamp-2">
-                          {result.title}
-                        </p>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                          <span className="truncate max-w-full">{result.channel}</span>
-                          {result.official && (
+                  <li
+                    key={result.id}
+                    className={cn(
+                      "transition-colors",
+                      isPicked ? "bg-primary/5" : !isPreviewing && "hover:bg-secondary/40",
+                    )}
+                  >
+                    <div className="flex items-stretch">
+                      {/* The thumbnail plays the video right here, before choosing it */}
+                      <button
+                        type="button"
+                        disabled={videoId === null}
+                        onClick={() => togglePreview(result.id)}
+                        aria-pressed={isPreviewing}
+                        aria-label={`${isPreviewing ? "Close preview of" : "Preview"} ${result.title}`}
+                        title={
+                          isPreviewing ? "Close the preview" : "Watch or listen before downloading"
+                        }
+                        className="group shrink-0 self-center py-3 pl-4"
+                      >
+                        <div className="relative w-24 sm:w-28 aspect-video overflow-hidden rounded-lg bg-secondary">
+                          <img
+                            src={result.thumbnail}
+                            alt=""
+                            loading="lazy"
+                            className="w-full h-full object-cover"
+                          />
+                          {videoId !== null && (
                             <span
-                              title="Uploaded by the artist or their label"
-                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary"
+                              className={cn(
+                                "absolute inset-0 flex items-center justify-center transition-colors",
+                                isPreviewing ? "bg-black/55" : "bg-black/0 group-hover:bg-black/35",
+                              )}
                             >
-                              <BadgeCheck className="w-3 h-3" />
-                              Official
+                              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white">
+                                {isPreviewing ? (
+                                  <X className="w-4 h-4" />
+                                ) : (
+                                  <Play className="w-4 h-4 translate-x-px fill-current" />
+                                )}
+                              </span>
                             </span>
                           )}
-                          {sameLength && (
-                            <span
-                              title="Same length as the Spotify song, so most likely the same recording"
-                              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground"
-                            >
-                              <Timer className="w-3 h-3" />
-                              Same length
+                          {result.duration != null && (
+                            <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1 text-[10px] font-semibold text-white">
+                              {formatDuration(result.duration)}
                             </span>
                           )}
                         </div>
-                      </div>
-                      {isPicked ? (
-                        <span className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-primary">
-                          <Check className="w-4 h-4" />
-                          <span className="hidden sm:inline">Selected</span>
-                        </span>
-                      ) : (
-                        <span className="hidden sm:inline-flex shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground">
-                          Choose
-                        </span>
-                      )}
-                    </button>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => pick(result, spotify)}
+                        aria-pressed={isPicked}
+                        aria-label={[
+                          result.title,
+                          result.channel && `by ${result.channel}`,
+                          result.official && "official upload",
+                          sameLength && "same length as the Spotify song",
+                          result.duration != null && formatDuration(result.duration),
+                        ]
+                          .filter(Boolean)
+                          .join(", ")}
+                        className="min-w-0 flex-1 flex items-center gap-4 py-3 pl-4 pr-4 text-left"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground line-clamp-2">
+                            {result.title}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                            <span className="truncate max-w-full">{result.channel}</span>
+                            {result.official && (
+                              <span
+                                title="Uploaded by the artist or their label"
+                                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary"
+                              >
+                                <BadgeCheck className="w-3 h-3" />
+                                Official
+                              </span>
+                            )}
+                            {sameLength && (
+                              <span
+                                title="Same length as the Spotify song, so most likely the same recording"
+                                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground"
+                              >
+                                <Timer className="w-3 h-3" />
+                                Same length
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {isPicked ? (
+                          <span className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                            <Check className="w-4 h-4" />
+                            <span className="hidden sm:inline">Selected</span>
+                          </span>
+                        ) : (
+                          <span className="hidden sm:inline-flex shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground">
+                            Choose
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                    {isPreviewing && (
+                      <VideoPreview
+                        videoId={videoId}
+                        title={result.title}
+                        url={result.url}
+                        isPicked={isPicked}
+                        onChoose={() => pick(result, spotify)}
+                        onClose={() => setPreviewing(null)}
+                      />
+                    )}
                   </li>
                 );
               })}

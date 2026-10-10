@@ -86,6 +86,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   `components/folder-picker.tsx` is the folder browser (native `<dialog>`, portalled to `<body>`);
   `components/save-to-setting.tsx` sits under the search box, always visible — other devices get
   a note there instead
+- `client/src/components/video-preview.tsx` — a search result's video in YouTube's embedded player
+  (`youtubeEmbedUrl()` in `shared/youtube-link.ts`, youtube-nocookie), opened by its thumbnail under
+  that result, one at a time; it pauses the app's player
 - `client/src/components/renameable-title.tsx` — the preview card's title; click it to rename the
   file (sent as `?name=` on the download link); Enter keeps, Esc cancels
 - `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
