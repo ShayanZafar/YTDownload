@@ -73,8 +73,13 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
   default name of any download found from Spotify); `shared/audio-types.ts` has `AUDIO_TYPES` (the
   audio files the app knows: MIME type, and what to ask `canPlayType()`)
-- `client/src/pages/Home.tsx` — the whole UI; `client/src/components/ui/` holds only the shadcn/ui
-  components in use — add more with `npx shadcn@latest add <name>` (config in `components.json`)
+- `client/src/pages/Home.tsx` — the page: its state and what each action does (open a link, search,
+  open a playlist, Paste, download or save), laid out from components — `find-box.tsx` (the Link /
+  Search / Playlist switch, the box, Paste, the copied-link suggestion), `preview-card.tsx` (the
+  chosen video, Download Audio, Original audio), `search-results.tsx` (with the inline video
+  preview) and `recent-extractions.tsx` (the history, its search and filters).
+  `client/src/components/ui/` holds only the shadcn/ui components in use — add more with
+  `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
   Original audio toggle (`use-download-format.ts`) and the Link / Search / Playlist switch;
   `use-stored-value.ts` remembers free text (the open playlist's link)

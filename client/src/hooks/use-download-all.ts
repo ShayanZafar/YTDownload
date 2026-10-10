@@ -8,7 +8,7 @@ import {
 } from "@shared/schema";
 import { spotifyFileName } from "@shared/spotify-names";
 import { searchSongs } from "@/hooks/use-youtube";
-import { ApiError, saveOnServer } from "@/lib/save-to-folder";
+import { ApiError, folderName, saveOnServer } from "@/lib/save-to-folder";
 
 /** Where one song of a "Download all" is at. */
 export type SongStatus =
@@ -217,4 +217,28 @@ export function useDownloadAll({
   }, []);
 
   return { statuses, progress, running: progress !== null, start, stop, reset };
+}
+
+/** What "Download all" says when it's over (a toast). */
+export function downloadAllToast(
+  { saved, check, failed, stopped, problem }: DownloadAllSummary,
+  folder: string | null,
+) {
+  const savedText = `${saved} ${saved === 1 ? "song" : "songs"}`;
+  if (problem) {
+    return { title: "Downloads stopped", description: problem, variant: "destructive" as const };
+  }
+  const left = [check > 0 && `${check} to check`, failed > 0 && `${failed} failed`]
+    .filter(Boolean)
+    .join(", ");
+  return {
+    title: stopped
+      ? "Downloads stopped"
+      : saved > 0
+        ? `Saved ${savedText}${folder ? ` to “${folderName(folder)}”` : ""}`
+        : "Nothing was saved",
+    description: [stopped && `${savedText} saved.`, left && `${left} — see the playlist.`]
+      .filter(Boolean)
+      .join(" "),
+  };
 }
