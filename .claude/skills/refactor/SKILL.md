@@ -31,6 +31,10 @@ Rules:
 - Leave `client/src/components/ui/` (shadcn) and generated files alone.
 - One cleanup per commit, each independently revertable, with a message that says what is now easier to change.
 
+## 2b. Pin behavior before touching untested code
+
+If the code you'll change has no test that would fail when its behavior changed, write characterization tests first: call it with the inputs it sees today (real examples from callers or tests) and assert the outputs you observe now, in `tests/unit`. Commit them on their own, then refactor against them. If you can't characterize it cheaply, pick another cleanup.
+
 ## 3. Verify each one
 
 After every cleanup, run `npm run verify 2>&1 | tail -40`. It must pass before the commit. If a cleanup needs more than a small test change to keep verify green, revert it and pick another.
