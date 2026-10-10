@@ -8,7 +8,7 @@ vite.config.ts.*
 # Download history and settings (see server/storage.ts and server/settings.ts)
 data/
 
-# Local environment files — keep credentials out of git.
+# Local environment files â€” keep credentials out of git.
 # .env.example IS committed; .env and per-environment overrides are not.
 .env
 .env.local
@@ -18,3 +18,4 @@ data/
 test-results
 playwright-report
 .cache/ms-playwright
+reports/

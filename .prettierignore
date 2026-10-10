@@ -10,3 +10,4 @@ attached_assets
 *.lock
 package-lock.json
 client/src/components/ui
+reports
