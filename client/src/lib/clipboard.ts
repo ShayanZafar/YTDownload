@@ -1,4 +1,4 @@
-import { extractVideoId } from "@shared/youtube-link";
+import { extractPlaylistId, extractVideoId, isYouTubePlaylistLink } from "@shared/youtube-link";
 import { asLink } from "@/lib/format";
 
 /**
@@ -34,13 +34,15 @@ const MAX_PASTE = 300;
 // Punctuation around a link in a sentence or a message: "(https://…).", "<https://…>".
 const AROUND_LINK = /^["'([{<«“‘]+|["')\]}>»”’.,;:!?]+$/g;
 
-// The Spotify links the box opens: songs, playlists and albums (not artists,
-// podcasts or spotify.link short links, which the app can't open).
+// The Spotify links the box opens: songs, playlists and albums (not artists
+// or podcasts) — and spotify.link short links, which lead to one of those.
+const SPOTIFY_SHORT_LINK =
+  /^(?:https?:\/\/)?(spotify\.(?:app\.)?link)\/([A-Za-z0-9_-]{1,64})\/?(?:[?#]\S*)?$/i;
 const SPOTIFY_LINK =
   /^(?:spotify:(track|playlist|album):([A-Za-z0-9]{22})|(?:https?:\/\/)?(?:open|play)\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:embed\/)?(track|playlist|album)\/([A-Za-z0-9]{22})(?:[/?#]\S*)?)$/i;
 
 /**
- * The first YouTube video link or Spotify song, playlist or album link in some
+ * The first YouTube video or playlist link or Spotify song, playlist or album link in some
  * copied text — a link on its own, or in a message shared from an app.
  */
 export function findCopiedLink(text: string): CopiedLink | undefined {
@@ -57,6 +59,15 @@ export function findCopiedLink(text: string): CopiedLink | undefined {
         label: `youtu.be/${videoId}`,
       };
     }
+    const playlistId = link && isYouTubePlaylistLink(link) ? extractPlaylistId(link) : null;
+    if (link && playlistId) {
+      return {
+        kind: "youtube",
+        url: link,
+        key: `youtube:playlist:${playlistId}`,
+        label: `youtube.com/playlist?list=${playlistId}`,
+      };
+    }
     const spotify = SPOTIFY_LINK.exec(candidate);
     if (spotify) {
       const kind = (spotify[1] ?? spotify[3]).toLowerCase();
@@ -66,6 +77,15 @@ export function findCopiedLink(text: string): CopiedLink | undefined {
         url: candidate,
         key: `spotify:${kind}:${id}`,
         label: `spotify.com/${kind}/${id}`,
+      };
+    }
+    const short = SPOTIFY_SHORT_LINK.exec(candidate);
+    if (short) {
+      return {
+        kind: "spotify",
+        url: /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`,
+        key: `spotify:short:${short[2]}`,
+        label: `${short[1].toLowerCase()}/${short[2]}`,
       };
     }
   }

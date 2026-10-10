@@ -53,6 +53,36 @@ export function extractVideoId(rawUrl: string): string | null {
   return null;
 }
 
+// A playlist id ("PL…", "OLAK5uy_…" for an album, "UU…" for a channel's uploads).
+const PLAYLIST_ID_RE = /^[A-Za-z0-9_-]{2,64}$/;
+
+/**
+ * The playlist a YouTube link is for: `list=` on youtube.com/playlist,
+ * /watch (a video played in a playlist) or youtu.be — or null.
+ */
+export function extractPlaylistId(rawUrl: string): string | null {
+  if (typeof rawUrl !== "string" || rawUrl.length === 0) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (!YOUTUBE_HOSTS.has(parsed.hostname)) return null;
+  const list = parsed.searchParams.get("list");
+  return list && PLAYLIST_ID_RE.test(list) ? list : null;
+}
+
+/**
+ * A YouTube playlist link to open in the playlist panel: one for the playlist
+ * itself (youtube.com/playlist?list=…), with no video of its own. A video
+ * played in a playlist (watch?v=…&list=…) opens the video.
+ */
+export function isYouTubePlaylistLink(rawUrl: string): boolean {
+  return extractPlaylistId(rawUrl) !== null && extractVideoId(rawUrl) === null;
+}
+
 /**
  * YouTube's own embedded player for a video id, set to start playing at once
  * (it's opened by a click). The privacy-enhanced host sets no cookies until

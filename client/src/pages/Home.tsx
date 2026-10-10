@@ -1,19 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
-import { Highlight, HistorySearch } from "@/components/history-search";
+import { FindBox, inputModes, type InputMode } from "@/components/find-box";
+import { PreviewCard, type Selected } from "@/components/preview-card";
+import { SearchResults } from "@/components/search-results";
+import { RecentExtractions } from "@/components/recent-extractions";
 import { SaveToSetting } from "@/components/save-to-setting";
 import { FolderPicker } from "@/components/folder-picker";
-import { RenameableTitle } from "@/components/renameable-title";
 import { SpotifyPlaylistPanel } from "@/components/spotify-playlist";
 import { MusicLibrary } from "@/components/music-library";
-import { VideoPreview } from "@/components/video-preview";
 import {
   useVideoInfo,
   useRecentDownloads,
   useSongSearch,
-  useSpotifyPlaylist,
+  useSpotifyLink,
+  usePlaylist,
 } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
@@ -21,18 +24,10 @@ import { useStoredValue } from "@/hooks/use-stored-value";
 import { useSaveSettings } from "@/hooks/use-save-settings";
 import { SONGS_IN_FOLDER_KEY, useSongsInFolder } from "@/hooks/use-songs-in-folder";
 import { MUSIC_KEY } from "@/hooks/use-folder-music";
-import { useDownloadAll, type DownloadAllSummary } from "@/hooks/use-download-all";
+import { downloadAllToast, useDownloadAll } from "@/hooks/use-download-all";
 import { useClipboardLink } from "@/hooks/use-clipboard-link";
 import { usePlayer } from "@/hooks/use-player";
-import {
-  asLink,
-  formatBytes,
-  formatDuration,
-  isSpotifyLink,
-  isSpotifyPlaylistLink,
-  timeAgo,
-  validDate,
-} from "@/lib/format";
+import { asLink, isSpotifyLink, isSpotifyShortLink, playlistSourceOf } from "@/lib/format";
 import {
   canReadClipboard,
   clipboardPermission,
@@ -40,100 +35,18 @@ import {
   pasteKeys,
   textToPaste,
 } from "@/lib/clipboard";
-import { ApiError, folderName, saveOnServer } from "@/lib/save-to-folder";
-import { queryClient } from "@/lib/queryClient";
 import {
-  filterHistory,
-  filterHistoryByTitle,
-  historyRangeHints,
-  historyRangeLabels,
-  historyRangePhrases,
-  historyRanges,
-  type HistoryRange,
-} from "@/lib/history-filter";
-import { cn } from "@/lib/utils";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { api, buildDownloadUrl, type DownloadFormat } from "@shared/routes";
+  ApiError,
+  folderName,
+  saveOnServer,
+  type ActiveSave,
+  type SaveRequest,
+} from "@/lib/save-to-folder";
+import { queryClient } from "@/lib/queryClient";
+import { api, buildDownloadUrl } from "@shared/routes";
 import { spotifyFileName } from "@shared/spotify-names";
 import { extractVideoId } from "@shared/youtube-link";
-import {
-  SAME_LENGTH_SECONDS,
-  type SearchResult,
-  type SpotifyPlaylistTrack,
-  type SpotifyTrack,
-} from "@shared/schema";
-import {
-  Search,
-  ArrowRight,
-  Music,
-  Loader2,
-  Download,
-  AlertCircle,
-  FileAudio,
-  History,
-  Link2,
-  ListMusic,
-  BadgeCheck,
-  Check,
-  ClipboardPaste,
-  Timer,
-  Play,
-  X,
-} from "lucide-react";
-
-// Paste a link, search by song title, or open a Spotify playlist to pick songs
-// from. The last one used is remembered.
-const inputModes = ["link", "search", "playlist"] as const;
-type InputMode = (typeof inputModes)[number];
-
-const modeOptions = [
-  { mode: "link", label: "Paste a link", short: "Link", Icon: Link2 },
-  { mode: "search", label: "Search by song", short: "Search", Icon: Search },
-  { mode: "playlist", label: "Spotify playlist", short: "Playlist", Icon: ListMusic },
-] as const;
-
-// The main box, for each mode.
-const inputFor = {
-  link: {
-    type: "url",
-    label: "YouTube link",
-    placeholder: "https://www.youtube.com/watch?v=...",
-    enterKeyHint: "go",
-    Icon: Link2,
-  },
-  search: {
-    type: "search",
-    label: "Song search",
-    placeholder: "Artist and song, or a Spotify song link",
-    enterKeyHint: "search",
-    Icon: Search,
-  },
-  playlist: {
-    type: "url",
-    label: "Spotify playlist link",
-    placeholder: "Paste a Spotify playlist or album link",
-    enterKeyHint: "go",
-    Icon: ListMusic,
-  },
-} as const;
-
-// What the preview card shows: a video opened from a link or picked from the
-// search results.
-type Selected = {
-  url: string;
-  title: string;
-  thumbnail: string;
-  channel?: string;
-  duration?: number | null;
-  /** The Spotify song it was found for, kept with the download in the history. */
-  spotifyId?: string;
-  /**
-   * The name to save it under unless renamed: "Artist - Title" for a Spotify
-   * song (rather than the YouTube video's title).
-   */
-  fileTitle?: string;
-};
+import type { SearchResult, SpotifyPlaylistTrack, SpotifyTrack } from "@shared/schema";
 
 // A download started from this page that hasn't shown up in the history yet.
 // The server only records a download once it has fully completed, so we keep
@@ -142,44 +55,6 @@ type Selected = {
 type PendingDownload = { url: string; afterId: number; startedAt: number };
 const PENDING_TIMEOUT_MS = 15 * 60_000;
 const HISTORY_POLL_MS = 3_000;
-
-// Recent Extractions shows this many at first, and this many more per "Show more".
-const HISTORY_PAGE = 25;
-
-// A download being saved into the "Save to" folder, keyed by its download URL.
-type ActiveSave = { bytes: number; folder: string; cancel: () => void };
-// What to download: a video, as MP3 or original audio, under a name (or its
-// title), maybe for a Spotify song.
-type DownloadRequest = {
-  url: string;
-  format: DownloadFormat;
-  name?: string;
-  spotifyId?: string;
-};
-
-// What "Download all" says when it's over.
-function downloadAllToast(
-  { saved, check, failed, stopped, problem }: DownloadAllSummary,
-  folder: string | null,
-) {
-  const savedText = `${saved} ${saved === 1 ? "song" : "songs"}`;
-  if (problem) {
-    return { title: "Downloads stopped", description: problem, variant: "destructive" as const };
-  }
-  const left = [check > 0 && `${check} to check`, failed > 0 && `${failed} failed`]
-    .filter(Boolean)
-    .join(", ");
-  return {
-    title: stopped
-      ? "Downloads stopped"
-      : saved > 0
-        ? `Saved ${savedText}${folder ? ` to “${folderName(folder)}”` : ""}`
-        : "Nothing was saved",
-    description: [stopped && `${savedText} saved.`, left && `${left} — see the playlist.`]
-      .filter(Boolean)
-      .join(" "),
-  };
-}
 
 export default function Home() {
   const [text, setText] = useState("");
@@ -196,16 +71,17 @@ export default function Home() {
   // copied suggested under the empty box where it may look unasked (lib/clipboard.ts).
   const copied = useClipboardLink();
   const [canPaste] = useState(canReadClipboard);
-  const [isBoxFocused, setBoxFocused] = useState(false);
   const previewRef = useRef<HTMLElement>(null);
   const [scrollRequest, setScrollRequest] = useState(0);
   const saveTo = useSaveSettings();
   const [choosingFolder, setChoosingFolder] = useState(false);
   const [saves, setSaves] = useState<Record<string, ActiveSave>>({});
   const isSaving = Object.keys(saves).length > 0;
-  // The Spotify playlist (or album) open in the panel, remembered for next time.
+  // The Spotify playlist (or album) or YouTube playlist open in the panel,
+  // remembered for next time.
   const [playlistLink, setPlaylistLink] = useStoredValue("spotify-playlist");
-  const playlist = useSpotifyPlaylist(playlistLink);
+  const playlist = usePlaylist(playlistLink);
+  const playlistSource = (playlistLink !== null && playlistSourceOf(playlistLink)) || "spotify";
   // The playlist song being looked for on YouTube.
   const [pendingTrackId, setPendingTrackId] = useState<string>();
   // With a "Save to" folder: which of the playlist's songs are in it already.
@@ -243,14 +119,14 @@ export default function Home() {
   const { data: recentDownloads, isLoading: isLoadingHistory } = useRecentDownloads(
     pending.length > 0 ? HISTORY_POLL_MS : false,
   );
+  const { mutate: openShortLink, isPending: isOpeningShortLink } = useSpotifyLink();
   const results = searchData?.results;
   // The search result whose video plays in the list (one at a time), by its id.
   const [previewing, setPreviewing] = useState<string | null>(null);
   useEffect(() => setPreviewing(null), [searchData]);
   const player = usePlayer();
   const spotify = searchData?.spotify;
-  const isBusy = isFetchingInfo || isSearching;
-  const input = inputFor[mode];
+  const isBusy = isFetchingInfo || isSearching || isOpeningShortLink;
   // A copied link, suggested while the box is empty — unless it's already open.
   const openLinks = [selected?.url, playlistLink].map((link) => link && findCopiedLink(link)?.key);
   const suggestion =
@@ -258,35 +134,17 @@ export default function Home() {
       ? copied.link
       : null;
 
-  // Searching and filtering Recent Extractions (all in the browser).
-  const [historyQuery, setHistoryQuery] = useState("");
-  const [historyExact, setHistoryExact] = useState(false); // a suggestion was picked
-  const [historyRange, setHistoryRange] = useState<HistoryRange>("all");
-  const [historyLimit, setHistoryLimit] = useState(HISTORY_PAGE);
   const allHistory = useMemo(() => recentDownloads ?? [], [recentDownloads]);
-  const historyInRange = useMemo(
-    () => filterHistory(allHistory, "", historyRange),
-    [allHistory, historyRange],
-  );
-  const matchingHistory = useMemo(
-    () =>
-      historyExact
-        ? filterHistoryByTitle(historyInRange, historyQuery, "all")
-        : filterHistory(historyInRange, historyQuery, "all"),
-    [historyInRange, historyQuery, historyExact],
-  );
-  const shownHistory = matchingHistory.slice(0, historyLimit);
-  const isFilteringHistory = historyQuery.trim() !== "" || historyRange !== "all";
-  const clearHistoryFilters = () => {
-    setHistoryQuery("");
-    setHistoryExact(false);
-    setHistoryRange("all");
-    setHistoryLimit(HISTORY_PAGE);
-  };
   const error = infoError ?? searchError;
-  // Songs in the history by their Spotify id, so the playlist can mark them.
-  const downloadedSpotifyIds = useMemo(
-    () => new Set(allHistory.flatMap((d) => (d.spotifyId ? [d.spotifyId] : []))),
+  // Songs in the history by their Spotify id, and videos by their YouTube id,
+  // so the playlist can mark them.
+  const downloadedIds = useMemo(
+    () =>
+      new Set(
+        allHistory.flatMap((d) =>
+          [d.spotifyId, extractVideoId(d.url)].filter((id): id is string => !!id),
+        ),
+      ),
     [allHistory],
   );
 
@@ -335,11 +193,6 @@ export default function Home() {
     setPending((current) => [...current, { url: downloadUrl, afterId, startedAt: Date.now() }]);
   };
 
-  const switchMode = (next: InputMode) => {
-    setMode(next);
-    inputRef.current?.focus();
-  };
-
   const extract = (link: string) => {
     fetchInfo(link, {
       onSuccess: (info) => showVideo(info),
@@ -367,27 +220,57 @@ export default function Home() {
     });
   };
 
-  // Opens a Spotify playlist or album in the panel (or reloads it, if it's open).
+  // Opens a Spotify playlist or album, or a YouTube playlist, in the panel (or
+  // reloads it, if it's open).
   const openPlaylist = (link: string) => {
     if (link === playlistLink) void playlist.refetch();
     else setPlaylistLink(link);
   };
 
-  // A song picked in the playlist panel: find it on YouTube, like its Spotify link.
-  const findPlaylistSong = (track: SpotifyPlaylistTrack) => runSearch(track.url, track.id);
+  // A song picked in the playlist panel: a Spotify song is found on YouTube,
+  // like its Spotify link; a YouTube playlist's video opens straight away.
+  const pickPlaylistSong = (track: SpotifyPlaylistTrack) => {
+    if (playlist.data?.source !== "youtube") return runSearch(track.url, track.id);
+    resetSearch();
+    pick({
+      id: track.id,
+      url: track.url,
+      title: track.title,
+      channel: track.artists,
+      duration: track.duration,
+      thumbnail: track.thumbnail ?? `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`,
+      official: false,
+    });
+  };
 
   // Whatever the mode, a YouTube link is opened, a Spotify playlist or album
-  // link opens the playlist panel, and anything else is searched for —
-  // switching the toggle to match, so pasting a link into the search box
-  // works. A Spotify song link is a search for that song.
+  // link or a YouTube playlist link opens the playlist panel, and anything
+  // else is searched for — switching the toggle to match, so pasting a link
+  // into the search box works. A Spotify song link is a search for that song.
   const submit = (value: string) => {
     // A link opened here isn't suggested again (until something else is copied).
     const copiedLink = findCopiedLink(value);
     if (copiedLink) copied.handle(copiedLink.key);
 
-    if (isSpotifyPlaylistLink(value)) {
+    // A spotify.link short link: ask the app where it leads, then go on as
+    // if that open.spotify.com link had been typed.
+    if (isSpotifyShortLink(value)) {
+      openShortLink(value, {
+        onSuccess: (data) => submit(data.url),
+        onError: (err) => {
+          toast({
+            title: "Couldn't open the Spotify link",
+            description: err.message,
+            variant: "destructive",
+          });
+        },
+      });
+      return;
+    }
+    const playlistFrom = playlistSourceOf(value);
+    if (playlistFrom) {
       if (mode !== "playlist") setMode("playlist");
-      openPlaylist(value);
+      openPlaylist(playlistFrom === "youtube" ? (asLink(value) ?? value) : value);
       return;
     }
     const link = isSpotifyLink(value) ? undefined : asLink(value);
@@ -398,12 +281,6 @@ export default function Home() {
       if (mode !== "search") setMode("search");
       runSearch(value);
     }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const value = text.trim();
-    if (value) submit(value);
   };
 
   // A link or text put in the box for you (Paste, or the copied link
@@ -447,18 +324,6 @@ export default function Home() {
     const value = textToPaste(clipboardText);
     if (value) fillAndSubmit(value);
     else toast({ title: "Nothing to paste", description: "The clipboard has no text." });
-  };
-
-  // The copied link suggested under the empty box: Enter opens it, Esc dismisses it.
-  const onBoxKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!suggestion || e.nativeEvent.isComposing) return;
-    if (e.key === "Enter") {
-      e.preventDefault();
-      fillAndSubmit(suggestion.url);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      copied.handle(suggestion.key);
-    }
   };
 
   // A newly chosen video starts out saved under its own title.
@@ -521,7 +386,7 @@ export default function Home() {
   // Downloads into the "Save to" folder: the app saves the file itself, and
   // the page shows progress on the button instead of the browser's download
   // bar. Cancelling stops the app's work, as with a normal download.
-  const saveIntoFolder = async (href: string, request: DownloadRequest, folder: string) => {
+  const saveIntoFolder = async (href: string, request: SaveRequest, folder: string) => {
     const controller = new AbortController();
     const cancel = () => controller.abort();
     setSaves((current) => ({ ...current, [href]: { bytes: 0, folder, cancel } }));
@@ -556,7 +421,7 @@ export default function Home() {
 
   // Every download link goes through here: with a "Save to" folder the app
   // saves the file itself; otherwise the browser downloads it as usual.
-  const startDownload = (event: React.MouseEvent, href: string, request: DownloadRequest) => {
+  const startDownload = (event: React.MouseEvent, href: string, request: SaveRequest) => {
     if (saveTo.folder) {
       event.preventDefault();
       if (!saves[href]) void saveIntoFolder(href, request, saveTo.folder);
@@ -613,174 +478,27 @@ export default function Home() {
           music, videos, podcasts, and lectures.
         </p>
 
-        {/* Link / Search / Playlist switch (short labels on a phone) */}
-        <div
-          role="group"
-          aria-label="Find audio by"
-          className="mt-8 inline-flex rounded-full border border-border bg-secondary/60 p-1"
-        >
-          {modeOptions.map(({ mode: value, label, short, Icon }) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={mode === value}
-              aria-label={label}
-              onClick={() => switchMode(value)}
-              className={cn(
-                "inline-flex items-center gap-1.5 sm:gap-2 rounded-full px-3 sm:px-4 py-2 text-sm font-medium transition-colors",
-                mode === value
-                  ? "bg-card text-foreground shadow-xs"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="w-4 h-4" />
-              <span className="sm:hidden">{short}</span>
-              <span className="hidden sm:inline">{label}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Input Form */}
-        <form onSubmit={handleSubmit} noValidate className="w-full relative mt-4 group">
-          <div className="absolute inset-0 bg-primary/5 blur-2xl rounded-3xl transition-opacity duration-500 opacity-0 group-hover:opacity-100" />
-          <div className="relative flex items-center w-full bg-card rounded-2xl shadow-lg shadow-black/5 border border-border focus-within:ring-4 focus-within:ring-primary/10 transition-all duration-300 p-2">
-            <input.Icon className="w-5 h-5 sm:w-6 sm:h-6 shrink-0 text-muted-foreground ml-3 sm:ml-4 mr-1 sm:mr-2" />
-            <input
-              ref={inputRef}
-              type={input.type}
-              aria-label={input.label}
-              // Where a copied link can be suggested, the box is a combobox: the
-              // link is its one option, picked with Enter (or a click).
-              role={copied.canSuggest ? "combobox" : undefined}
-              aria-autocomplete={copied.canSuggest ? "list" : undefined}
-              aria-expanded={copied.canSuggest ? suggestion !== null : undefined}
-              aria-controls={suggestion ? "copied-link-list" : undefined}
-              aria-activedescendant={suggestion ? "copied-link" : undefined}
-              aria-describedby={suggestion ? "copied-link-keys" : undefined}
-              placeholder={input.placeholder}
-              enterKeyHint={input.enterKeyHint}
-              className="flex-1 w-0 min-w-0 bg-transparent border-none text-foreground placeholder:text-muted-foreground h-14 px-2 text-base sm:text-lg focus:outline-hidden"
-              value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                if (infoError) resetInfo();
-                if (searchError) resetSearch();
-              }}
-              onKeyDown={onBoxKeyDown}
-              onFocus={() => {
-                setBoxFocused(true);
-                if (!text.trim()) void copied.check();
-              }}
-              onBlur={() => setBoxFocused(false)}
-            />
-            {canPaste && (
-              <button
-                type="button"
-                onClick={() => void pasteFromClipboard()}
-                disabled={isBusy}
-                aria-label="Paste from the clipboard"
-                title="Paste from the clipboard"
-                className="h-14 shrink-0 mr-1 sm:mr-2 px-3 sm:px-4 rounded-xl font-medium text-muted-foreground hover:text-foreground hover:bg-secondary flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <ClipboardPaste className="w-5 h-5" />
-                <span className="hidden md:inline">Paste</span>
-              </button>
-            )}
-            <button
-              type="submit"
-              disabled={isBusy || !text.trim()}
-              aria-label={
-                mode === "link" ? "Extract" : mode === "search" ? "Search" : "Open playlist"
-              }
-              className="h-14 shrink-0 px-4 sm:px-6 md:px-8 rounded-xl bg-primary text-primary-foreground font-semibold flex items-center gap-2 hover-elevate disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 transition-all"
-            >
-              {isBusy ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  <span className="hidden sm:inline">
-                    {isSearching ? "Searching..." : "Processing..."}
-                  </span>
-                </>
-              ) : mode === "link" ? (
-                <>
-                  <span className="hidden sm:inline">Extract</span>
-                  <ArrowRight className="w-5 h-5" />
-                </>
-              ) : mode === "playlist" ? (
-                <>
-                  <span className="hidden sm:inline">Open</span>
-                  <ArrowRight className="w-5 h-5" />
-                </>
-              ) : (
-                <>
-                  <span className="hidden sm:inline">Search</span>
-                  <Search className="w-5 h-5" />
-                </>
-              )}
-            </button>
-          </div>
-          {/* A link you've copied, suggested under the empty box (Chrome and Edge, once allowed). */}
-          {suggestion && (
-            <div className="relative mt-2 flex items-stretch rounded-xl border border-border bg-card text-sm shadow-lg shadow-black/5">
-              <ul
-                id="copied-link-list"
-                role="listbox"
-                aria-label="Link you copied"
-                className="flex min-w-0 flex-1"
-              >
-                <li
-                  id="copied-link"
-                  role="option"
-                  aria-selected
-                  aria-label={`Link you copied: ${suggestion.label}`}
-                  title={suggestion.url}
-                  // Clicking it leaves the focus where it is.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => fillAndSubmit(suggestion.url)}
-                  // Its icon and text line up with the box's.
-                  className={cn(
-                    "flex min-w-0 flex-1 cursor-pointer items-center gap-3.5 rounded-l-xl py-2.5 pl-[22px] pr-3 text-left transition-colors hover:bg-secondary sm:gap-5 sm:pl-7 sm:pr-4",
-                    isBoxFocused && "bg-secondary",
-                  )}
-                >
-                  <ClipboardPaste className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="flex min-w-0 items-baseline gap-2">
-                    <span className="shrink-0 text-foreground/70">Link you copied</span>
-                    <span className="min-w-0 truncate font-medium text-foreground">
-                      {suggestion.label}
-                    </span>
-                  </span>
-                  {isBoxFocused && (
-                    <kbd
-                      aria-hidden
-                      className="ml-auto hidden shrink-0 rounded border border-border bg-card px-1.5 py-0.5 font-sans text-[11px] font-medium text-muted-foreground sm:inline"
-                    >
-                      Enter
-                    </kbd>
-                  )}
-                </li>
-              </ul>
-              <button
-                type="button"
-                aria-label="Dismiss the link you copied"
-                title="Dismiss"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={(e) => {
-                  // From the keyboard, the focus goes back to the box as this goes away.
-                  const hadFocus = document.activeElement === e.currentTarget;
-                  copied.handle(suggestion.key);
-                  if (hadFocus) inputRef.current?.focus();
-                }}
-                className="shrink-0 rounded-r-xl border-l border-border px-3 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-              >
-                <X className="h-4 w-4" />
-              </button>
-              <span id="copied-link-keys" className="sr-only">
-                Press Enter to open it, or Escape to dismiss it.
-              </span>
-            </div>
-          )}
-        </form>
+        <FindBox
+          mode={mode}
+          onModeChange={setMode}
+          text={text}
+          onTextChange={(value) => {
+            setText(value);
+            if (infoError) resetInfo();
+            if (searchError) resetSearch();
+          }}
+          onSubmit={submit}
+          isBusy={isBusy}
+          isSearching={isSearching}
+          canPaste={canPaste}
+          onPaste={() => void pasteFromClipboard()}
+          canSuggest={copied.canSuggest}
+          suggestion={suggestion}
+          onOpenSuggestion={fillAndSubmit}
+          onDismissSuggestion={copied.handle}
+          onFocusEmpty={() => void copied.check()}
+          inputRef={inputRef}
+        />
 
         {/* Where downloads go — visible before a video is opened, and used by Redownload too. */}
         <div className="w-full mt-4!">
@@ -795,16 +513,23 @@ export default function Home() {
         )}
       </section>
 
-      {/* Spotify playlist panel: open while a playlist or album is loaded */}
+      {/* Playlist panel: open while a playlist or album is loaded */}
       {playlistLink !== null && (
         <SpotifyPlaylistPanel
+          source={playlistSource}
           playlist={playlist.data}
           isLoading={playlist.isLoading}
           isRefreshing={playlist.isFetching && !playlist.isLoading}
           error={playlist.error}
-          activeTrackId={isSearching ? pendingTrackId : (spotify?.id ?? selected?.spotifyId)}
+          activeTrackId={
+            playlistSource === "youtube"
+              ? (selected && extractVideoId(selected.url)) || undefined
+              : isSearching
+                ? pendingTrackId
+                : (spotify?.id ?? selected?.spotifyId)
+          }
           isSearching={isSearching}
-          downloadedIds={downloadedSpotifyIds}
+          downloadedIds={downloadedIds}
           folder={
             saveTo.folder
               ? {
@@ -818,9 +543,9 @@ export default function Home() {
           canChooseFolder={saveTo.settings?.canSaveToFolder === true}
           statuses={downloadAll.statuses}
           progress={downloadAll.progress}
-          onDownloadAll={(songs) => void downloadAll.start(songs, format)}
+          onDownloadAll={(songs) => void downloadAll.start(songs, format, playlistSource)}
           onStop={downloadAll.stop}
-          onPick={findPlaylistSong}
+          onPick={pickPlaylistSong}
           onRefresh={() => void playlist.refetch()}
           onClose={() => setPlaylistLink(null)}
         />
@@ -838,121 +563,17 @@ export default function Home() {
             transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
             className="w-full max-w-3xl mx-auto scroll-mt-24"
           >
-            <div className="glass-card rounded-4xl p-4 md:p-6 flex flex-col md:flex-row gap-6 items-center">
-              {/* Thumbnail */}
-              <div className="w-full md:w-1/2 aspect-video relative rounded-2xl overflow-hidden shadow-md group">
-                <img
-                  src={selected.thumbnail}
-                  alt={selected.title}
-                  className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                />
-                <div className="absolute inset-0 bg-linear-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-md text-white text-xs font-semibold px-2.5 py-1 rounded-md flex items-center gap-1.5">
-                  <Music className="w-3 h-3" /> Audio Track
-                </div>
-              </div>
-
-              {/* Info & Action */}
-              <div className="flex-1 flex flex-col items-center text-center md:items-start md:text-left gap-4 w-full">
-                <div className="w-full md:w-auto">
-                  <RenameableTitle
-                    key={selected.url}
-                    title={selected.fileTitle ?? selected.title}
-                    fileName={fileName}
-                    extension={isOriginal ? ".opus" : ".mp3"}
-                    extensionHint={
-                      isOriginal
-                        ? "Usually .opus — .m4a when YouTube only has AAC audio for this video"
-                        : undefined
-                    }
-                    onRename={setFileName}
-                  />
-                  {selected.channel && (
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {selected.channel}
-                      {selected.duration != null && ` · ${formatDuration(selected.duration)}`}
-                    </p>
-                  )}
-                </div>
-
-                <p className="text-sm text-muted-foreground line-clamp-1">
-                  {isOriginal
-                    ? "Ready to download the original audio."
-                    : "Ready to download as a 320 kbps MP3."}
-                </p>
-
-                <div className="mt-2 w-full">
-                  {selectedSave ? (
-                    <div className="flex gap-2">
-                      <div
-                        role="status"
-                        className="flex-1 min-w-0 flex items-center justify-center gap-2 h-14 px-3 rounded-xl bg-foreground/90 text-background font-semibold"
-                      >
-                        <Loader2 className="w-5 h-5 shrink-0 animate-spin" />
-                        <span className="truncate">
-                          Saving
-                          <span className="hidden sm:inline">
-                            {" "}
-                            to {folderName(selectedSave.folder)}
-                          </span>
-                        </span>
-                        <span className="shrink-0 font-normal opacity-70 tabular-nums">
-                          {selectedSave.bytes > 0 ? formatBytes(selectedSave.bytes) : "starting…"}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={selectedSave.cancel}
-                        className="h-14 px-4 rounded-xl border border-border text-sm font-medium text-foreground hover:bg-secondary transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <a
-                      href={selectedHref}
-                      download
-                      onClick={handleDownload}
-                      className="w-full flex items-center justify-center gap-2 h-14 rounded-xl bg-foreground text-background font-semibold hover-elevate active-elevate-2 transition-all shadow-xl shadow-foreground/20"
-                    >
-                      <Download className="w-5 h-5" />
-                      Download Audio
-                      <span className="font-normal opacity-60">
-                        · {isOriginal ? "Original" : "MP3"}
-                      </span>
-                    </a>
-                  )}
-
-                  <div className="mt-3 flex items-start justify-between gap-4 rounded-xl border border-border px-4 py-3 text-left">
-                    <div>
-                      <Label
-                        htmlFor="original-audio"
-                        className="text-sm font-medium text-foreground cursor-pointer"
-                      >
-                        Original audio
-                      </Label>
-                      <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                        YouTube's own stream, not converted (usually .opus). Smaller and untouched;
-                        plays in VLC, but not on some phones and car stereos.
-                      </p>
-                    </div>
-                    <Switch
-                      id="original-audio"
-                      checked={isOriginal}
-                      onCheckedChange={(on) => setFormat(on ? "original" : "mp3")}
-                      className="mt-0.5"
-                    />
-                  </div>
-
-                  <button
-                    onClick={clear}
-                    className="w-full mt-3 text-sm text-muted-foreground hover:text-foreground transition-colors font-medium"
-                  >
-                    Clear and start over
-                  </button>
-                </div>
-              </div>
-            </div>
+            <PreviewCard
+              video={selected}
+              fileName={fileName}
+              onRename={setFileName}
+              format={format}
+              onFormatChange={setFormat}
+              href={selectedHref}
+              save={selectedSave}
+              onDownload={handleDownload}
+              onClear={clear}
+            />
           </motion.section>
         )}
 
@@ -974,211 +595,18 @@ export default function Home() {
 
       {/* Search results */}
       {(isSearching || results) && (
-        <section aria-label="Search results" className="max-w-3xl mx-auto w-full space-y-4">
-          <div className="flex items-center justify-between gap-4 px-2">
-            <h2 className="text-xl font-display font-semibold truncate">
-              {isSearching
-                ? "Searching YouTube..."
-                : spotify
-                  ? "YouTube matches"
-                  : `Results for “${searchedFor}”`}
-            </h2>
-            <div className="flex shrink-0 items-center gap-3">
-              {!isSearching && results && results.length > 0 && (
-                <p className="hidden sm:block text-xs text-muted-foreground">
-                  {spotify
-                    ? "Same length as the Spotify song first"
-                    : "Official uploads (artist or label) first"}
-                </p>
-              )}
-              {/* Done with the results (e.g. after downloading): hide them. The
-                  chosen video stays in the preview card above. */}
-              <button
-                type="button"
-                onClick={resetSearch}
-                aria-label="Close search results"
-                title="Close search results"
-                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-              >
-                <X className="w-4 h-4" />
-                <span className="hidden sm:inline">Close</span>
-              </button>
-            </div>
-          </div>
-
-          {!isSearching && spotify && (
-            <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3">
-              {spotify.thumbnail && (
-                <img
-                  src={spotify.thumbnail}
-                  alt=""
-                  className="w-12 h-12 shrink-0 rounded-md object-cover"
-                />
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  From Spotify
-                </p>
-                <p className="text-sm font-medium text-foreground truncate">{spotify.title}</p>
-                <p className="text-xs text-muted-foreground truncate">
-                  {spotify.artists.join(", ")}
-                  {spotify.duration != null && ` · ${formatDuration(spotify.duration)}`}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {isSearching ? (
-            <div className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="flex items-center gap-4 px-4 py-3">
-                  <div className="w-24 sm:w-28 aspect-video shrink-0 rounded-lg bg-secondary animate-pulse" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-3.5 w-3/4 rounded bg-secondary animate-pulse" />
-                    <div className="h-3 w-1/3 rounded bg-secondary/70 animate-pulse" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : results && results.length > 0 ? (
-            <ul className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
-              {results.map((result) => {
-                const isPicked = selected?.url === result.url;
-                const sameLength =
-                  spotify?.duration != null &&
-                  result.duration != null &&
-                  Math.abs(result.duration - spotify.duration) <= SAME_LENGTH_SECONDS;
-                const videoId = extractVideoId(result.url);
-                const isPreviewing = videoId !== null && previewing === result.id;
-                return (
-                  <li
-                    key={result.id}
-                    className={cn(
-                      "transition-colors",
-                      isPicked ? "bg-primary/5" : !isPreviewing && "hover:bg-secondary/40",
-                    )}
-                  >
-                    <div className="flex items-stretch">
-                      {/* The thumbnail plays the video right here, before choosing it */}
-                      <button
-                        type="button"
-                        disabled={videoId === null}
-                        onClick={() => togglePreview(result.id)}
-                        aria-pressed={isPreviewing}
-                        aria-label={`${isPreviewing ? "Close preview of" : "Preview"} ${result.title}`}
-                        title={
-                          isPreviewing ? "Close the preview" : "Watch or listen before downloading"
-                        }
-                        className="group shrink-0 self-center py-3 pl-4"
-                      >
-                        <div className="relative w-24 sm:w-28 aspect-video overflow-hidden rounded-lg bg-secondary">
-                          <img
-                            src={result.thumbnail}
-                            alt=""
-                            loading="lazy"
-                            className="w-full h-full object-cover"
-                          />
-                          {videoId !== null && (
-                            <span
-                              className={cn(
-                                "absolute inset-0 flex items-center justify-center transition-colors",
-                                isPreviewing ? "bg-black/55" : "bg-black/0 group-hover:bg-black/35",
-                              )}
-                            >
-                              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-white">
-                                {isPreviewing ? (
-                                  <X className="w-4 h-4" />
-                                ) : (
-                                  <Play className="w-4 h-4 translate-x-px fill-current" />
-                                )}
-                              </span>
-                            </span>
-                          )}
-                          {result.duration != null && (
-                            <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1 text-[10px] font-semibold text-white">
-                              {formatDuration(result.duration)}
-                            </span>
-                          )}
-                        </div>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => pick(result, spotify)}
-                        aria-pressed={isPicked}
-                        aria-label={[
-                          result.title,
-                          result.channel && `by ${result.channel}`,
-                          result.official && "official upload",
-                          sameLength && "same length as the Spotify song",
-                          result.duration != null && formatDuration(result.duration),
-                        ]
-                          .filter(Boolean)
-                          .join(", ")}
-                        className="min-w-0 flex-1 flex items-center gap-4 py-3 pl-4 pr-4 text-left"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-foreground line-clamp-2">
-                            {result.title}
-                          </p>
-                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                            <span className="truncate max-w-full">{result.channel}</span>
-                            {result.official && (
-                              <span
-                                title="Uploaded by the artist or their label"
-                                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary"
-                              >
-                                <BadgeCheck className="w-3 h-3" />
-                                Official
-                              </span>
-                            )}
-                            {sameLength && (
-                              <span
-                                title="Same length as the Spotify song, so most likely the same recording"
-                                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground"
-                              >
-                                <Timer className="w-3 h-3" />
-                                Same length
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {isPicked ? (
-                          <span className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-primary">
-                            <Check className="w-4 h-4" />
-                            <span className="hidden sm:inline">Selected</span>
-                          </span>
-                        ) : (
-                          <span className="hidden sm:inline-flex shrink-0 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground">
-                            Choose
-                          </span>
-                        )}
-                      </button>
-                    </div>
-                    {isPreviewing && (
-                      <VideoPreview
-                        videoId={videoId}
-                        title={result.title}
-                        url={result.url}
-                        isPicked={isPicked}
-                        onChoose={() => pick(result, spotify)}
-                        onClose={() => setPreviewing(null)}
-                      />
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <div className="text-center py-10 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20">
-              <p className="text-sm font-medium text-foreground">
-                {spotify ? "No YouTube uploads of this song found" : "No songs found"}
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Try the artist and song title, or paste a YouTube or Spotify link.
-              </p>
-            </div>
-          )}
-        </section>
+        <SearchResults
+          isSearching={isSearching}
+          results={results}
+          spotify={spotify}
+          searchedFor={searchedFor}
+          selectedUrl={selected?.url}
+          previewing={previewing}
+          onTogglePreview={togglePreview}
+          onClosePreview={() => setPreviewing(null)}
+          onPick={pick}
+          onClose={resetSearch}
+        />
       )}
 
       {/* The music player's songs: the Save to folder's, or ones on this device */}
@@ -1188,209 +616,14 @@ export default function Home() {
         onChooseFolder={() => setChoosingFolder(true)}
       />
 
-      {/* Recent History */}
-      <section className="max-w-4xl mx-auto w-full space-y-4">
-        <div className="flex items-center gap-2 px-2">
-          <History className="w-5 h-5 text-muted-foreground" />
-          <h2 className="text-xl font-display font-semibold">Recent Extractions</h2>
-          {allHistory.length > 0 && (
-            <span className="ml-auto text-sm text-muted-foreground tabular-nums" aria-live="polite">
-              {isFilteringHistory
-                ? `${matchingHistory.length} of ${allHistory.length}`
-                : `${allHistory.length} ${allHistory.length === 1 ? "download" : "downloads"}`}
-            </span>
-          )}
-        </div>
-
-        {allHistory.length > 0 && (
-          <div className="space-y-2">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <HistorySearch
-                entries={historyInRange}
-                value={historyQuery}
-                exact={historyExact}
-                onChange={(value) => {
-                  setHistoryQuery(value);
-                  setHistoryExact(false);
-                  setHistoryLimit(HISTORY_PAGE);
-                }}
-                onPick={(title) => {
-                  setHistoryQuery(title);
-                  setHistoryExact(true);
-                  setHistoryLimit(HISTORY_PAGE);
-                }}
-              />
-              <div
-                role="group"
-                aria-label="Show downloads from"
-                className="inline-flex shrink-0 self-start rounded-full border border-border bg-secondary/60 p-1 sm:self-auto"
-              >
-                {historyRanges.map((range) => (
-                  <button
-                    key={range}
-                    type="button"
-                    aria-pressed={historyRange === range}
-                    onClick={() => {
-                      setHistoryRange(range);
-                      setHistoryLimit(HISTORY_PAGE);
-                    }}
-                    title={historyRangeHints[range]}
-                    className={cn(
-                      "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
-                      historyRange === range
-                        ? "bg-card text-foreground shadow-xs"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {historyRangeLabels[range]}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {historyExact && (
-              <p className="px-2 text-xs text-muted-foreground">
-                Showing only “{historyQuery}”.{" "}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setHistoryQuery("");
-                    setHistoryExact(false);
-                  }}
-                  className="font-medium text-foreground underline underline-offset-2"
-                >
-                  Show everything
-                </button>
-              </p>
-            )}
-          </div>
-        )}
-
-        {isLoadingHistory ? (
-          <div className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="flex items-center gap-4 px-4 py-3">
-                <div className="w-9 h-9 shrink-0 rounded-lg bg-secondary animate-pulse" />
-                <div className="flex-1 space-y-2">
-                  <div className="h-3.5 w-2/3 rounded bg-secondary animate-pulse" />
-                  <div className="h-3 w-1/4 rounded bg-secondary/70 animate-pulse" />
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : shownHistory.length > 0 ? (
-          <>
-            <ul className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
-              {shownHistory.map((item) => {
-                const href = buildDownloadUrl(item.url, format, { spotifyId: item.spotifyId });
-                const save = saves[href];
-                return (
-                  <li
-                    key={item.id}
-                    className="flex items-center gap-4 px-4 py-3 hover:bg-secondary/40 transition-colors"
-                  >
-                    <div className="w-9 h-9 shrink-0 rounded-lg bg-primary/5 flex items-center justify-center text-primary">
-                      <FileAudio className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p
-                        className="text-sm font-medium text-foreground truncate"
-                        title={item.title}
-                      >
-                        <Highlight text={item.title} query={historyExact ? "" : historyQuery} />
-                      </p>
-                      <p
-                        className="text-xs text-muted-foreground"
-                        title={validDate(item.downloadedAt)?.toLocaleString()}
-                      >
-                        {timeAgo(item.downloadedAt)}
-                      </p>
-                    </div>
-                    {save ? (
-                      <button
-                        type="button"
-                        onClick={save.cancel}
-                        aria-label={`Cancel saving ${item.title}`}
-                        title="Cancel"
-                        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                      >
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        {save.bytes > 0 && (
-                          <span className="tabular-nums">{formatBytes(save.bytes)}</span>
-                        )}
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    ) : (
-                      <a
-                        href={href}
-                        download
-                        onClick={(event) =>
-                          startDownload(event, href, {
-                            url: item.url,
-                            format,
-                            spotifyId: item.spotifyId,
-                          })
-                        }
-                        aria-label={`Redownload ${item.title}`}
-                        title={
-                          saveTo.folder
-                            ? `Save again to “${folderName(saveTo.folder)}”`
-                            : isOriginal
-                              ? "Redownload the original audio"
-                              : "Redownload as MP3"
-                        }
-                        className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Redownload</span>
-                      </a>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-            {matchingHistory.length > shownHistory.length && (
-              <button
-                type="button"
-                onClick={() => setHistoryLimit((n) => n + HISTORY_PAGE)}
-                className="w-full rounded-xl border border-border py-2.5 text-sm font-medium text-foreground hover:bg-secondary transition-colors"
-              >
-                Show more ({matchingHistory.length - shownHistory.length} more)
-              </button>
-            )}
-          </>
-        ) : allHistory.length > 0 ? (
-          <div className="text-center py-10 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20">
-            <p className="text-sm font-medium text-foreground">Nothing found</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              No extractions{" "}
-              {[
-                historyRangePhrases[historyRange],
-                historyQuery.trim() && `match “${historyQuery.trim()}”`,
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              .
-            </p>
-            <button
-              type="button"
-              onClick={clearHistoryFilters}
-              className="mt-3 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-secondary transition-colors"
-            >
-              Clear search and filters
-            </button>
-          </div>
-        ) : (
-          <div className="text-center py-16 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20 flex flex-col items-center">
-            <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center mb-4">
-              <FileAudio className="w-6 h-6 text-muted-foreground" />
-            </div>
-            <h3 className="text-lg font-medium text-foreground">No downloads yet</h3>
-            <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-              Your recent audio extractions will appear here for quick access later.
-            </p>
-          </div>
-        )}
-      </section>
+      <RecentExtractions
+        history={allHistory}
+        isLoading={isLoadingHistory}
+        format={format}
+        folder={saveTo.folder}
+        saves={saves}
+        onDownload={startDownload}
+      />
     </Layout>
   );
 }

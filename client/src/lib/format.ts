@@ -1,4 +1,6 @@
 import { formatDistanceToNow } from "date-fns";
+import type { PlaylistSource } from "@shared/schema";
+import { isYouTubePlaylistLink } from "@shared/youtube-link";
 
 /** Seconds as a clock: 19 → "0:19", 369 → "6:09", 3723 → "1:02:03". */
 export function formatDuration(seconds: number): string {
@@ -26,6 +28,15 @@ export function isSpotifyLink(input: string): boolean {
 }
 
 /**
+ * A spotify.link short link (what the Spotify app's Share button copies on a
+ * phone): the server opens it to find out whether it's a song, a playlist or
+ * an album.
+ */
+export function isSpotifyShortLink(input: string): boolean {
+  return /^(https?:\/\/)?spotify\.(app\.)?link\/[A-Za-z0-9_-]+\/?([?#]\S*)?$/i.test(input.trim());
+}
+
+/**
  * A Spotify playlist or album link: it opens in the playlist panel, which
  * lists the songs to pick from. (The server checks it properly.)
  */
@@ -37,6 +48,17 @@ export function isSpotifyPlaylistLink(input: string): boolean {
       text,
     )
   );
+}
+
+/**
+ * A link that opens in the playlist panel: a Spotify playlist or album, or a
+ * YouTube playlist (youtube.com/playlist?list=…, not a video played in one).
+ * Returns where it's from, or undefined for anything else.
+ */
+export function playlistSourceOf(input: string): PlaylistSource | undefined {
+  if (isSpotifyPlaylistLink(input)) return "spotify";
+  const link = asLink(input);
+  return link && isYouTubePlaylistLink(link) ? "youtube" : undefined;
 }
 
 /**

@@ -121,6 +121,15 @@ async function comeBack(page: Page) {
 /** The app's answers: opening a video, a search, a Spotify playlist. Returns what was asked. */
 async function answerApp(page: Page) {
   const asked = { videos: [] as string[], searches: [] as string[], playlists: [] as string[] };
+  // spotify.link short links: "/Mix" leads to the playlist, "/Song" to its song.
+  await page.route("**/api/spotify/link?*", async (route) => {
+    const link = new URL(route.request().url()).searchParams.get("link") ?? "";
+    await route.fulfill({
+      json: link.endsWith("/Mix")
+        ? { kind: "playlist", url: PLAYLIST.url }
+        : { kind: "track", url: PLAYLIST.tracks[0].url },
+    });
+  });
   await page.route("**/api/video/info", async (route) => {
     const { url } = route.request().postDataJSON() as { url: string };
     asked.videos.push(url);
@@ -182,9 +191,27 @@ test.describe("Paste", () => {
     await pasteButton(page).click();
     const panel = page.getByRole("region", { name: /spotify playlist/i });
     await expect(panel.getByRole("heading", { name: "Clipboard Mix" })).toBeVisible();
-    await expect(mode(page, "Spotify playlist")).toHaveAttribute("aria-pressed", "true");
-    await expect(box(page, "Spotify playlist link")).toHaveValue(PLAYLIST_LINK);
+    await expect(mode(page, "Playlist")).toHaveAttribute("aria-pressed", "true");
+    await expect(box(page, "Playlist link")).toHaveValue(PLAYLIST_LINK);
     expect(asked.playlists).toEqual([PLAYLIST_LINK]);
+  });
+
+  test("opens a copied spotify.link short link where it leads", async ({ page }) => {
+    await fakeClipboard(page, { text: "https://spotify.link/Mix" });
+    const asked = await answerApp(page);
+    await page.goto("/");
+
+    await pasteButton(page).click();
+    const panel = page.getByRole("region", { name: /spotify playlist/i });
+    await expect(panel.getByRole("heading", { name: "Clipboard Mix" })).toBeVisible();
+    await expect(mode(page, "Playlist")).toHaveAttribute("aria-pressed", "true");
+    expect(asked.playlists).toEqual([PLAYLIST.url]);
+
+    // A short link to a song searches for that song.
+    await copy(page, "https://spotify.link/Song");
+    await pasteButton(page).click();
+    await expect(mode(page, "Search by song")).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => asked.searches).toEqual([PLAYLIST.tracks[0].url]);
   });
 
   test("searches for other text, put in the box on one line", async ({ page }) => {
@@ -302,7 +329,7 @@ test.describe("a copied link, suggested under the empty box", () => {
     await playlist.click();
     const panel = page.getByRole("region", { name: /spotify playlist/i });
     await expect(panel.getByRole("heading", { name: "Clipboard Mix" })).toBeVisible();
-    await expect(box(page, "Spotify playlist link")).toHaveValue(PLAYLIST_LINK);
+    await expect(box(page, "Playlist link")).toHaveValue(PLAYLIST_LINK);
     expect(asked.playlists).toEqual([PLAYLIST_LINK]);
   });
 

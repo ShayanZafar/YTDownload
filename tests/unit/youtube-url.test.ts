@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractVideoId, pickThumbnail } from "../../server/youtube-url";
+import { extractPlaylistId, isYouTubePlaylistLink } from "../../shared/youtube-link";
 import { youtubeEmbedUrl } from "../../shared/youtube-link";
 
 describe("extractVideoId", () => {
@@ -91,6 +92,41 @@ describe("pickThumbnail", () => {
     const snapshot = JSON.stringify(thumbnails);
     pickThumbnail({ thumbnails });
     expect(JSON.stringify(thumbnails)).toBe(snapshot);
+  });
+});
+
+describe("extractPlaylistId / isYouTubePlaylistLink", () => {
+  const LIST = "PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb";
+
+  it("finds the playlist in a playlist's own link, which opens in the panel", () => {
+    for (const url of [
+      `https://www.youtube.com/playlist?list=${LIST}`,
+      `https://m.youtube.com/playlist?list=${LIST}&si=abc`,
+      `https://music.youtube.com/playlist?list=${LIST}`,
+    ]) {
+      expect(extractPlaylistId(url), url).toBe(LIST);
+      expect(isYouTubePlaylistLink(url), url).toBe(true);
+    }
+  });
+
+  it("finds it in a video played in a playlist too, but that link is the video", () => {
+    const url = `https://www.youtube.com/watch?v=jNQXAC9IVRw&list=${LIST}&index=2`;
+    expect(extractPlaylistId(url)).toBe(LIST);
+    expect(isYouTubePlaylistLink(url)).toBe(false);
+  });
+
+  it("ignores other sites, bad ids and links without a playlist", () => {
+    for (const url of [
+      `https://example.com/playlist?list=${LIST}`,
+      "https://www.youtube.com/playlist?list=",
+      "https://www.youtube.com/playlist?list=bad%20id",
+      "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+      "not a url",
+      `javascript:alert("https://www.youtube.com/playlist?list=${LIST}")`,
+    ]) {
+      expect(extractPlaylistId(url), url).toBeNull();
+      expect(isYouTubePlaylistLink(url), url).toBe(false);
+    }
   });
 });
 

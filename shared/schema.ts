@@ -58,21 +58,42 @@ export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
 export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId">;
 
 /** One song in a Spotify playlist or album, as the playlist panel lists it. */
+/** A YouTube video id: 11 letters, digits, - and _. */
+export const youtubeVideoIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{11}$/, "That isn't a video id");
+
+/**
+ * A song in a playlist the panel shows: a Spotify playlist's or album's (its
+ * Spotify id, found on YouTube when picked) or a YouTube playlist's video
+ * (its video id, opened straight away).
+ */
 export const spotifyPlaylistTrackSchema = z.object({
   id: z.string(),
+  /** The song's Spotify link, or the video's YouTube link. */
   url: z.string(),
   title: z.string(),
-  /** As Spotify shows them: "Daft Punk, Pharrell Williams". */
+  /** As Spotify shows them: "Daft Punk, Pharrell Williams". A YouTube video's channel. */
   artists: z.string(),
   /** Length in seconds. */
   duration: z.number().nullable(),
   explicit: z.boolean(),
+  /** A YouTube video's thumbnail (Spotify's songs have none). */
+  thumbnail: z.string().optional(),
 });
 
 export type SpotifyPlaylistTrack = z.infer<typeof spotifyPlaylistTrackSchema>;
 
-/** A public Spotify playlist or album, read from Spotify's embed page (no account needed). */
+/** Where a playlist comes from. */
+export const playlistSources = ["spotify", "youtube"] as const;
+export type PlaylistSource = (typeof playlistSources)[number];
+
+/**
+ * A playlist the panel shows: a public Spotify playlist or album, read from
+ * Spotify's embed page (no account needed), or a public YouTube playlist.
+ */
 export const spotifyPlaylistSchema = z.object({
+  source: z.enum(playlistSources).default("spotify"),
   kind: z.enum(["playlist", "album"]),
   id: z.string(),
   url: z.string(),
@@ -82,7 +103,10 @@ export const spotifyPlaylistSchema = z.object({
   /** Cover art. */
   image: z.string().nullable(),
   tracks: z.array(spotifyPlaylistTrackSchema),
-  /** Spotify shares only the first 100 songs of a playlist this way: true if there may be more. */
+  /**
+   * Spotify shares only the first 100 songs of a playlist this way, and the app
+   * lists at most the first 500 videos of a YouTube playlist: true if there may be more.
+   */
   maybeMore: z.boolean(),
 });
 
@@ -114,9 +138,9 @@ export const folderListingSchema = z.object({
 
 export type FolderListing = z.infer<typeof folderListingSchema>;
 
-/** A song to look for in the "Save to" folder: a Spotify playlist's song. */
+/** A song to look for in the "Save to" folder: a Spotify playlist's song, or a YouTube playlist's video. */
 export const songToFindSchema = z.object({
-  id: spotifyIdSchema,
+  id: z.union([spotifyIdSchema, youtubeVideoIdSchema]),
   title: z.string().max(500),
   /** As Spotify shows them: "Daft Punk, Pharrell Williams". */
   artists: z.string().max(1000),

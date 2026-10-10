@@ -256,8 +256,8 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     );
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Spotify playlist", exact: true }).click();
-    await page.getByRole("textbox", { name: /spotify playlist link/i }).fill(playlist.url);
+    await page.getByRole("button", { name: "Playlist", exact: true }).click();
+    await page.getByRole("textbox", { name: /playlist link/i }).fill(playlist.url);
     await page.getByRole("button", { name: /open playlist/i }).click();
 
     const panel = page.getByRole("region", { name: /spotify playlist/i });
@@ -295,9 +295,10 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     await panel.getByRole("button", { name: /close the spotify playlist/i }).click();
     await expect(panel).toHaveCount(0);
     await page.reload();
-    await expect(
-      page.getByRole("button", { name: "Spotify playlist", exact: true }),
-    ).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Playlist", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(page.getByRole("region", { name: /spotify playlist/i })).toHaveCount(0);
   });
 
@@ -370,8 +371,8 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     });
 
     await page.goto("/");
-    await page.getByRole("button", { name: "Spotify playlist", exact: true }).click();
-    await page.getByRole("textbox", { name: /spotify playlist link/i }).fill(playlist.url);
+    await page.getByRole("button", { name: "Playlist", exact: true }).click();
+    await page.getByRole("textbox", { name: /playlist link/i }).fill(playlist.url);
     await page.getByRole("button", { name: /open playlist/i }).click();
 
     const panel = page.getByRole("region", { name: /spotify playlist/i });

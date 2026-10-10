@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DownloadFormat } from "@shared/routes";
-import { SAME_LENGTH_SECONDS, type SearchResult, type SpotifyPlaylistTrack } from "@shared/schema";
+import {
+  SAME_LENGTH_SECONDS,
+  type PlaylistSource,
+  type SearchResult,
+  type SpotifyPlaylistTrack,
+} from "@shared/schema";
 import { spotifyFileName } from "@shared/spotify-names";
 import { searchSongs } from "@/hooks/use-youtube";
-import { ApiError, saveOnServer } from "@/lib/save-to-folder";
+import { ApiError, folderName, saveOnServer } from "@/lib/save-to-folder";
 
 /** Where one song of a "Download all" is at. */
 export type SongStatus =
@@ -44,16 +49,44 @@ const FOLDER_PROBLEMS = [403, 404, 409, 507];
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : "Something went wrong.");
 
+type SongResult = { status: SongStatus; folderProblem?: boolean };
+
+/** Saves one YouTube video into the folder. Rejects only if stopped. */
+async function saveVideo(
+  request: Parameters<typeof saveOnServer>[0],
+  signal: AbortSignal,
+  report: (status: SongStatus) => void,
+): Promise<SongResult> {
+  report({ state: "saving", bytes: 0 });
+  try {
+    const saved = await saveOnServer(request, {
+      signal,
+      onProgress: (bytes) => report({ state: "saving", bytes }),
+    });
+    return { status: { state: "saved", file: saved.fileName } };
+  } catch (err) {
+    if (signal.aborted) throw err;
+    return {
+      status: { state: "failed", reason: messageOf(err) },
+      folderProblem: err instanceof ApiError && FOLDER_PROBLEMS.includes(err.status),
+    };
+  }
+}
+
 /**
- * One song: look for it on YouTube like its Spotify link would, and save the
- * best match into the folder if it's surely the song. Rejects only if stopped.
+ * One song: a YouTube playlist's video is saved as it is. A Spotify song is
+ * looked for on YouTube like its Spotify link would be, and the best match
+ * saved into the folder if it's surely the song. Rejects only if stopped.
  */
 async function downloadSong(
   song: SpotifyPlaylistTrack,
+  source: PlaylistSource,
   format: DownloadFormat,
   signal: AbortSignal,
   report: (status: SongStatus) => void,
-): Promise<{ status: SongStatus; folderProblem?: boolean }> {
+): Promise<SongResult> {
+  if (source === "youtube") return saveVideo({ url: song.url, format }, signal, report);
+
   report({ state: "finding" });
   let found;
   try {
@@ -72,36 +105,23 @@ async function downloadSong(
     return { status: { state: "check", reason } };
   }
 
-  report({ state: "saving", bytes: 0 });
-  try {
-    const saved = await saveOnServer(
-      {
-        url: match.url,
-        format,
-        name: spotifyFileName(found.spotify ?? song),
-        spotifyId: song.id,
-      },
-      { signal, onProgress: (bytes) => report({ state: "saving", bytes }) },
-    );
-    return { status: { state: "saved", file: saved.fileName } };
-  } catch (err) {
-    if (signal.aborted) throw err;
-    return {
-      status: { state: "failed", reason: messageOf(err) },
-      folderProblem: err instanceof ApiError && FOLDER_PROBLEMS.includes(err.status),
-    };
-  }
+  return saveVideo(
+    { url: match.url, format, name: spotifyFileName(found.spotify ?? song), spotifyId: song.id },
+    signal,
+    report,
+  );
 }
 
 const isActive = (status: SongStatus) =>
   status.state === "waiting" || status.state === "finding" || status.state === "saving";
 
 /**
- * "Download all" for a Spotify playlist: one song after another, each looked
- * for on YouTube and saved into the "Save to" folder when the best match is
- * the same length as the song on Spotify. Songs without such a match are
- * marked "check" instead of guessed at. One song at a time on purpose — it
- * keeps YouTube from seeing a burst of downloads from one computer.
+ * "Download all" for a playlist: one song after another, saved into the "Save
+ * to" folder. A Spotify song is looked for on YouTube and saved when the best
+ * match is the same length as the song on Spotify; songs without such a match
+ * are marked "check" instead of guessed at. A YouTube playlist's videos are
+ * saved as they are. One song at a time on purpose — it keeps YouTube from
+ * seeing a burst of downloads from one computer.
  */
 export function useDownloadAll({
   onSaved,
@@ -123,61 +143,70 @@ export function useDownloadAll({
   // Leaving the page stops it (the song being saved is removed, as with Cancel).
   useEffect(() => () => run.current?.abort(), []);
 
-  const start = useCallback(async (songs: SpotifyPlaylistTrack[], format: DownloadFormat) => {
-    if (run.current) return;
-    const controller = new AbortController();
-    run.current = controller;
-    // A song that's in the playlist twice is downloaded once.
-    const queue = songs.filter((song, i) => songs.findIndex((s) => s.id === song.id) === i);
-    const set = (id: string, status: SongStatus) =>
-      setStatuses((current) => ({ ...current, [id]: status }));
+  const start = useCallback(
+    async (
+      songs: SpotifyPlaylistTrack[],
+      format: DownloadFormat,
+      source: PlaylistSource = "spotify",
+    ) => {
+      if (run.current) return;
+      const controller = new AbortController();
+      run.current = controller;
+      // A song that's in the playlist twice is downloaded once.
+      const queue = songs.filter((song, i) => songs.findIndex((s) => s.id === song.id) === i);
+      const set = (id: string, status: SongStatus) =>
+        setStatuses((current) => ({ ...current, [id]: status }));
 
-    setStatuses((current) => {
-      const next = { ...current };
-      queue.forEach((song) => (next[song.id] = { state: "waiting" }));
-      return next;
-    });
-    setProgress({ done: 0, total: queue.length });
-    const summary: DownloadAllSummary = { saved: 0, check: 0, failed: 0, stopped: false };
-    try {
-      for (const song of queue) {
-        if (controller.signal.aborted) break;
-        let result;
-        try {
-          result = await downloadSong(song, format, controller.signal, (s) => set(song.id, s));
-        } catch {
-          break; // stopped
-        }
-        set(song.id, result.status);
-        setProgress((current) => current && { ...current, done: current.done + 1 });
-        if (result.status.state === "saved") {
-          summary.saved++;
-          callbacks.current.onSaved?.(song, result.status.file);
-        } else if (result.status.state === "check") {
-          summary.check++;
-        } else if (result.status.state === "failed") {
-          summary.failed++;
-          if (result.folderProblem) {
-            summary.problem = result.status.reason;
-            break;
-          }
-        }
-      }
-    } finally {
-      summary.stopped = controller.signal.aborted || summary.problem !== undefined;
-      run.current = null;
-      setProgress(null);
-      // Songs it didn't get to aren't waiting any more.
       setStatuses((current) => {
-        const next: Record<string, SongStatus> = {};
-        Object.keys(current).forEach((id) => {
-          if (!isActive(current[id])) next[id] = current[id];
-        });
+        const next = { ...current };
+        queue.forEach((song) => (next[song.id] = { state: "waiting" }));
         return next;
       });
-      callbacks.current.onDone?.(summary);
-    }
-  }, []);
+      setProgress({ done: 0, total: queue.length });
+      const summary: DownloadAllSummary = { saved: 0, check: 0, failed: 0, stopped: false };
+      try {
+        for (const song of queue) {
+          if (controller.signal.aborted) break;
+          let result;
+          try {
+            result = await downloadSong(song, source, format, controller.signal, (s) =>
+              set(song.id, s),
+            );
+          } catch {
+            break; // stopped
+          }
+          set(song.id, result.status);
+          setProgress((current) => current && { ...current, done: current.done + 1 });
+          if (result.status.state === "saved") {
+            summary.saved++;
+            callbacks.current.onSaved?.(song, result.status.file);
+          } else if (result.status.state === "check") {
+            summary.check++;
+          } else if (result.status.state === "failed") {
+            summary.failed++;
+            if (result.folderProblem) {
+              summary.problem = result.status.reason;
+              break;
+            }
+          }
+        }
+      } finally {
+        summary.stopped = controller.signal.aborted || summary.problem !== undefined;
+        run.current = null;
+        setProgress(null);
+        // Songs it didn't get to aren't waiting any more.
+        setStatuses((current) => {
+          const next: Record<string, SongStatus> = {};
+          Object.keys(current).forEach((id) => {
+            if (!isActive(current[id])) next[id] = current[id];
+          });
+          return next;
+        });
+        callbacks.current.onDone?.(summary);
+      }
+    },
+    [],
+  );
 
   const stop = useCallback(() => run.current?.abort(), []);
 
@@ -188,4 +217,28 @@ export function useDownloadAll({
   }, []);
 
   return { statuses, progress, running: progress !== null, start, stop, reset };
+}
+
+/** What "Download all" says when it's over (a toast). */
+export function downloadAllToast(
+  { saved, check, failed, stopped, problem }: DownloadAllSummary,
+  folder: string | null,
+) {
+  const savedText = `${saved} ${saved === 1 ? "song" : "songs"}`;
+  if (problem) {
+    return { title: "Downloads stopped", description: problem, variant: "destructive" as const };
+  }
+  const left = [check > 0 && `${check} to check`, failed > 0 && `${failed} failed`]
+    .filter(Boolean)
+    .join(", ");
+  return {
+    title: stopped
+      ? "Downloads stopped"
+      : saved > 0
+        ? `Saved ${savedText}${folder ? ` to “${folderName(folder)}”` : ""}`
+        : "Nothing was saved",
+    description: [stopped && `${savedText} saved.`, left && `${left} — see the playlist.`]
+      .filter(Boolean)
+      .join(" "),
+  };
 }

@@ -211,6 +211,62 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect(empty.status).toBe(400);
   });
 
+  it("lists the videos in a public YouTube playlist", async () => {
+    // The uploads of YouTube's first channel ("jawed"): just "Me at the zoo".
+    const res = await request(app)
+      .get("/api/youtube/playlist")
+      .query({ link: "https://www.youtube.com/playlist?list=UU4QobU6STFB0P71PMvOGN5A" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      source: "youtube",
+      kind: "playlist",
+      id: "UU4QobU6STFB0P71PMvOGN5A",
+      maybeMore: false,
+    });
+    expect(res.body.tracks).toContainEqual(
+      expect.objectContaining({
+        id: "jNQXAC9IVRw",
+        url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        title: "Me at the zoo",
+        duration: 19,
+      }),
+    );
+  });
+
+  it("explains YouTube playlists it can't open", async () => {
+    const mix = await request(app)
+      .get("/api/youtube/playlist")
+      .query({ link: "https://www.youtube.com/playlist?list=RDjNQXAC9IVRw" });
+    expect(mix.status).toBe(400);
+    expect(mix.body.message).toMatch(/mix/i);
+
+    const video = await request(app)
+      .get("/api/youtube/playlist")
+      .query({ link: "https://www.youtube.com/watch?v=jNQXAC9IVRw" });
+    expect(video.status).toBe(400);
+
+    const missing = await request(app)
+      .get("/api/youtube/playlist")
+      .query({ link: "https://www.youtube.com/playlist?list=PLzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz" });
+    expect(missing.status).toBe(404);
+  });
+
+  it("says where a Spotify link leads", async () => {
+    const res = await request(app)
+      .get("/api/spotify/link")
+      .query({ link: "https://open.spotify.com/intl-de/album/4m2880jivSbbyEGAKfITCa?si=x" });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      kind: "album",
+      url: "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa",
+    });
+    const artist = await request(app)
+      .get("/api/spotify/link")
+      .query({ link: "https://open.spotify.com/artist/1dfeR4HaWDbWqFHLkxsg1d" });
+    expect(artist.status).toBe(400);
+    expect(artist.body.message).toMatch(/song, playlist or album/i);
+  });
+
   it("rejects an empty search", async () => {
     for (const query of [{}, { q: "   " }]) {
       const res = await request(app).get("/api/search").query(query);

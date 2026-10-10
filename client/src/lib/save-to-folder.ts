@@ -115,8 +115,22 @@ export type SaveOptions = {
  * with the saved file (its name may have gained " (1)" if the name was taken);
  * rejects with the reason it failed — or, if cancelled, the fetch's AbortError.
  */
+/**
+ * What to download: a video, as MP3 or original audio, under a name (or its
+ * title), maybe for a Spotify song.
+ */
+export type SaveRequest = {
+  url: string;
+  format: DownloadFormat;
+  name?: string;
+  spotifyId?: string;
+};
+
+/** A download being saved into the "Save to" folder (the page keys them by download link). */
+export type ActiveSave = { bytes: number; folder: string; cancel: () => void };
+
 export async function saveOnServer(
-  request: { url: string; format: DownloadFormat; name?: string; spotifyId?: string },
+  request: SaveRequest,
   { signal, onProgress, fetchImpl = fetch }: SaveOptions = {},
 ): Promise<SavedFile> {
   const res = await fetchImpl(api.video.save.path, {

@@ -1,6 +1,7 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api, errorSchemas } from "@shared/routes";
 import { z } from "zod";
+import { playlistSourceOf } from "@/lib/format";
 
 /**
  * Safely parse data and log detailed errors if validation fails.
@@ -46,23 +47,44 @@ export async function searchSongs(query: string, signal?: AbortSignal) {
   return parseWithLogging(api.video.search.responses[200], data, "video.search");
 }
 
+/** Where a Spotify link leads (a spotify.link short link is opened to find out). */
+export async function openSpotifyLink(link: string) {
+  const res = await fetch(`${api.spotify.link.path}?${new URLSearchParams({ link })}`, {
+    credentials: "include",
+  });
+  const data: unknown = await res.json().catch(() => undefined);
+  if (!res.ok) {
+    const parsedError = errorSchemas.internal.safeParse(data);
+    throw new Error(parsedError.success ? parsedError.data.message : "Couldn't open the link");
+  }
+  return parseWithLogging(api.spotify.link.responses[200], data, "spotify.link");
+}
+
+export function useSpotifyLink() {
+  return useMutation({ mutationFn: openSpotifyLink });
+}
+
 export function useSongSearch() {
   return useMutation({ mutationFn: (query: string) => searchSongs(query) });
 }
 
 /**
- * The songs in a Spotify playlist or album (the first 100 of a playlist), for
- * the playlist panel. `link` is null while no playlist is open.
+ * The songs in a Spotify playlist or album (the first 100 of a playlist), or
+ * the videos in a YouTube playlist (the first 500), for the playlist panel.
+ * `link` is null while no playlist is open.
  */
-export function useSpotifyPlaylist(link: string | null) {
+export function usePlaylist(link: string | null) {
+  const { path, responses } =
+    link !== null && playlistSourceOf(link) === "youtube"
+      ? api.youtube.playlist
+      : api.spotify.playlist;
   return useQuery({
-    queryKey: [api.spotify.playlist.path, link],
+    queryKey: [path, link],
     enabled: link !== null,
     queryFn: async () => {
-      const res = await fetch(
-        `${api.spotify.playlist.path}?${new URLSearchParams({ link: link ?? "" })}`,
-        { credentials: "include" },
-      );
+      const res = await fetch(`${path}?${new URLSearchParams({ link: link ?? "" })}`, {
+        credentials: "include",
+      });
       const data: unknown = await res.json().catch(() => undefined);
       if (!res.ok) {
         const parsedError = errorSchemas.internal.safeParse(data);
@@ -70,7 +92,7 @@ export function useSpotifyPlaylist(link: string | null) {
           parsedError.success ? parsedError.data.message : "Couldn't open that playlist",
         );
       }
-      return parseWithLogging(api.spotify.playlist.responses[200], data, "spotify.playlist");
+      return parseWithLogging(responses[200], data, path);
     },
   });
 }

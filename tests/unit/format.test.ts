@@ -4,6 +4,8 @@ import {
   formatBytes,
   formatDuration,
   isSpotifyLink,
+  isSpotifyShortLink,
+  playlistSourceOf,
   isSpotifyPlaylistLink,
 } from "../../client/src/lib/format";
 
@@ -45,6 +47,42 @@ describe("asLink", () => {
     expect(asLink("Blink-182")).toBeUndefined();
     expect(asLink("https://example.com with spaces")).toBeUndefined();
     expect(asLink("   ")).toBeUndefined();
+  });
+});
+
+describe("playlistSourceOf", () => {
+  it("says which links open in the playlist panel, and from where", () => {
+    expect(playlistSourceOf("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M")).toBe(
+      "spotify",
+    );
+    expect(playlistSourceOf("spotify:album:4m2880jivSbbyEGAKfITCa")).toBe("spotify");
+    expect(playlistSourceOf("https://www.youtube.com/playlist?list=PL123abc")).toBe("youtube");
+    expect(playlistSourceOf(" youtube.com/playlist?list=PL123abc ")).toBe("youtube");
+  });
+
+  it("leaves videos (even in a playlist), songs and search text alone", () => {
+    expect(playlistSourceOf("https://www.youtube.com/watch?v=jNQXAC9IVRw&list=PL123abc")).toBe(
+      undefined,
+    );
+    expect(playlistSourceOf("https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv")).toBe(
+      undefined,
+    );
+    expect(playlistSourceOf("road trip playlist")).toBeUndefined();
+  });
+});
+
+describe("isSpotifyShortLink", () => {
+  it("spots the Spotify app's short links", () => {
+    expect(isSpotifyShortLink("https://spotify.link/AbCdEf")).toBe(true);
+    expect(isSpotifyShortLink(" spotify.link/AbCdEf/ ")).toBe(true);
+    expect(isSpotifyShortLink("https://spotify.app.link/x9Y_z-1?_p=c")).toBe(true);
+  });
+
+  it("leaves everything else alone", () => {
+    expect(isSpotifyShortLink("https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv")).toBe(false);
+    expect(isSpotifyShortLink("https://spotify.link/")).toBe(false);
+    expect(isSpotifyShortLink("https://spotify.link.evil.example/AbCdEf")).toBe(false);
+    expect(isSpotifyShortLink("spotify link")).toBe(false);
   });
 });
 

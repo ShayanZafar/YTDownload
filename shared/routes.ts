@@ -111,6 +111,30 @@ export const api = {
     },
   },
   spotify: {
+    /**
+     * Where a Spotify link leads, as its open.spotify.com address: a
+     * spotify.link short link is opened to find out.
+     */
+    link: {
+      method: "GET" as const,
+      path: "/api/spotify/link" as const,
+      query: z.object({
+        link: z
+          .string({ error: "Paste a Spotify link" })
+          .trim()
+          .min(1, "Paste a Spotify link")
+          .max(500, "That link is too long"),
+      }),
+      responses: {
+        200: z.object({
+          kind: z.enum(["track", "playlist", "album"]),
+          url: z.string(),
+        }),
+        400: errorSchemas.validation,
+        404: errorSchemas.notFound,
+        502: errorSchemas.internal,
+      },
+    },
     /** The songs in a public Spotify playlist or album (the first 100 of a playlist). */
     playlist: {
       method: "GET" as const,
@@ -120,6 +144,26 @@ export const api = {
           .string({ error: "Paste a Spotify playlist link" })
           .trim()
           .min(1, "Paste a Spotify playlist link")
+          .max(500, "That link is too long"),
+      }),
+      responses: {
+        200: spotifyPlaylistSchema,
+        400: errorSchemas.validation,
+        404: errorSchemas.notFound,
+        502: errorSchemas.internal,
+      },
+    },
+  },
+  youtube: {
+    /** The videos in a public YouTube playlist (the first 500). */
+    playlist: {
+      method: "GET" as const,
+      path: "/api/youtube/playlist" as const,
+      query: z.object({
+        link: z
+          .string({ error: "Paste a YouTube playlist link" })
+          .trim()
+          .min(1, "Paste a YouTube playlist link")
           .max(500, "That link is too long"),
       }),
       responses: {

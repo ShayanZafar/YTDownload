@@ -412,7 +412,7 @@ If you want to trace one full request top-to-bottom, this is the path:
 3. **`server/routes.ts`** — the actual handlers. Each one validates input with Zod, calls into `storage` or yt-dlp/ffmpeg (`server/audio.ts`), and returns JSON or streams audio.
 4. **`server/storage.ts`** — the repository.
 5. **`shared/schema.ts`** — the shape of a history entry.
-6. **`client/src/pages/Home.tsx`** — the UI's only page; a good entry point to see how React components, hooks, and TanStack Query fit together.
+6. **`client/src/pages/Home.tsx`** — the UI's only page; a good entry point to see how React components, hooks, and TanStack Query fit together. It keeps the state and passes it down as props to the components it's built from (`find-box.tsx`, `preview-card.tsx`, `search-results.tsx`, `recent-extractions.tsx` in `client/src/components/`) — like a parent view model handing data to child controls.
 7. **`client/src/hooks/use-youtube.ts`** — the typed wrappers around `useQuery`/`useMutation` that the UI calls.
 
 That's the whole app.
