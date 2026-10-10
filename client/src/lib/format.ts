@@ -26,6 +26,15 @@ export function isSpotifyLink(input: string): boolean {
 }
 
 /**
+ * A spotify.link short link (what the Spotify app's Share button copies on a
+ * phone): the server opens it to find out whether it's a song, a playlist or
+ * an album.
+ */
+export function isSpotifyShortLink(input: string): boolean {
+  return /^(https?:\/\/)?spotify\.(app\.)?link\/[A-Za-z0-9_-]+\/?([?#]\S*)?$/i.test(input.trim());
+}
+
+/**
  * A Spotify playlist or album link: it opens in the playlist panel, which
  * lists the songs to pick from. (The server checks it properly.)
  */

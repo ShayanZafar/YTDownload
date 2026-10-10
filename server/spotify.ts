@@ -37,15 +37,17 @@ export type SpotifyLink =
   /** Things with a list of songs. */
   | { kind: "playlist"; id: string }
   | { kind: "album"; id: string }
+  /** A spotify.link short link: `resolveShortLink()` finds where it leads. */
+  | { kind: "short"; host: ShortLinkHost; code: string }
   /** An artist, podcast… — or a link we can't read. */
   | { kind: "other"; type: string };
 
 /**
  * Recognises Spotify links: open.spotify.com/track/… (or /playlist/…,
  * /album/…), the same with /intl-xx/ or /embed/ in front, "spotify:track:…"
- * URIs, and spotify.link short links (which we can't open — see
- * `spotifyLinkError`). Anything else, including plain search text that
- * mentions Spotify, gives undefined.
+ * URIs, and spotify.link short links (the Spotify app's Share button on a
+ * phone; `resolveShortLink()` opens them). Anything else, including plain
+ * search text that mentions Spotify, gives undefined.
  */
 export function parseSpotifyLink(input: string): SpotifyLink | undefined {
   const text = input.trim();
@@ -61,9 +63,14 @@ export function parseSpotifyLink(input: string): SpotifyLink | undefined {
     return undefined;
   }
   const host = url.hostname.toLowerCase();
-  if (host === "spotify.link" || host.endsWith(".app.link")) {
-    return { kind: "other", type: "short link" };
+  if (isShortLinkHost(host)) {
+    const code = url.pathname.slice(1).replace(/\/$/, "");
+    return SHORT_CODE_RE.test(code)
+      ? { kind: "short", host, code }
+      : { kind: "other", type: "short link" };
   }
+  // Other apps' short links use the same service (Branch): not Spotify's.
+  if (host.endsWith(".app.link")) return { kind: "other", type: "short link" };
   if (host !== "open.spotify.com" && host !== "play.spotify.com") return undefined;
 
   const parts = url.pathname
@@ -82,7 +89,7 @@ function toLink(type: string, id: string): SpotifyLink {
 }
 
 const SHORT_LINK_ERROR =
-  "Spotify short links (spotify.link) can't be read. Open it, then copy its open.spotify.com link instead.";
+  "That short link can't be read. Open it, then copy its open.spotify.com link instead.";
 
 /** "a Spotify artist", "a Spotify podcast"… for a link of this type. */
 const aSpotify = (type: string) =>
@@ -91,12 +98,20 @@ const aSpotify = (type: string) =>
     : "a Spotify page";
 
 /** What to tell the user when a Spotify link searched for isn't a song we can look up. */
-export function spotifyLinkError(link: Exclude<SpotifyLink, { kind: "track" }>): string {
+export function spotifyLinkError(
+  link: Exclude<SpotifyLink, { kind: "track" } | { kind: "short" }>,
+): string {
   if (link.kind === "playlist" || link.kind === "album") {
     return `That's a Spotify ${link.kind}, not a song — choose “Spotify playlist” above the search box to pick one of its songs.`;
   }
   if (link.type === "short link") return SHORT_LINK_ERROR;
   return `That's ${aSpotify(link.type)} — only song links work. In Spotify, use Share → Copy Song Link on a song.`;
+}
+
+/** What to tell the user when a Spotify link leads to something the app can't use. */
+export function unusableLinkError(link: Extract<SpotifyLink, { kind: "other" }>): string {
+  if (link.type === "short link") return SHORT_LINK_ERROR;
+  return `That's ${aSpotify(link.type)} — paste a song, playlist or album link instead.`;
 }
 
 /** What to tell the user when what they gave the playlist panel isn't a playlist or album link. */
@@ -107,6 +122,79 @@ export function playlistLinkError(link: SpotifyLink | undefined): string {
   if (link?.kind === "other" && link.type === "short link") return SHORT_LINK_ERROR;
   const what = link?.kind === "other" ? `That's ${aSpotify(link.type)}. ` : "";
   return `${what}Paste a Spotify playlist or album link — in Spotify, use Share → Copy link to playlist.`;
+}
+
+/** The hosts of Spotify's short links: spotify.link, and the Branch host it redirects through. */
+export type ShortLinkHost = "spotify.link" | "spotify.app.link";
+const isShortLinkHost = (host: string): host is ShortLinkHost =>
+  host === "spotify.link" || host === "spotify.app.link";
+// A short link's code ("spotify.link/AbCd1234XyZ"): letters, digits, - and _.
+const SHORT_CODE_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** How many short-link hops to follow before giving up (one is usual). */
+const MAX_SHORT_LINK_HOPS = 3;
+// Branch (the service behind spotify.link) redirects tools straight to the
+// open.spotify.com address; browsers get a page that does it with a script.
+const SHORT_LINK_USER_AGENT = "curl/8.5.0";
+const OPEN_SPOTIFY_LINK_RE =
+  /https:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:track|album|playlist)\/[A-Za-z0-9]{22}/i;
+
+/**
+ * Where a spotify.link short link leads: a song, playlist or album link (or
+ * some other Spotify page). Only Spotify's own short-link hosts are fetched,
+ * at an address rebuilt from the validated code, and a redirect is followed
+ * only to another of those hosts — so a link can't make the app fetch any
+ * other address.
+ */
+export async function resolveShortLink(
+  link: Extract<SpotifyLink, { kind: "short" }>,
+): Promise<Exclude<SpotifyLink, { kind: "short" }>> {
+  let next: Extract<SpotifyLink, { kind: "short" }> = link;
+  for (let hop = 0; hop < MAX_SHORT_LINK_HOPS; hop++) {
+    let res: Response;
+    try {
+      res = await fetch(`https://${next.host}/${next.code}`, {
+        redirect: "manual",
+        headers: { "User-Agent": SHORT_LINK_USER_AGENT, "Accept-Language": "en" },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const reason =
+        err instanceof Error && err.name === "TimeoutError" ? "it took too long" : "no connection";
+      throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`);
+    }
+    if (res.status === 404) {
+      throw new SpotifyError(
+        404,
+        "That Spotify short link doesn't lead anywhere — check the link.",
+      );
+    }
+    const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+    const target = location
+      ? parseSpotifyLink(location)
+      : res.ok
+        ? parseSpotifyLink(OPEN_SPOTIFY_LINK_RE.exec(await res.text())?.[0] ?? "")
+        : undefined;
+    if (target?.kind === "short") {
+      next = target;
+      continue;
+    }
+    if (target) return target;
+    throw new SpotifyError(
+      502,
+      res.ok || location
+        ? "Couldn't tell where that Spotify short link leads. Open it, then copy its open.spotify.com link instead."
+        : `Spotify answered with an error (HTTP ${res.status}).`,
+    );
+  }
+  throw new SpotifyError(502, "That Spotify short link redirects too many times.");
+}
+
+/** A Spotify link, with a short link replaced by where it leads. */
+export async function readSpotifyLink(
+  input: string,
+): Promise<Exclude<SpotifyLink, { kind: "short" }> | undefined> {
+  const link = parseSpotifyLink(input);
+  return link?.kind === "short" ? resolveShortLink(link) : link;
 }
 
 type EmbedEntity = {

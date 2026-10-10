@@ -111,6 +111,30 @@ export const api = {
     },
   },
   spotify: {
+    /**
+     * Where a Spotify link leads, as its open.spotify.com address: a
+     * spotify.link short link is opened to find out.
+     */
+    link: {
+      method: "GET" as const,
+      path: "/api/spotify/link" as const,
+      query: z.object({
+        link: z
+          .string({ error: "Paste a Spotify link" })
+          .trim()
+          .min(1, "Paste a Spotify link")
+          .max(500, "That link is too long"),
+      }),
+      responses: {
+        200: z.object({
+          kind: z.enum(["track", "playlist", "album"]),
+          url: z.string(),
+        }),
+        400: errorSchemas.validation,
+        404: errorSchemas.notFound,
+        502: errorSchemas.internal,
+      },
+    },
     /** The songs in a public Spotify playlist or album (the first 100 of a playlist). */
     playlist: {
       method: "GET" as const,

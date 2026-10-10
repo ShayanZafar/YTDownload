@@ -76,6 +76,20 @@ describe("findCopiedLink", () => {
     expect(findCopiedLink(`open.spotify.com/track/${SONG}`)?.key).toBe(`spotify:track:${SONG}`);
   });
 
+  it("finds Spotify's short links, which lead to a song, playlist or album", () => {
+    expect(findCopiedLink("Listen on Spotify: https://spotify.link/AbCdEfGhIj")).toEqual({
+      kind: "spotify",
+      url: "https://spotify.link/AbCdEfGhIj",
+      key: "spotify:short:AbCdEfGhIj",
+      label: "spotify.link/AbCdEfGhIj",
+    });
+    expect(findCopiedLink("spotify.app.link/x9Y_z-1?_p=c")?.url).toBe(
+      "https://spotify.app.link/x9Y_z-1?_p=c",
+    );
+    expect(findCopiedLink("https://spotify.link/")).toBeUndefined();
+    expect(findCopiedLink("https://other.app.link/AbCdEfGhIj")).toBeUndefined();
+  });
+
   it("takes the first link when there are several", () => {
     const song = `https://open.spotify.com/track/${SONG}`;
     const video = `https://youtu.be/${ID}`;
@@ -97,7 +111,6 @@ describe("findCopiedLink", () => {
     `javascript:alert('https://youtu.be/${ID}')`,
     "https://open.spotify.com/artist/0TnOYISbd1XYRBk9myaseg",
     "https://open.spotify.com/episode/512ojhOuo1ktJprKbVcKyQ",
-    "https://spotify.link/AbCdEfGhIj",
   ])("finds no link the box opens in %j", (text) => {
     expect(findCopiedLink(text)).toBeUndefined();
   });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   PLAYLIST_EMBED_LIMIT,
   SpotifyError,
@@ -7,8 +7,11 @@ import {
   parsePlaylistPage,
   parseSpotifyLink,
   playlistLinkError,
+  readSpotifyLink,
+  resolveShortLink,
   spotifyLinkError,
   spotifySearchQuery,
+  unusableLinkError,
 } from "../../server/spotify";
 import { rankResults, type RawSearchEntry } from "../../server/search";
 
@@ -51,13 +54,38 @@ describe("parseSpotifyLink", () => {
       kind: "other",
       type: "playlist",
     });
-    expect(parseSpotifyLink("https://spotify.link/AbCdEfGh")).toEqual({
+    // Another app's short link (spotify.link's service hosts those too).
+    expect(parseSpotifyLink("https://someapp.app.link/AbCdEfGh")).toEqual({
       kind: "other",
       type: "short link",
     });
     // A track link with a broken id isn't a song we can look up either.
     expect(parseSpotifyLink("https://open.spotify.com/track/abc")).toMatchObject({
       kind: "other",
+    });
+  });
+
+  it("reads spotify.link short links, to be opened by resolveShortLink()", () => {
+    for (const link of [
+      "https://spotify.link/AbCdEfGh",
+      "spotify.link/AbCdEfGh/",
+      "http://spotify.link/AbCdEfGh?_p=x",
+    ]) {
+      expect(parseSpotifyLink(link), link).toEqual({
+        kind: "short",
+        host: "spotify.link",
+        code: "AbCdEfGh",
+      });
+    }
+    expect(parseSpotifyLink("https://spotify.app.link/x9Y_z-1?_p=c")).toEqual({
+      kind: "short",
+      host: "spotify.app.link",
+      code: "x9Y_z-1",
+    });
+    // A code we wouldn't put in an address isn't opened.
+    expect(parseSpotifyLink("https://spotify.link/a/b")).toEqual({
+      kind: "other",
+      type: "short link",
     });
   });
 
@@ -85,6 +113,15 @@ describe("spotifyLinkError", () => {
     expect(spotifyLinkError({ kind: "album", id: "4m2880jivSbbyEGAKfITCa" })).toMatch(
       /spotify album.*spotify playlist/i,
     );
+  });
+});
+
+describe("unusableLinkError", () => {
+  it("says which links work", () => {
+    expect(unusableLinkError({ kind: "other", type: "artist" })).toMatch(
+      /spotify artist.*song, playlist or album/i,
+    );
+    expect(unusableLinkError({ kind: "other", type: "short link" })).toMatch(/open\.spotify\.com/);
   });
 });
 
@@ -380,5 +417,87 @@ describe("rankResults with a known length (from Spotify)", () => {
       (r) => r.id,
     );
     expect(ids.slice(0, 2)).toEqual(["5NV6Rdv1a3I", "hhhhhhhhhh1"]);
+  });
+});
+
+describe("resolveShortLink", () => {
+  const short = { kind: "short", host: "spotify.link", code: "AbCdEfGh" } as const;
+  const answer = (status: number, init: { location?: string; body?: string } = {}) =>
+    new Response(init.body ?? null, {
+      status,
+      headers: init.location ? { location: init.location } : {},
+    });
+  const stubFetch = (...responses: Response[]) => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => {
+      const next = responses.shift();
+      if (!next) throw new Error("no more answers");
+      return next;
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("follows the redirect to the song, playlist or album", async () => {
+    const fetch = stubFetch(
+      answer(307, { location: `https://open.spotify.com/track/${ID}?si=abc&context=x` }),
+    );
+    await expect(resolveShortLink(short)).resolves.toEqual({ kind: "track", id: ID });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe("https://spotify.link/AbCdEfGh");
+    expect(fetch.mock.calls[0][1]).toMatchObject({ redirect: "manual" });
+  });
+
+  it("goes through Spotify's other short-link host, and reads a page that redirects by script", async () => {
+    const fetch = stubFetch(
+      answer(302, { location: "https://spotify.app.link/AbCdEfGh?_p=c11" }),
+      answer(200, {
+        body: '<html><script>window.location = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=1"</script></html>',
+      }),
+    );
+    await expect(resolveShortLink(short)).resolves.toEqual({
+      kind: "playlist",
+      id: "37i9dQZF1DXcBWIGoYBM5M",
+    });
+    expect(fetch.mock.calls[1][0]).toBe("https://spotify.app.link/AbCdEfGh");
+  });
+
+  it("never fetches a redirect to anywhere else", async () => {
+    const fetch = stubFetch(answer(302, { location: "https://evil.example/track/x" }));
+    await expect(resolveShortLink(short)).rejects.toMatchObject({ status: 502 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("says when the link leads nowhere, or Spotify can't be reached", async () => {
+    stubFetch(answer(404));
+    await expect(resolveShortLink(short)).rejects.toMatchObject({ status: 404 });
+    stubFetch(answer(200, { body: "<html>nothing here</html>" }));
+    await expect(resolveShortLink(short)).rejects.toBeInstanceOf(SpotifyError);
+    stubFetch(answer(503));
+    await expect(resolveShortLink(short)).rejects.toThrow(/HTTP 503/);
+    stubFetch();
+    await expect(resolveShortLink(short)).rejects.toThrow(/couldn't reach spotify/i);
+  });
+
+  it("gives up on a loop of short links", async () => {
+    const loop = () => answer(302, { location: "https://spotify.link/AbCdEfGh" });
+    const fetch = stubFetch(loop(), loop(), loop(), loop());
+    await expect(resolveShortLink(short)).rejects.toThrow(/too many/);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("is what readSpotifyLink() does with a short link, and only with one", async () => {
+    stubFetch(answer(307, { location: "https://open.spotify.com/album/4m2880jivSbbyEGAKfITCa" }));
+    await expect(readSpotifyLink("https://spotify.link/AbCdEfGh")).resolves.toEqual({
+      kind: "album",
+      id: "4m2880jivSbbyEGAKfITCa",
+    });
+    const fetch = stubFetch();
+    await expect(readSpotifyLink(`https://open.spotify.com/track/${ID}`)).resolves.toEqual({
+      kind: "track",
+      id: ID,
+    });
+    await expect(readSpotifyLink("daft punk")).resolves.toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,7 @@ import {
   formatBytes,
   formatDuration,
   isSpotifyLink,
+  isSpotifyShortLink,
   isSpotifyPlaylistLink,
 } from "../../client/src/lib/format";
 
@@ -45,6 +46,21 @@ describe("asLink", () => {
     expect(asLink("Blink-182")).toBeUndefined();
     expect(asLink("https://example.com with spaces")).toBeUndefined();
     expect(asLink("   ")).toBeUndefined();
+  });
+});
+
+describe("isSpotifyShortLink", () => {
+  it("spots the Spotify app's short links", () => {
+    expect(isSpotifyShortLink("https://spotify.link/AbCdEf")).toBe(true);
+    expect(isSpotifyShortLink(" spotify.link/AbCdEf/ ")).toBe(true);
+    expect(isSpotifyShortLink("https://spotify.app.link/x9Y_z-1?_p=c")).toBe(true);
+  });
+
+  it("leaves everything else alone", () => {
+    expect(isSpotifyShortLink("https://open.spotify.com/track/4u7EnebtmKWzUH433cf5Qv")).toBe(false);
+    expect(isSpotifyShortLink("https://spotify.link/")).toBe(false);
+    expect(isSpotifyShortLink("https://spotify.link.evil.example/AbCdEf")).toBe(false);
+    expect(isSpotifyShortLink("spotify link")).toBe(false);
   });
 });
 

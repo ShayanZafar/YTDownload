@@ -13,11 +13,12 @@ import {
   SpotifyError,
   fetchSpotifyPlaylist,
   fetchSpotifyTrack,
-  parseSpotifyLink,
   playlistLinkError,
+  readSpotifyLink,
   spotifyLinkError,
   spotifySearchQuery,
   spotifySongTags,
+  unusableLinkError,
 } from "./spotify";
 import {
   YT_DLP_BASE_FLAGS,
@@ -306,7 +307,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     const { q } = query.data;
     try {
-      const spotifyLink = parseSpotifyLink(q);
+      const spotifyLink = await readSpotifyLink(q);
       if (!spotifyLink) {
         return res.json({ results: await searchYouTube(q) });
       }
@@ -327,16 +328,39 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // Where a Spotify link leads: the page asks before handling a spotify.link
+  // short link, to know whether it's a song (search) or a playlist (the panel).
+  app.get(api.spotify.link.path, async (req, res) => {
+    const query = api.spotify.link.query.safeParse(req.query);
+    if (!query.success) return res.status(400).json(validationError(query.error));
+    try {
+      const link = await readSpotifyLink(query.data.link);
+      if (!link) {
+        return res.status(400).json({ message: "That isn't a Spotify link.", field: "link" });
+      }
+      if (link.kind === "other") {
+        return res.status(400).json({ message: unusableLinkError(link), field: "link" });
+      }
+      res.json({ kind: link.kind, url: `https://open.spotify.com/${link.kind}/${link.id}` });
+    } catch (err) {
+      if (err instanceof SpotifyError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      console.error("Opening the Spotify link failed:", err);
+      res.status(500).json({ message: err instanceof Error ? err.message : "Couldn't open it" });
+    }
+  });
+
   // The songs in a public Spotify playlist or album, for the playlist panel.
   // Picking one searches for its song link like any other (above).
   app.get(api.spotify.playlist.path, async (req, res) => {
     const query = api.spotify.playlist.query.safeParse(req.query);
     if (!query.success) return res.status(400).json(validationError(query.error));
-    const link = parseSpotifyLink(query.data.link);
-    if (link?.kind !== "playlist" && link?.kind !== "album") {
-      return res.status(400).json({ message: playlistLinkError(link), field: "link" });
-    }
     try {
+      const link = await readSpotifyLink(query.data.link);
+      if (link?.kind !== "playlist" && link?.kind !== "album") {
+        return res.status(400).json({ message: playlistLinkError(link), field: "link" });
+      }
       res.json(await fetchSpotifyPlaylist(link.kind, link.id));
     } catch (err) {
       if (err instanceof SpotifyError) {

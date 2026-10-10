@@ -27,7 +27,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/index.ts` — entry point; Vite middleware in dev, static `dist/public` in prod
 - `server/env.ts` — loads `.env`; imported first by `index.ts`
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
-- `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/playlist`,
+- `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/link`, `GET /api/spotify/playlist`,
   `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
   `POST /api/folders/songs`, `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`),
   `GET /api/downloads`
@@ -56,7 +56,10 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   public embed page `open.spotify.com/embed/track/<id>` (`__NEXT_DATA__`, no account or API key),
   then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first).
   Playlists and albums (`/api/spotify/playlist?link=`): the songs from `embed/playlist|album/<id>`
-  (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there → `maybeMore`)
+  (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there → `maybeMore`).
+  `spotify.link` short links: `resolveShortLink()` asks Spotify's short-link host where it leads
+  (redirects followed only between `spotify.link`/`spotify.app.link`); `GET /api/spotify/link`
+  tells the page where one leads, so it can search or open the playlist panel
 - `server/audio.ts` — yt-dlp and ffmpeg arguments (unit-tested), `fetchAudioInfo()` (metadata pass)
   and `startAudioPipeline()` (yt-dlp → ffmpeg, used by both download and save), yt-dlp error lines
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
@@ -204,10 +207,11 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   the Spotify song: unattended picks must be near-certain, and bursts of downloads invite YouTube's
   bot checks.
 - Spotify: only a validated kind (track/playlist/album) and 22-character id go into the embed URL we
-  fetch (no user-controlled URLs are ever fetched). If Spotify links break, check the embed page's
-  `__NEXT_DATA__` shape first (`parseEmbedPage()`, `parsePlaylistPage()`); the cloud workspace can't
-  reach Spotify. No sign-in on purpose: since Feb 2026 Spotify's Web API Development Mode needs the
-  app owner to have Premium, and the app must stay free — so only public playlists, first 100 songs.
+  fetch, and only a validated code into a short link's (no user-controlled URLs are ever fetched).
+  If Spotify links break, check the embed page's `__NEXT_DATA__` shape first (`parseEmbedPage()`,
+  `parsePlaylistPage()`); the cloud workspace can't reach Spotify. No sign-in on purpose: since Feb
+  2026 Spotify's Web API Development Mode needs the app owner to have Premium, and the app must stay
+  free — so only public playlists, first 100 songs.
 - "Save to" folder: download links stay real `<a href download>` elements — `startDownload()` only
   calls `preventDefault()` (and `POST /api/video/save` instead) when a folder is set — so the default
   path and its tests are unchanged. Anything that reads or writes the user's disk must sit behind

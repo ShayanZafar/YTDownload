@@ -34,8 +34,10 @@ const MAX_PASTE = 300;
 // Punctuation around a link in a sentence or a message: "(https://…).", "<https://…>".
 const AROUND_LINK = /^["'([{<«“‘]+|["')\]}>»”’.,;:!?]+$/g;
 
-// The Spotify links the box opens: songs, playlists and albums (not artists,
-// podcasts or spotify.link short links, which the app can't open).
+// The Spotify links the box opens: songs, playlists and albums (not artists
+// or podcasts) — and spotify.link short links, which lead to one of those.
+const SPOTIFY_SHORT_LINK =
+  /^(?:https?:\/\/)?(spotify\.(?:app\.)?link)\/([A-Za-z0-9_-]{1,64})\/?(?:[?#]\S*)?$/i;
 const SPOTIFY_LINK =
   /^(?:spotify:(track|playlist|album):([A-Za-z0-9]{22})|(?:https?:\/\/)?(?:open|play)\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:embed\/)?(track|playlist|album)\/([A-Za-z0-9]{22})(?:[/?#]\S*)?)$/i;
 
@@ -66,6 +68,15 @@ export function findCopiedLink(text: string): CopiedLink | undefined {
         url: candidate,
         key: `spotify:${kind}:${id}`,
         label: `spotify.com/${kind}/${id}`,
+      };
+    }
+    const short = SPOTIFY_SHORT_LINK.exec(candidate);
+    if (short) {
+      return {
+        kind: "spotify",
+        url: /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`,
+        key: `spotify:short:${short[2]}`,
+        label: `${short[1].toLowerCase()}/${short[2]}`,
       };
     }
   }

@@ -46,6 +46,23 @@ export async function searchSongs(query: string, signal?: AbortSignal) {
   return parseWithLogging(api.video.search.responses[200], data, "video.search");
 }
 
+/** Where a Spotify link leads (a spotify.link short link is opened to find out). */
+export async function openSpotifyLink(link: string) {
+  const res = await fetch(`${api.spotify.link.path}?${new URLSearchParams({ link })}`, {
+    credentials: "include",
+  });
+  const data: unknown = await res.json().catch(() => undefined);
+  if (!res.ok) {
+    const parsedError = errorSchemas.internal.safeParse(data);
+    throw new Error(parsedError.success ? parsedError.data.message : "Couldn't open the link");
+  }
+  return parseWithLogging(api.spotify.link.responses[200], data, "spotify.link");
+}
+
+export function useSpotifyLink() {
+  return useMutation({ mutationFn: openSpotifyLink });
+}
+
 export function useSongSearch() {
   return useMutation({ mutationFn: (query: string) => searchSongs(query) });
 }

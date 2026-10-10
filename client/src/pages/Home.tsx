@@ -12,6 +12,7 @@ import {
   useVideoInfo,
   useRecentDownloads,
   useSongSearch,
+  useSpotifyLink,
   useSpotifyPlaylist,
 } from "@/hooks/use-youtube";
 import { useDownloadFormat } from "@/hooks/use-download-format";
@@ -28,6 +29,7 @@ import {
   formatDuration,
   isSpotifyLink,
   isSpotifyPlaylistLink,
+  isSpotifyShortLink,
   timeAgo,
   validDate,
 } from "@/lib/format";
@@ -239,9 +241,10 @@ export default function Home() {
   const { data: recentDownloads, isLoading: isLoadingHistory } = useRecentDownloads(
     pending.length > 0 ? HISTORY_POLL_MS : false,
   );
+  const { mutate: openShortLink, isPending: isOpeningShortLink } = useSpotifyLink();
   const results = searchData?.results;
   const spotify = searchData?.spotify;
-  const isBusy = isFetchingInfo || isSearching;
+  const isBusy = isFetchingInfo || isSearching || isOpeningShortLink;
   const input = inputFor[mode];
   // A copied link, suggested while the box is empty — unless it's already open.
   const openLinks = [selected?.url, playlistLink].map((link) => link && findCopiedLink(link)?.key);
@@ -377,6 +380,21 @@ export default function Home() {
     const copiedLink = findCopiedLink(value);
     if (copiedLink) copied.handle(copiedLink.key);
 
+    // A spotify.link short link: ask the app where it leads, then go on as
+    // if that open.spotify.com link had been typed.
+    if (isSpotifyShortLink(value)) {
+      openShortLink(value, {
+        onSuccess: (data) => submit(data.url),
+        onError: (err) => {
+          toast({
+            title: "Couldn't open the Spotify link",
+            description: err.message,
+            variant: "destructive",
+          });
+        },
+      });
+      return;
+    }
     if (isSpotifyPlaylistLink(value)) {
       if (mode !== "playlist") setMode("playlist");
       openPlaylist(value);
