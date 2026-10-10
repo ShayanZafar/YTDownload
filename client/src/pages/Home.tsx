@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useMutation } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { Layout } from "@/components/layout";
@@ -23,7 +24,7 @@ import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { useStoredValue } from "@/hooks/use-stored-value";
 import { useSaveSettings } from "@/hooks/use-save-settings";
 import { SONGS_IN_FOLDER_KEY, useSongsInFolder } from "@/hooks/use-songs-in-folder";
-import { MUSIC_KEY } from "@/hooks/use-folder-music";
+import { MUSIC_KEY, useFolderMusic } from "@/hooks/use-folder-music";
 import { downloadAllToast, useDownloadAll } from "@/hooks/use-download-all";
 import { useClipboardLink } from "@/hooks/use-clipboard-link";
 import { usePlayer } from "@/hooks/use-player";
@@ -39,14 +40,21 @@ import {
   ApiError,
   folderName,
   saveOnServer,
+  savePlaylistFile,
   type ActiveSave,
   type SaveRequest,
 } from "@/lib/save-to-folder";
+import { folderTrack, playlistQueue } from "@/lib/music";
 import { queryClient } from "@/lib/queryClient";
 import { api, buildDownloadUrl } from "@shared/routes";
 import { spotifyFileName } from "@shared/spotify-names";
 import { extractVideoId } from "@shared/youtube-link";
-import type { SearchResult, SpotifyPlaylistTrack, SpotifyTrack } from "@shared/schema";
+import type {
+  SearchResult,
+  SpotifyPlaylist,
+  SpotifyPlaylistTrack,
+  SpotifyTrack,
+} from "@shared/schema";
 
 // A download started from this page that hasn't shown up in the history yet.
 // The server only records a download once it has fully completed, so we keep
@@ -97,6 +105,43 @@ export default function Home() {
       if (summary.problem) void saveTo.refresh();
       toast(downloadAllToast(summary, saveTo.folder));
     },
+  });
+  // The playlist's songs that are in the folder, for Play and Save playlist file.
+  const folderMusic = useFolderMusic(playlistLink !== null ? saveTo.folder : null);
+  const playlistInFolder = useMemo(
+    () =>
+      playlistQueue(
+        playlist.data?.tracks ?? [],
+        folderSongs.data?.found ?? {},
+        (folderMusic.data?.tracks ?? []).map(folderTrack),
+      ),
+    [playlist.data, folderSongs.data, folderMusic.data],
+  );
+  const { mutate: writePlaylistFile, isPending: isSavingPlaylistFile } = useMutation({
+    mutationFn: (list: SpotifyPlaylist) =>
+      savePlaylistFile(
+        list.name,
+        list.tracks.map(({ id, title, artists, duration }) => ({ id, title, artists, duration })),
+      ),
+    onSuccess: (saved) =>
+      toast({
+        title: `Saved “${saved.file}”`,
+        description: [
+          `${saved.songs} ${saved.songs === 1 ? "song" : "songs"} in ${
+            saveTo.folder ? `“${folderName(saveTo.folder)}”` : "the folder"
+          }${saved.replaced ? " (the earlier one is updated)" : ""}.`,
+          saved.missing > 0 &&
+            `${saved.missing} not in the folder yet — save it again after downloading them.`,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      }),
+    onError: (err) =>
+      toast({
+        title: "Couldn't save the playlist file",
+        description: err.message,
+        variant: "destructive",
+      }),
   });
   const { reset: resetDownloadAll } = downloadAll;
   // Another playlist (or none): the last run's marks no longer apply.
@@ -544,6 +589,16 @@ export default function Home() {
           statuses={downloadAll.statuses}
           progress={downloadAll.progress}
           onDownloadAll={(songs) => void downloadAll.start(songs, format, playlistSource)}
+          playableCount={playlistInFolder.length}
+          onPlay={(shuffle) =>
+            player.play(
+              playlistInFolder,
+              shuffle ? Math.floor(Math.random() * playlistInFolder.length) : 0,
+              { shuffle },
+            )
+          }
+          onSavePlaylistFile={() => playlist.data && writePlaylistFile(playlist.data)}
+          savingPlaylistFile={isSavingPlaylistFile}
           onStop={downloadAll.stop}
           onPick={pickPlaylistSong}
           onRefresh={() => void playlist.refetch()}

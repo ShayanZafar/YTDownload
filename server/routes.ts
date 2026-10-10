@@ -40,6 +40,7 @@ import {
 import { saveIntoFolder } from "./save";
 import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import { songsInFolder, type AudioFile } from "./library";
+import { writePlaylistFile } from "./playlist-file";
 import { convertedForBrowser, findMusicFile, listMusic, readCover } from "./music";
 
 type YtDlpInfo = ThumbnailLike & { title?: string };
@@ -182,6 +183,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(await songsInFolder(saveFolder, input.data.songs));
     } catch (err) {
       sendFolderError(res, err, "Couldn't look through the folder");
+    }
+  });
+
+  // Writes a playlist's songs that are in the "Save to" folder into it as an
+  // .m3u8 file (see playlist-file.ts). The page sends songs, never a path.
+  app.post(api.folders.playlistFile.path, localOnly(), async (req, res) => {
+    const input = api.folders.playlistFile.input.safeParse(req.body);
+    if (!input.success) return res.status(400).json(validationError(input.error));
+    try {
+      const { saveFolder } = await settings.get();
+      if (!saveFolder) return res.status(409).json({ message: NO_FOLDER });
+      res.status(201).json(await writePlaylistFile(saveFolder, input.data.name, input.data.songs));
+    } catch (err) {
+      sendFolderError(res, err, "Couldn't save the playlist file");
     }
   });
 

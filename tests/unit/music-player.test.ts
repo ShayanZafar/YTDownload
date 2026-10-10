@@ -9,6 +9,7 @@ import {
   folderTrack,
   isAudioFile,
   nextPosition,
+  playlistQueue,
   previousPosition,
   shuffledOrder,
   sortTracks,
@@ -159,5 +160,21 @@ describe("what plays next", () => {
     expect(previousPosition(2, 3, "off")).toBe(1);
     expect(previousPosition(0, 3, "off")).toBe(0);
     expect(previousPosition(0, 3, "all")).toBe(2);
+  });
+});
+
+describe("playlistQueue", () => {
+  it("plays a playlist's songs that are in the folder, in the playlist's order, each once", () => {
+    const one = folderSong("One");
+    const two = folderSong("Two", { path: "Artist\\Two.opus" });
+    const three = folderSong("Three");
+    const songs = [{ id: "s2" }, { id: "missing" }, { id: "s1" }, { id: "s2" }, { id: "gone" }];
+    const found = {
+      s1: { file: "One.mp3" },
+      s2: { file: "Artist\\Two.opus" },
+      gone: { file: "Deleted since.mp3" },
+    };
+    expect(playlistQueue(songs, found, [one, two, three])).toEqual([two, one]);
+    expect(playlistQueue(songs, {}, [one, two, three])).toEqual([]);
   });
 });

@@ -170,6 +170,68 @@ describe("Music player (API)", () => {
     expect(otherDevice.body.message).toMatch(/only in a browser on the computer running the app/i);
   });
 
+  it("saves a playlist's songs in the folder as an .m3u8 playlist file, in its order", async () => {
+    const songs = [
+      { id: "4u7EnebtmKWzUH433cf5Qv", title: "Not Here", artists: "Nobody", duration: 200 },
+      { id: "3n3Ppam7vgaVa1iaRUc9Lp", title: "Test Tone", artists: "Sine Wave", duration: 3 },
+      { id: "dQw4w9WgXcQ", title: "Old Song", artists: "", duration: null },
+    ];
+    // The file the folder has for "Test Tone" (two of its files are tagged so).
+    const found = await request(app).post("/api/folders/songs").send({ songs });
+    const testTone = found.body.found["3n3Ppam7vgaVa1iaRUc9Lp"].file as string;
+    expect(found.body.found["dQw4w9WgXcQ"].file).toBe("Old Song.wma");
+
+    const res = await request(app)
+      .post("/api/folders/playlist-file")
+      .send({ name: "Road: Trip", songs });
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual({ file: "Road - Trip.m3u8", songs: 2, missing: 1, replaced: false });
+    const text = await fs.readFile(path.join(folder, "Road - Trip.m3u8"), "utf8");
+    expect(text.split(/\r?\n/)).toEqual([
+      "#EXTM3U",
+      "#PLAYLIST:Road: Trip",
+      "# Written by YouTube Audio Extractor",
+      "#EXTINF:3,Sine Wave - Test Tone",
+      testTone,
+      "#EXTINF:-1,Old Song",
+      "Old Song.wma",
+      "",
+    ]);
+
+    // Saving again brings the app's own file up to date, in place.
+    const again = await request(app)
+      .post("/api/folders/playlist-file")
+      .send({ name: "Road: Trip", songs: songs.slice(1, 2) });
+    expect(again.body).toEqual({ file: "Road - Trip.m3u8", songs: 1, missing: 0, replaced: true });
+    expect(await fs.readFile(path.join(folder, "Road - Trip.m3u8"), "utf8")).not.toMatch(/Old/);
+  });
+
+  it("won't save a playlist file with none of its songs, or for another device", async () => {
+    const none = await request(app)
+      .post("/api/folders/playlist-file")
+      .send({
+        name: "Empty",
+        songs: [{ id: "4u7EnebtmKWzUH433cf5Qv", title: "Not Here", artists: "Nobody" }],
+      });
+    expect(none.status).toBe(409);
+    expect(none.body.message).toMatch(/none of these songs/i);
+
+    const badId = await request(app)
+      .post("/api/folders/playlist-file")
+      .send({ name: "Bad", songs: [{ id: "../../x", title: "x", artists: "" }] });
+    expect(badId.status).toBe(400);
+
+    const otherDevice = await request(app)
+      .post("/api/folders/playlist-file")
+      .set("X-Forwarded-For", "192.168.1.20")
+      .send({
+        name: "Road Trip",
+        songs: [{ id: "dQw4w9WgXcQ", title: "With Cover", artists: "" }],
+      });
+    expect(otherDevice.status).toBe(403);
+    await expect(fs.stat(path.join(folder, "Road Trip.m3u8"))).rejects.toThrow();
+  });
+
   it("forgets the old folder's songs when the Save to folder changes", async () => {
     const song = tracks[path.join("Sine Wave", "Test Tone.mp3")];
     const other = path.join(dir, "Other");

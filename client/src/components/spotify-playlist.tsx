@@ -7,10 +7,13 @@ import {
   Clock,
   Download,
   ExternalLink,
+  FileMusic,
   ListMusic,
   Loader2,
+  Play,
   RefreshCw,
   Search,
+  Shuffle,
   Square,
   X,
 } from "lucide-react";
@@ -58,6 +61,13 @@ type SpotifyPlaylistPanelProps = {
   statuses: Record<string, SongStatus>;
   progress: { done: number; total: number } | null;
   onDownloadAll: (songs: SpotifyPlaylistTrack[]) => void;
+  /** How many of the songs the player can play from the folder (in the playlist's order). */
+  playableCount: number;
+  /** Plays those songs in the music player, in order or shuffled. Called inside the click. */
+  onPlay: (shuffle: boolean) => void;
+  /** Writes those songs into the folder as an .m3u8 playlist file. */
+  onSavePlaylistFile: () => void;
+  savingPlaylistFile: boolean;
   onStop: () => void;
   onPick: (track: SpotifyPlaylistTrack) => void;
   onRefresh: () => void;
@@ -184,6 +194,10 @@ export function SpotifyPlaylistPanel({
   statuses,
   progress,
   onDownloadAll,
+  playableCount,
+  onPlay,
+  onSavePlaylistFile,
+  savingPlaylistFile,
   onStop,
   onPick,
   onRefresh,
@@ -426,6 +440,46 @@ export function SpotifyPlaylistPanel({
                 Every song is in {where}
               </p>
             )}
+          </div>
+        )}
+        {/* The songs already in the folder: play them, or keep them as a playlist file. */}
+        {found && inFolderCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
+            <button
+              type="button"
+              disabled={playableCount === 0}
+              onClick={() => onPlay(false)}
+              title={`Play the songs in ${where}, in the ${kind}'s order`}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-secondary/70 transition-colors disabled:opacity-50"
+            >
+              <Play className="h-3.5 w-3.5" />
+              {playableCount > 0 ? `Play ${countSongs(playableCount)}` : "Play"}
+            </button>
+            <button
+              type="button"
+              disabled={playableCount === 0}
+              onClick={() => onPlay(true)}
+              aria-label={`Shuffle the songs in ${where}`}
+              title={`Shuffle the songs in ${where}`}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-50"
+            >
+              <Shuffle className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Shuffle</span>
+            </button>
+            <button
+              type="button"
+              disabled={savingPlaylistFile}
+              onClick={onSavePlaylistFile}
+              title={`Save the songs in ${where} as a playlist file (.m3u8) there, for VLC and other music players`}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-50"
+            >
+              {savingPlaylistFile ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FileMusic className="h-3.5 w-3.5" />
+              )}
+              Save playlist file
+            </button>
           </div>
         )}
         {!running && (toCheck > 0 || failed > 0) && (

@@ -29,7 +29,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/link`, `GET /api/spotify/playlist`, `GET /api/youtube/playlist`,
   `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
-  `POST /api/folders/songs`, `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`),
+  `POST /api/folders/songs`, `POST /api/folders/playlist-file`, `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`),
   `GET /api/downloads`
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
@@ -41,6 +41,10 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   name, folder names), else an exact file name with no contradicting artist tag. Pure parts unit-tested.
   `readFolderTags()` (the scan + tags) also feeds the player; `oggDuration()` reads an Ogg file's
   length from its last page (music-metadata would read the whole file)
+- `server/playlist-file.ts` — "Save playlist file" (`POST /api/folders/playlist-file`, local-only): the
+  playlist's songs found in the Save to folder (`songsInFolder()` — the page sends songs, never a
+  path), written there as "<name>.m3u8" in the playlist's order; replaces only a file with the app's
+  `PLAYLIST_FILE_MARK` line, else "<name> (1).m3u8". Pure parts unit-tested
 - `server/music.ts` — the music player's side of the Save to folder (`GET /api/music…`, local-only):
   the songs by id (`musicTrackId()`: the place in the folder, hashed — the page never sends a path),
   `readCover()`, and `convertedForBrowser()`: a song the browser can't play, as FLAC (lossless) in
@@ -92,7 +96,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   folder: In folder marks and counts (`hooks/use-songs-in-folder.ts`, refetched on focus and after
   saves), a Not in folder view, tick boxes and Download (`hooks/use-download-all.ts`: one song at a
   time — search, `confidentMatch()` (same length as on Spotify) or mark "check", then
-  `saveOnServer()`; a YouTube playlist's videos are saved as they are; Stop aborts). Without a
+  `saveOnServer()`; a YouTube playlist's videos are saved as they are; Stop aborts), and Play / Shuffle
+  (the songs in the folder, in the playlist's order: `playlistQueue()` in `lib/music.ts`) and Save
+  playlist file. Without a
   folder: Downloaded marks from history entries' `spotifyId` (or video id). Downloads carry
   `spotifyId` (history + file tag)
 - `client/src/lib/save-to-folder.ts` + `hooks/use-save-settings.ts` — the page's side of "Save to":

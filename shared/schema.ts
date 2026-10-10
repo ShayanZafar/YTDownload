@@ -148,6 +148,28 @@ export const songToFindSchema = z.object({
 
 export type SongToFind = z.infer<typeof songToFindSchema>;
 
+/** A song for "Save playlist file": a song to find, and its length for the playlist's list. */
+export const playlistFileSongSchema = songToFindSchema.extend({
+  /** Length in seconds. */
+  duration: z.number().nonnegative().nullable().optional(),
+});
+
+export type PlaylistFileSong = z.infer<typeof playlistFileSongSchema>;
+
+/** The playlist file written into the "Save to" folder. */
+export const savedPlaylistFileSchema = z.object({
+  /** Its name in the folder: "Road Trip.m3u8". */
+  file: z.string(),
+  /** How many songs it lists. */
+  songs: z.number(),
+  /** The playlist's songs that aren't in the folder (so aren't listed). */
+  missing: z.number(),
+  /** It replaced a playlist file the app had written before. */
+  replaced: z.boolean(),
+});
+
+export type SavedPlaylistFile = z.infer<typeof savedPlaylistFileSchema>;
+
 /**
  * How a song was recognised in the folder: by the Spotify song saved in the
  * file's tags (files this app downloads have it), by its title and artist (in
