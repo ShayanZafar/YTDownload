@@ -644,13 +644,14 @@ npm start                        # serves dist/ on http://localhost:5000
 
 ### Wired-up npm scripts
 
-| Script          | What it does                                                                                   |
-| --------------- | ---------------------------------------------------------------------------------------------- |
-| `npm run dev`   | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode.              |
-| `npm run build` | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).                  |
-| `npm start`     | Runs the production build from `dist/index.cjs` (production mode is baked in).                 |
-| `npm run check` | Type-checks the entire project with `tsc`.                                                     |
-| `npm run clean` | Removes what test runs leave behind (see [Cleaning up after tests](#cleaning-up-after-tests)). |
+| Script           | What it does                                                                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev`    | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode.                                                                   |
+| `npm run build`  | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).                                                                       |
+| `npm start`      | Runs the production build from `dist/index.cjs` (production mode is baked in).                                                                      |
+| `npm run check`  | Type-checks the entire project with `tsc`.                                                                                                          |
+| `npm run verify` | The one check before a change is done, and what CI runs: Prettier, ESLint, `tsc`, then the unit tests and the music player's API test (no network). |
+| `npm run clean`  | Removes what test runs leave behind (see [Cleaning up after tests](#cleaning-up-after-tests)).                                                      |
 
 ### Tests, linting, and formatting
 
@@ -676,7 +677,7 @@ The project ships with two end-to-end test suites that exercise the real app aga
 
 ### Continuous integration
 
-`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, `npm run check`, the unit tests and the music player's API test (which makes its own songs), and, on Linux, ESLint and Prettier. The other API and browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
+`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, the unit tests and the music player's API test (which makes its own songs). It's the same command you run locally before calling a change done. The other API and browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
 
 ### Layout
 
