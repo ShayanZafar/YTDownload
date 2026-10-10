@@ -115,8 +115,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   `.gitignore`, `Start/Stop/Update.cmd` shortcuts — one line each, as `Update.cmd` replaces them
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
   (no history to merge). Never commit to `install` by hand
-- `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, type-check, unit tests + the music API
-  test, lint on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
+- `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
+  lint, type-check, unit tests + the music API test) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
   10×). The YouTube API and browser tests aren't run there (GitHub's machines get refused)
 - `scripts/yt-dlp.mjs` — the `postinstall`: on macOS/Linux, swaps youtube-dl-exec's Python yt-dlp
   (needs Python 3.10+) for yt-dlp's standalone build (`yt-dlp_macos`, `yt-dlp_linux[_aarch64]`,
@@ -134,6 +134,9 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 
 ## Commands
 
+- `npm run verify` — the one check before a change is done: `prettier --check`, `eslint`, `tsc`, then
+  the unit tests and the music API test (no network). CI runs the same script on every push and pull
+  request
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
   `scripts\windows\start.cmd` does the same with install checks and opens the browser
 - `npm run check` — type-check
@@ -261,9 +264,21 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   into its own options: never replace it. A new folder the page loads files from goes in `allow`
   (`tests/unit/dev-server.test.ts` checks).
 
+## Definition of done
+
+- `npm run verify` passes. Show its last lines in your summary.
+- A change to a route, a pipeline (yt-dlp, ffmpeg), a file the app writes or a Windows script comes
+  with a unit test that runs without the network — the player's tests show how to make songs with
+  ffmpeg instead of downloading them. If the change can only be checked against YouTube or Spotify,
+  run `tests/api` or the browser tests too and say which ones you ran.
+- Docs match the code: a new file, route, command or environment variable goes in this file's Layout,
+  Commands or Local setup, and anything a user sees goes in `README.md` / `docs/run/README.md`.
+- Never skip or delete a test, loosen a check, or add an `eslint-disable` / `@ts-expect-error` to get
+  green without asking the user first.
+
 ## Workflow
 
 - Commit to `main` after each completed milestone (a feature, fix or cleanup that is done and
   tested) without asking first, then push to `origin/main`. Keep each commit to one milestone with a
   descriptive message; don't commit half-finished work. Each push rebuilds the `install` branch that
-  PCs update from (the workflow doesn't run the tests), so only push what passes them.
+  PCs update from (the workflow doesn't run the tests), so only push what passes `npm run verify`.

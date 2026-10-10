@@ -8,6 +8,7 @@
     "build": "tsx scripts/build.ts",
     "start": "node dist/index.cjs",
     "check": "tsc",
+    "verify": "prettier --check . && eslint . && tsc && vitest run tests/unit tests/api/music.e2e.test.ts",
     "clean": "tsx scripts/clean.ts",
     "postinstall": "node scripts/yt-dlp.mjs",
     "update-yt-dlp": "node scripts/yt-dlp.mjs --update"

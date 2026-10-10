@@ -1,5 +1,6 @@
 # Keeps the app easy to work on from any system: installs it, checks that
-# yt-dlp and ffmpeg run, type-checks, lints and runs the unit tests — on Linux
+# yt-dlp and ffmpeg run, then runs `npm run verify` (formatting, lint, types,
+# unit tests) — the one check you run locally too — on Linux
 # and Windows after every push to main (and on pull requests), and on macOS
 # too every Monday or when run by hand (Actions tab, Run workflow): macOS
 # minutes count ten times against GitHub's free allowance.
@@ -52,14 +53,7 @@ jobs:
           console.log('yt-dlp', run(ytDlp, ['--version']).toString().trim(), '(' + ytDlp + ')');
           console.log(run(require('ffmpeg-static'), ['-version']).toString().split('\n')[0]);"
 
-      - name: Type-check
-        run: npm run check
-
-      - name: Unit tests
-        run: npx vitest run tests/unit tests/api/music.e2e.test.ts
-
-      - name: Lint and formatting
-        if: runner.os == 'Linux'
-        run: |
-          npx eslint .
-          npx prettier --check .
+      # The same check as `npm run verify` on your computer: formatting, lint,
+      # types, then the unit tests and the music API test.
+      - name: Verify
+        run: npm run verify
