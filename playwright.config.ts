@@ -24,6 +24,8 @@ export default defineConfig({
   retries: 1,
   workers: 1,
   reporter: "list",
+  // Deletes what earlier runs that were stopped part-way left in the temp folder.
+  globalSetup: "./scripts/leftovers.ts",
   // Deletes the test server's files once it has stopped.
   globalTeardown: "./tests/browser/test-server-files.ts",
 

@@ -1,10 +1,13 @@
 import { readdir, rm } from "fs/promises";
 import os from "os";
 import path from "path";
+import { isPlaywrightProfile, isTestLeftover, isViteConfigCopy } from "./leftovers";
 
 /**
  * `npm run clean` removes what test runs leave behind (`-- --dry-run` only lists it):
- *  - in the system's temp folder: the tests' own files and folders (see isTestLeftover()),
+ *  - in the system's temp folder: the tests' own files and folders (isTestLeftover() in
+ *    scripts/leftovers.ts; a test run also deletes those of runs stopped part-way as it starts,
+ *    once they're certainly over),
  *    and the browser profiles of Playwright runs that were stopped before they could tidy up;
  *  - here: Playwright's test-results/ and playwright-report/, and the config files Vite
  *    leaves in node_modules/.vite-temp when the dev server is killed while starting.
@@ -13,29 +16,6 @@ import path from "path";
  */
 
 const ROOT = path.resolve(import.meta.dirname, "..");
-
-/**
- * A name the tests give their temp files: "yt-audio-<what>-" and fs.mkdtemp()'s six random
- * characters, or the id of the Playwright run (tests/browser/test-server-files.ts names the
- * test server's history, settings and player cache that way, and deletes them when the run
- * ends — unless it's stopped first). The app's own "yt-audio-player" has neither.
- */
-export function isTestLeftover(name: string): boolean {
-  return (
-    /^yt-audio-[a-z0-9-]+-[A-Za-z0-9]{6}$/.test(name) ||
-    /^yt-audio-e2e-[a-z]+-\d+(\.json)?$/.test(name)
-  );
-}
-
-/** The browser profile Playwright makes for each run; it's deleted when the browser closes. */
-export function isPlaywrightProfile(name: string): boolean {
-  return /^playwright_[a-z]+dev_profile-[A-Za-z0-9]{6}$/.test(name);
-}
-
-/** Vite's bundled copy of vite.config.ts, deleted once the config is loaded. */
-export function isViteConfigCopy(name: string): boolean {
-  return /^vite\.config\.ts\.timestamp-.+\.mjs$/.test(name);
-}
 
 async function namesIn(folder: string): Promise<string[]> {
   try {
@@ -89,5 +69,4 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-// Run, unless a test is importing it for the functions above.
-if (!process.env.VITEST) await main();
+await main();

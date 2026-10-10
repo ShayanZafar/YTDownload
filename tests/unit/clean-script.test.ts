@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync } from "fs";
+import { afterEach, describe, expect, it } from "vitest";
+import { readdirSync, readFileSync, promises as fs } from "fs";
+import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
-import { isPlaywrightProfile, isTestLeftover, isViteConfigCopy } from "../../scripts/clean";
+import {
+  ABANDONED_AFTER_MS,
+  isAbandoned,
+  isPlaywrightProfile,
+  isTestLeftover,
+  isViteConfigCopy,
+  removeAbandonedLeftovers,
+} from "../../scripts/leftovers";
 
 /**
  * scripts/clean.ts (`npm run clean`) removes what test runs leave in the temp folder. It finds
@@ -77,5 +85,67 @@ describe("npm run clean", () => {
     expect(isViteConfigCopy("vite.config.ts.timestamp-1759590000000-2a9c1e5b0f3d4.mjs")).toBe(true);
     expect(isViteConfigCopy("vite.config.ts")).toBe(false);
     expect(isViteConfigCopy("deps")).toBe(false);
+  });
+});
+
+describe("a test run, as it starts", () => {
+  const now = Date.now();
+  const dayOld = now - ABANDONED_AFTER_MS - 60_000;
+  const running = (pid: number) => pid === 4242;
+
+  it("deletes a Playwright run's test server files once that run is over", () => {
+    for (const name of [
+      "yt-audio-e2e-history-1000.json",
+      "yt-audio-e2e-settings-1000.json",
+      "yt-audio-e2e-player-1000",
+      "yt-audio-e2e-player-123456", // also looks like an mkdtemp name: its run decides
+    ]) {
+      expect(isAbandoned(name, now, now, running), name).toBe(true);
+    }
+  });
+
+  it("never touches a run still going, its own files, or the app's", () => {
+    expect(isAbandoned("yt-audio-e2e-history-4242.json", dayOld, now, running)).toBe(false);
+    expect(isAbandoned(`yt-audio-e2e-player-${process.pid}`, dayOld, now, () => false)).toBe(false);
+    expect(isAbandoned("yt-audio-player", dayOld, now, running)).toBe(false);
+    expect(isAbandoned("playwright_chromiumdev_profile-gaQRCL", dayOld, now, running)).toBe(false);
+  });
+
+  it("deletes the tests' temp folders only once they're a day old", () => {
+    expect(isAbandoned("yt-audio-save-to-aB3xQ9", now - 60 * 60 * 1000, now, running)).toBe(false);
+    expect(isAbandoned("yt-audio-save-to-aB3xQ9", dayOld, now, running)).toBe(true);
+  });
+
+  let dir: string | undefined;
+  afterEach(async () => {
+    if (dir) await fs.rm(dir, { recursive: true, force: true });
+    dir = undefined;
+  });
+
+  it("removes those from the temp folder, and leaves the rest", async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-leftovers-"));
+    const old = new Date(dayOld);
+    const make = async (name: string, modified?: Date) => {
+      await fs.mkdir(path.join(dir!, name));
+      await fs.writeFile(path.join(dir!, name, "file.mp3"), "");
+      if (modified) await fs.utimes(path.join(dir!, name), modified, modified);
+    };
+    await make("yt-audio-save-to-Old123", old);
+    await make("yt-audio-save-to-New123");
+    await make("yt-audio-e2e-player-999999999"); // no such process
+    await make(`yt-audio-e2e-player-${process.pid}`);
+    await make("yt-audio-player", old);
+    await make("Music", old);
+
+    expect((await removeAbandonedLeftovers(dir)).sort()).toEqual([
+      "yt-audio-e2e-player-999999999",
+      "yt-audio-save-to-Old123",
+    ]);
+    expect((await fs.readdir(dir)).sort()).toEqual([
+      "Music",
+      `yt-audio-e2e-player-${process.pid}`,
+      "yt-audio-player",
+      "yt-audio-save-to-New123",
+    ]);
   });
 });
