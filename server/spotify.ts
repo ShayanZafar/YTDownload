@@ -22,6 +22,7 @@ import {
 import { cleanTrackTitle } from "@shared/spotify-names";
 import { mapAtOnce } from "./cpu-cores";
 import { sourceHealth } from "./source-health";
+import { TtlCache } from "./youtube-limits";
 
 export { cleanTrackTitle };
 
@@ -398,6 +399,13 @@ export async function fetchOembedTrack(id: string): Promise<SpotifyTrack> {
 }
 
 /**
+ * Songs' details from the embed page, kept for a while: they don't change, and
+ * "Download all" asks about each song more than once (its search, then its
+ * file's tags). The oEmbed fallback's partial answers aren't kept.
+ */
+export const spotifyTrackCache = new TtlCache<SpotifyTrack>();
+
+/**
  * Looks a song up on Spotify's public embed page — and if that can't be read
  * for any reason but "no such song" (a 429, a 5xx, a timeout, a page it can't
  * parse), on its oEmbed endpoint instead, at once (`fetchOembedTrack()`; the
@@ -405,12 +413,16 @@ export async function fetchOembedTrack(id: string): Promise<SpotifyTrack> {
  */
 export async function fetchSpotifyTrack(id: string): Promise<SpotifyTrack> {
   if (!SPOTIFY_ID_RE.test(id)) throw new SpotifyError(400, "That isn't a valid Spotify song link.");
+  const cached = spotifyTrackCache.get(id, Date.now());
+  if (cached) return cached;
   try {
     const html = await fetchEmbedPage(
       `track/${id}`,
       "Spotify doesn't have that song — check the link.",
     );
-    return parseEmbedPage(html, id);
+    const track = parseEmbedPage(html, id);
+    spotifyTrackCache.set(id, track, Date.now());
+    return track;
   } catch (err) {
     if (err instanceof SpotifyError && err.status === 404) throw err;
     try {

@@ -10,6 +10,7 @@ import {
   fetchOembedTrack,
   fetchSpotifyPlaylist,
   fetchSpotifyTrack,
+  spotifyTrackCache,
   parseEmbedPage,
   parseOembed,
   parsePlaylistItemsPage,
@@ -831,6 +832,7 @@ describe("fetchSpotifyTrack", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
+    spotifyTrackCache.clear();
   });
   const healthOf = (source: "spotify" | "spotify-oembed") => {
     const { ok, failed, throttled } = sourceHealth.report().sources[source];
@@ -849,6 +851,19 @@ describe("fetchSpotifyTrack", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(fetch.mock.calls[0][0]).toBe(`https://open.spotify.com/embed/track/${ID}`);
     expect(healthOf("spotify").ok).toBe(before.ok + 1);
+  });
+
+  it("asks Spotify once about a song it has just read — but again after a fallback's answer", async () => {
+    const fetch = stubFetch(trackPage());
+    const first = await fetchSpotifyTrack(ID);
+    expect(await fetchSpotifyTrack(ID)).toBe(first);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    spotifyTrackCache.clear();
+    const fallback = stubFetch(answer(503), oembed(), trackPage());
+    expect((await fetchSpotifyTrack(ID)).source).toBe("spotify-oembed");
+    expect((await fetchSpotifyTrack(ID)).source).toBeUndefined(); // the whole song, this time
+    expect(fallback).toHaveBeenCalledTimes(3);
   });
 
   it("goes straight to the oEmbed endpoint after a 429 — no retry, no waiting", async () => {

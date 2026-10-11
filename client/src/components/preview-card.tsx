@@ -63,12 +63,15 @@ export function PreviewCard({
   return (
     <div className="glass-card rounded-4xl p-4 md:p-6 flex flex-col md:flex-row gap-6 items-center">
       {/* Thumbnail */}
-      <div className="w-full md:w-1/2 aspect-video relative rounded-2xl overflow-hidden shadow-md group">
-        <img
-          src={video.thumbnail}
-          alt={video.title}
-          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-        />
+      <div className="w-full md:w-1/2 aspect-video relative rounded-2xl overflow-hidden shadow-md group bg-secondary">
+        {/* A SoundCloud track may have no artwork: then just the background. */}
+        {video.thumbnail && (
+          <img
+            src={video.thumbnail}
+            alt={video.title}
+            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+          />
+        )}
         <div className="absolute inset-0 bg-linear-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-md text-white text-xs font-semibold px-2.5 py-1 rounded-md flex items-center gap-1.5">
           <Music className="w-3 h-3" /> Audio Track

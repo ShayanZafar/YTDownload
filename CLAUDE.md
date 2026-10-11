@@ -111,7 +111,8 @@ rejected), and `LEARNING.md` maps the stack onto .NET concepts.
   (`open.spotify.com/track/<id>` fetched with a curl User-Agent, which gets its link-preview `<meta>`
   tags: `parseTrackPage()`).
   Every Spotify request goes through `fetchSpotify()`: recorded in source health, never retried or
-  delayed. When the embed page fails for any reason but 404 (a 429 included), at once,
+  delayed. A song's details from the embed page are kept 10 minutes (`spotifyTrackCache`; Download
+  all asks about each song more than once). When the embed page fails for any reason but 404 (a 429 included), at once,
   `fetchSpotifyTrack()` falls back to the keyless oEmbed endpoint
   (`fetchOembedTrack()`, `parseOembed()`): title and cover only — artists `[]`, `duration: null`,
   `source: "spotify-oembed"` on the track (optional field in `spotifyTrackSchema`); the page then
