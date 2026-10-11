@@ -1,0 +1,127 @@
+# Merges a pull request on its own when a bot opened it and every check on it passed:
+# - Dependabot's minor and patch updates (a major version bump waits for you);
+# - the monthly Claude Refactor pull request (refactor/*), only when the Claude Code Review ran
+#   and left no comments.
+# Your own pull requests are never touched. It runs each time one of a pull request's workflows
+# finishes, looks at every check on the pull request's latest commit, and squash-merges when all
+# of them passed and none is still running. A merge made with the workflow's own token doesn't
+# start the workflows that run on pushes to the default branch, so it starts them itself.
+name: Auto-merge
+
+on:
+  workflow_run:
+    workflows: ["Tests", "Claude Code Review"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+concurrency:
+  group: auto-merge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: Auto-merge
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Merge when every check passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # Workflows that run on pushes to the default branch, started by hand after a merge.
+          ON_MAIN: "install.yml"
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.state == "open")][0].number // empty')
+          if [ -z "$pr" ]; then
+            echo "No open pull request has $SHA as its latest commit. Nothing to do."
+            exit 0
+          fi
+          info=$(gh pr view "$pr" -R "$REPO" --json title,isDraft,author,headRefName,headRefOid,body)
+          echo "Pull request #$pr: $(jq -r .title <<<"$info")"
+          if [ "$(jq -r .isDraft <<<"$info")" != "false" ]; then
+            echo "It's a draft: left alone."
+            exit 0
+          fi
+          if [ "$(jq -r .headRefOid <<<"$info")" != "$SHA" ]; then
+            echo "It has newer commits; their checks will trigger this again."
+            exit 0
+          fi
+          author=$(jq -r .author.login <<<"$info")
+          branch=$(jq -r .headRefName <<<"$info")
+          kind=""
+          case "$author" in
+            app/dependabot|dependabot\[bot\]) kind=dependabot ;;
+            app/*) case "$branch" in refactor/*) kind=refactor ;; esac ;;
+          esac
+          if [ -z "$kind" ]; then
+            echo "Opened by $author on $branch: not a bot pull request, so it waits for a person."
+            exit 0
+          fi
+
+          # Every check on this commit must have passed (skipped is fine); none may still be running.
+          checks=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '[.check_runs[] | select(.name != "Auto-merge")]')
+          jq -r '.[] | "  \(.name): \(.status) \(.conclusion // "")"' <<<"$checks"
+          if [ "$(jq 'length' <<<"$checks")" = "0" ]; then
+            echo "No checks ran on this commit: left for a person."
+            exit 0
+          fi
+          if [ "$(jq '[.[] | select(.status != "completed")] | length' <<<"$checks")" != "0" ]; then
+            echo "A check is still running; its finish will trigger this again."
+            exit 0
+          fi
+          if [ "$(jq '[.[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")] | length' <<<"$checks")" != "0" ]; then
+            echo "A check did not pass: left for a person."
+            exit 0
+          fi
+
+          case "$kind" in
+            dependabot)
+              # Dependabot's description lists every bump as "from X to Y"; a major stays for a person.
+              majors=$(jq -r .body <<<"$info" | grep -oE 'from v?[0-9]+(\.[0-9]+)* to v?[0-9]+(\.[0-9]+)*' \
+                | awk '{ sub(/^v/, "", $2); sub(/^v/, "", $4); split($2, a, "."); split($4, b, "."); if (a[1] != b[1]) print }' || true)
+              if [ -n "$majors" ]; then
+                echo "Major version update(s), left for a person:"
+                echo "$majors"
+                exit 0
+              fi
+              ;;
+            refactor)
+              reviews=$(gh run list -R "$REPO" --workflow "Claude Code Review" --commit "$SHA" --json conclusion --jq '[.[] | select(.conclusion == "success")] | length')
+              if [ "$reviews" = "0" ]; then
+                echo "No completed Claude Code Review for this commit: left for a person."
+                exit 0
+              fi
+              findings=$(gh api "repos/$REPO/pulls/$pr/comments?per_page=100" --jq 'length')
+              if [ "$findings" != "0" ]; then
+                echo "The review left $findings comment(s): left for a person."
+                exit 0
+              fi
+              ;;
+          esac
+
+          mergeable=UNKNOWN
+          for _ in 1 2 3 4 5 6; do
+            mergeable=$(gh pr view "$pr" -R "$REPO" --json mergeable --jq .mergeable)
+            [ "$mergeable" != "UNKNOWN" ] && break
+            sleep 10
+          done
+          if [ "$mergeable" != "MERGEABLE" ]; then
+            echo "Not mergeable ($mergeable): left for a person."
+            exit 0
+          fi
+
+          gh pr merge "$pr" -R "$REPO" --squash --delete-branch --match-head-commit "$SHA"
+          echo "Merged #$pr ($kind)."
+          for workflow in $ON_MAIN; do
+            gh workflow run "$workflow" -R "$REPO" --ref "$DEFAULT_BRANCH"
+            echo "Started $workflow on $DEFAULT_BRANCH."
+          done
