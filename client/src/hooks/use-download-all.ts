@@ -170,7 +170,12 @@ async function downloadSong(
 export type DownloadAllRun = {
   source: PlaylistSource;
   format: DownloadFormat;
-  /** Aborting it stops the run (the song being saved is removed, as with Cancel). */
+  /**
+   * How many songs to work on at once: one per CPU core of the computer
+   * running the app (`cpuCores` in GET /api/settings).
+   */
+  atOnce: number;
+  /** Aborting it stops the run: every song in flight is cancelled, its unfinished file removed. */
   signal: AbortSignal;
   /** A song's status as it goes: finding, saving… */
   report: (song: SpotifyPlaylistTrack, status: SongStatus) => void;
@@ -178,43 +183,72 @@ export type DownloadAllRun = {
   finished: (song: SpotifyPlaylistTrack, status: SongStatus) => void;
 };
 
+/** The songs to download, each once, in the playlist's order (a song can be in a playlist twice). */
+export function uniqueSongs(songs: SpotifyPlaylistTrack[]): SpotifyPlaylistTrack[] {
+  const seen = new Set<string>();
+  return songs.filter((song) => {
+    if (seen.has(song.id)) return false;
+    seen.add(song.id);
+    return true;
+  });
+}
+
 /**
- * The songs, one after another, never waiting for anything but the song
- * before. A song that can't be found or saved is marked failed, with the
- * reason, and the run moves straight on to the next; only a problem with the
- * folder itself, which every other song would hit too, stops it.
+ * The songs, as many at once as the app's computer has CPU cores (`atOnce`),
+ * each next song started the moment one is done with — nothing waits for
+ * anything else. A song that can't be found or saved is marked failed, with
+ * the reason, and the run goes on; only a problem with the folder itself,
+ * which every other song would hit too, stops it — cancelling every song
+ * still in flight, as Stop does.
  */
 export async function downloadSongs(
-  queue: SpotifyPlaylistTrack[],
-  { source, format, signal, report, finished }: DownloadAllRun,
+  songs: SpotifyPlaylistTrack[],
+  { source, format, atOnce, signal, report, finished }: DownloadAllRun,
   calls: DownloadAllCalls = appCalls,
 ): Promise<DownloadAllSummary> {
+  const queue = uniqueSongs(songs);
   const summary: DownloadAllSummary = { saved: 0, check: 0, failed: 0, stopped: false };
-  for (const song of queue) {
-    if (signal.aborted) break;
-    let result: SongResult;
-    try {
-      result = await downloadSong(
-        song,
-        source,
-        format,
-        signal,
-        (status) => report(song, status),
-        calls,
-      );
-    } catch {
-      break; // stopped
-    }
-    finished(song, result.status);
-    if (result.status.state === "saved") summary.saved++;
-    else if (result.status.state === "check") summary.check++;
-    else if (result.status.state === "failed") {
-      summary.failed++;
-      if (result.problem) {
-        summary.problem = result.status.reason;
-        break;
+  // Stop, or a problem with the folder: every song in flight is cancelled.
+  const run = new AbortController();
+  const stopAll = () => run.abort();
+  signal.addEventListener("abort", stopAll);
+  if (signal.aborted) stopAll();
+
+  let next = 0;
+  const worker = async () => {
+    while (next < queue.length && !run.signal.aborted) {
+      const song = queue[next++];
+      let result: SongResult;
+      try {
+        result = await downloadSong(
+          song,
+          source,
+          format,
+          run.signal,
+          (status) => report(song, status),
+          calls,
+        );
+      } catch (err) {
+        if (run.signal.aborted) return; // stopped: the song isn't done with
+        result = { status: { state: "failed", reason: messageOf(err) } };
+      }
+      finished(song, result.status);
+      if (result.status.state === "saved") summary.saved++;
+      else if (result.status.state === "check") summary.check++;
+      else if (result.status.state === "failed") {
+        summary.failed++;
+        if (result.problem) {
+          summary.problem ??= result.status.reason;
+          stopAll();
+        }
       }
     }
+  };
+  const width = Number.isFinite(atOnce) ? Math.max(1, Math.floor(atOnce)) : 1;
+  try {
+    await Promise.all(Array.from({ length: Math.min(width, queue.length) }, worker));
+  } finally {
+    signal.removeEventListener("abort", stopAll);
   }
   summary.stopped = signal.aborted || summary.problem !== undefined;
   return summary;
@@ -224,17 +258,19 @@ const isActive = (status: SongStatus) =>
   status.state === "waiting" || status.state === "finding" || status.state === "saving";
 
 /**
- * "Download all" for a playlist: one song after another, saved into the "Save
- * to" folder. A Spotify song is looked for, and saved when the best match is
- * the same length as the song on Spotify; songs without such a match are
- * marked "check" instead of guessed at. A YouTube playlist's videos are saved
- * as they are. One song at a time on purpose — it keeps YouTube from seeing a
- * burst of downloads from one computer.
+ * "Download all" for a playlist: its songs saved into the "Save to" folder,
+ * as many at once as the app's computer has CPU cores (`atOnce`). A Spotify
+ * song is looked for, and saved when the best match is the same length as the
+ * song on Spotify; songs without such a match are marked "check" instead of
+ * guessed at. A YouTube playlist's videos are saved as they are.
  */
 export function useDownloadAll({
+  atOnce,
   onSaved,
   onDone,
 }: {
+  /** Songs to work on at once: the app's computer's CPU cores (from its settings). */
+  atOnce?: number;
   /** After each song is saved. */
   onSaved?: (song: SpotifyPlaylistTrack, fileName: string) => void;
   /** When the run is over, finished or stopped. */
@@ -243,12 +279,12 @@ export function useDownloadAll({
   const [statuses, setStatuses] = useState<Record<string, SongStatus>>({});
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const run = useRef<AbortController | null>(null);
-  const callbacks = useRef({ onSaved, onDone });
+  const callbacks = useRef({ atOnce, onSaved, onDone });
   useLayoutEffect(() => {
-    callbacks.current = { onSaved, onDone };
+    callbacks.current = { atOnce, onSaved, onDone };
   });
 
-  // Leaving the page stops it (the song being saved is removed, as with Cancel).
+  // Leaving the page stops it (the songs being saved are removed, as with Cancel).
   useEffect(() => () => run.current?.abort(), []);
 
   const start = useCallback(
@@ -261,7 +297,7 @@ export function useDownloadAll({
       const controller = new AbortController();
       run.current = controller;
       // A song that's in the playlist twice is downloaded once.
-      const queue = songs.filter((song, i) => songs.findIndex((s) => s.id === song.id) === i);
+      const queue = uniqueSongs(songs);
       const set = (id: string, status: SongStatus) =>
         setStatuses((current) => ({ ...current, [id]: status }));
 
@@ -276,6 +312,8 @@ export function useDownloadAll({
         summary = await downloadSongs(queue, {
           source,
           format,
+          // Known by then: Download all needs a folder, which comes with the settings.
+          atOnce: callbacks.current.atOnce ?? 1,
           signal: controller.signal,
           report: (song, status) => set(song.id, status),
           finished: (song, status) => {

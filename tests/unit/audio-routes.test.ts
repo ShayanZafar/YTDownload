@@ -25,8 +25,8 @@ const fake = vi.hoisted(() => ({
   videoInfo: vi.fn(),
   audioInfo: vi.fn(),
   runJson: vi.fn(),
-  /** What plays yt-dlp's audio stream for the next download or save. */
-  source: undefined as undefined | (() => ChildProcessWithoutNullStreams),
+  /** What plays yt-dlp's audio stream for the next download or save (given its link). */
+  source: undefined as undefined | ((link: string) => ChildProcessWithoutNullStreams),
   /** Every stand-in started, the link each was given, and how each pipeline ended. */
   sources: [] as ChildProcessWithoutNullStreams[],
   links: [] as string[],
@@ -48,7 +48,7 @@ vi.mock("../../server/audio", async (importOriginal) => {
     ) => {
       const pipeline = real.startAudioPipeline(url, formatId, args, prefix, {
         spawnSource: (link) => {
-          const child = fake.source!();
+          const child = fake.source!(link);
           fake.sources.push(child);
           fake.links.push(link);
           return child;
@@ -93,26 +93,36 @@ const BOT_CHECK = "Sign in to confirm you're not a bot. Use --cookies-from-brows
 const TOO_MANY = "HTTP Error 429: Too Many Requests";
 
 // The stand-in for yt-dlp's stream: writes a file to stdout — all at once, or
-// a burst and then 4 KB every 200 ms (slow enough to cancel part-way).
+// a burst and then a piece at a time: 4 KB every 200 ms (slow enough to cancel
+// part-way), or 32 KB every 50 ms (steady: about half a second in all).
 const PLAY = `
 const fs = require("fs");
-const [file, burst] = process.argv.slice(1);
+const [file, burst, piece, everyMs] = process.argv.slice(1).map((v, i) => (i ? Number(v) : v));
 const data = fs.readFileSync(file);
-let at = Math.min(Number(burst), data.length);
+let at = Math.min(burst, data.length);
 process.stdout.write(data.subarray(0, at));
 if (at < data.length) {
   const timer = setInterval(() => {
-    process.stdout.write(data.subarray(at, at + 4096));
-    at += 4096;
+    process.stdout.write(data.subarray(at, at + piece));
+    at += piece;
     if (at >= data.length) clearInterval(timer);
-  }, 200);
+  }, everyMs);
 }`;
 const playing =
-  (file: string, { slow = false } = {}) =>
+  (file: string, { slow = false, steady = false } = {}) =>
   () =>
-    spawn(process.execPath, ["-e", PLAY, file, String(slow ? 64 * 1024 : 1e9)], {
-      windowsHide: true,
-    });
+    spawn(
+      process.execPath,
+      [
+        "-e",
+        PLAY,
+        file,
+        ...(slow ? [64 * 1024, 4096, 200] : steady ? [16 * 1024, 32 * 1024, 50] : [1e9, 0, 0]).map(
+          String,
+        ),
+      ],
+      { windowsHide: true },
+    );
 /** yt-dlp when YouTube refuses the stream: its error line, no audio, exit code 1. */
 const refusing = (line: string) => () =>
   spawn(
@@ -596,6 +606,68 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await pipelineGone();
     expect(await folderEmptied()).toEqual([]);
     expect(await historyOf(VIDEO)).toHaveLength(before);
+  });
+});
+
+describe("several saves at once (Download all runs one per CPU core)", () => {
+  it("tells the page how many: one per CPU core of this computer", async () => {
+    const settings = await request(app).get("/api/settings");
+    expect(settings.body.cpuCores).toBe(os.availableParallelism());
+    const chosen = await request(app).put("/api/settings").send({ saveFolder: folder });
+    expect(chosen.body).toMatchObject({ saveFolder: folder, cpuCores: os.availableParallelism() });
+  });
+
+  it("saves under the same name at once land as separate files, neither replacing the other", async () => {
+    await useFolder();
+    await fs.writeFile(path.join(folder, "Same name.mp3"), "someone else's");
+    const before = (await historyOf(VIDEO)).length;
+    const saved = await Promise.all(
+      Array.from({ length: 4 }, () => saveLines({ url: VIDEO, name: "Same name" })),
+    );
+    const names = saved.map((lines) => String(lines.at(-1)!.fileName)).sort();
+    expect(names).toEqual([
+      "Same name (1).mp3",
+      "Same name (2).mp3",
+      "Same name (3).mp3",
+      "Same name (4).mp3",
+    ]);
+    for (const name of names) {
+      expect((await verifyMp3File(path.join(folder, name))).isValid, name).toBe(true);
+    }
+    // What was there is untouched, and nothing else is left: no .part file, no empty name.
+    expect(await fs.readFile(path.join(folder, "Same name.mp3"), "utf8")).toBe("someone else's");
+    expect((await fs.readdir(folder)).sort()).toEqual(["Same name.mp3", ...names].sort());
+    expect(await waitForHistory(VIDEO, before + 4)).toHaveLength(before + 4);
+    await Promise.all(["Same name.mp3", ...names].map((name) => fs.rm(path.join(folder, name))));
+  });
+
+  it("a save cancelled while another goes on stops only its own processes", async () => {
+    await useFolder();
+    const OTHER = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
+    // The one to cancel streams slowly; the other steadily, for about half a second.
+    fake.source = (link) => playing(tone, link === VIDEO ? { slow: true } : { steady: true })();
+    const other = saveLines({ url: OTHER, name: "Carries on" });
+    expect(
+      await cancelPartWay("/api/video/save", {
+        method: "POST",
+        json: { url: VIDEO, name: "Cancelled" },
+      }),
+    ).toBe(true);
+    // The cancelled one's processes are gone…
+    const cancelled = fake.pipelines[fake.links.indexOf(VIDEO)];
+    expect(
+      await Promise.race([
+        cancelled.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 15_000)),
+      ]),
+      "yt-dlp or ffmpeg was left running",
+    ).toBe(true);
+    // …and the other save finishes whole.
+    const lines = await other;
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Carries on.mp3" });
+    expect((await verifyMp3File(path.join(folder, "Carries on.mp3"))).isValid).toBe(true);
+    expect(await fs.readdir(folder)).toEqual(["Carries on.mp3"]);
+    await fs.rm(path.join(folder, "Carries on.mp3"));
   });
 });
 

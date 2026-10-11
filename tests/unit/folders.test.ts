@@ -5,7 +5,7 @@ import path from "path";
 import {
   FolderError,
   assertWritableFolder,
-  availablePath,
+  claimNewName,
   createFolder,
   createNewFile,
   listFolders,
@@ -108,11 +108,26 @@ describe("numbered file names", () => {
     expect(numberedName("README", 1)).toBe("README (1)");
   });
 
-  it("finds a free name without ever reusing one — a folder of that name counts as taken", async () => {
+  it("claims a free name without ever reusing one — a folder of that name counts as taken", async () => {
     await fs.writeFile(path.join(root, "Song.mp3"), "x");
     await fs.mkdir(path.join(root, "Song (1).mp3"));
-    expect(await availablePath(root, "Song.mp3")).toBe(path.join(root, "Song (2).mp3"));
-    expect(await availablePath(root, "Other.mp3")).toBe(path.join(root, "Other.mp3"));
+    expect(await claimNewName(root, "Song.mp3")).toBe(path.join(root, "Song (2).mp3"));
+    expect(await claimNewName(root, "Other.mp3")).toBe(path.join(root, "Other.mp3"));
+    // Claimed: made, empty — and what was there is untouched.
+    expect(await fs.readFile(path.join(root, "Song (2).mp3"), "utf8")).toBe("");
+    expect(await fs.readFile(path.join(root, "Song.mp3"), "utf8")).toBe("x");
+  });
+
+  it("gives each of many saves finishing at once a name of its own, without a lock", async () => {
+    await fs.writeFile(path.join(root, "Song.mp3"), "someone else's");
+    const claimed = await Promise.all(
+      Array.from({ length: 20 }, () => claimNewName(root, "Song.mp3")),
+    );
+    expect(new Set(claimed).size).toBe(20);
+    expect(claimed.map((file) => path.basename(file)).sort()).toEqual(
+      Array.from({ length: 20 }, (_, i) => `Song (${i + 1}).mp3`).sort(),
+    );
+    expect(await fs.readFile(path.join(root, "Song.mp3"), "utf8")).toBe("someone else's");
   });
 
   it("creates new files only, even when two are made at once", async () => {

@@ -164,6 +164,12 @@ export const saveSettingsSchema = z.object({
    * app can — elsewhere (e.g. a phone) downloads go to that device instead.
    */
   canSaveToFolder: z.boolean(),
+  /**
+   * The CPU cores of the computer running the app: "Download all" works on
+   * this many songs at once. (The page may be on a phone, whose own count
+   * says nothing about the app's computer.)
+   */
+  cpuCores: z.number().int().positive(),
 });
 
 export type SaveSettings = z.infer<typeof saveSettingsSchema>;

@@ -11,7 +11,7 @@ import { coverFor } from "./cover";
 import {
   FolderError,
   assertWritableFolder,
-  availablePath,
+  claimNewName,
   createNewFile,
   folderError,
 } from "./folders";
@@ -165,19 +165,22 @@ export async function saveIntoFolder(req: Request, res: Response) {
   }
 }
 
-// Choosing a free name and renaming onto it happen one save at a time, so two
-// saves of the same song finishing together can't both pick "Song.mp3".
-let naming: Promise<unknown> = Promise.resolve();
-
-function claimName(partPath: string, folder: string, fileName: string): Promise<string> {
-  const run = async () => {
-    const target = await availablePath(folder, fileName);
+/**
+ * Gives a finished file its name: "<name>.<ext>", or "<name> (1).<ext>"… if
+ * that's taken. The name is claimed first (`claimNewName()`: an empty file,
+ * made only if nothing has that name yet), then the .part file is renamed
+ * over it — so saves finishing together never take the same name or replace
+ * a file, and none waits for another.
+ */
+async function claimName(partPath: string, folder: string, fileName: string): Promise<string> {
+  const target = await claimNewName(folder, fileName);
+  try {
     await retryWhenBusy(() => fs.rename(partPath, target));
-    return target;
-  };
-  const result = naming.then(run, run);
-  naming = result.catch(() => {});
-  return result;
+  } catch (err) {
+    await fs.rm(target, { force: true }).catch(() => {}); // the empty name it had claimed
+    throw err;
+  }
+  return target;
 }
 
 /** Stops writing the unfinished file and deletes it. */

@@ -186,7 +186,8 @@ function markFor(
  *
  * With a "Save to" folder, each song says whether it's already in the folder,
  * the list can show just the missing ones, and "Download" fetches the ticked
- * ones (all missing songs, to begin with) one after another.
+ * ones (all missing songs, to begin with), as many at once as the app's
+ * computer has CPU cores.
  */
 export function SpotifyPlaylistPanel({
   source,
@@ -407,7 +408,7 @@ export function SpotifyPlaylistPanel({
                 >
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
                   <span className="truncate">
-                    Downloading {Math.min(progress.done + 1, progress.total)} of {progress.total}…
+                    Downloading: {progress.done} of {progress.total} done…
                   </span>
                 </p>
                 <button

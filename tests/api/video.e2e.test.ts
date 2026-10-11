@@ -471,7 +471,11 @@ describe("Save to folder (API)", () => {
 
   it("starts with downloads going to the browser, and won't save before a folder is chosen", async () => {
     const settings = await request(app).get("/api/settings");
-    expect(settings.body).toEqual({ saveFolder: null, canSaveToFolder: true });
+    expect(settings.body).toEqual({
+      saveFolder: null,
+      canSaveToFolder: true,
+      cpuCores: os.availableParallelism(),
+    });
 
     const { res, error } = await save({ url: TEST_VIDEO_URL });
     expect(res.status).toBe(409);
@@ -519,7 +523,11 @@ describe("Save to folder (API)", () => {
   it("saves the MP3 straight into the chosen folder, reporting progress", async () => {
     const chosen = await setFolder(saveDir);
     expect(chosen.status).toBe(200);
-    expect(chosen.body).toEqual({ saveFolder: saveDir, canSaveToFolder: true });
+    expect(chosen.body).toEqual({
+      saveFolder: saveDir,
+      canSaveToFolder: true,
+      cpuCores: os.availableParallelism(),
+    });
     const before = (await historyFor(TEST_VIDEO_URL)).length;
 
     const { res, events, done } = await save({ url: TEST_VIDEO_URL });

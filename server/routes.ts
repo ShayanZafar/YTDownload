@@ -30,6 +30,7 @@ import {
 import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
 import { settings } from "./settings";
+import { cpuCores } from "./cpu-cores";
 import { isLocalRequest, localOnly, sameOriginOnly } from "./local-only";
 import { LyricsError, findLyrics } from "./lyrics";
 import {
@@ -114,7 +115,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const local = isLocalRequest(req);
     try {
       const { saveFolder } = await settings.get();
-      const body: SaveSettings = { saveFolder: local ? saveFolder : null, canSaveToFolder: local };
+      const body: SaveSettings = {
+        saveFolder: local ? saveFolder : null,
+        canSaveToFolder: local,
+        cpuCores: cpuCores(),
+      };
       res.json(body);
     } catch (err) {
       sendFolderError(res, err, "Couldn't read the settings");
@@ -132,7 +137,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ? null
           : await assertWritableFolder(input.data.saveFolder, { tryWriting: true });
       await settings.update({ saveFolder });
-      const body: SaveSettings = { saveFolder, canSaveToFolder: true };
+      const body: SaveSettings = { saveFolder, canSaveToFolder: true, cpuCores: cpuCores() };
       res.json(body);
     } catch (err) {
       sendFolderError(res, err, "Couldn't save the setting");

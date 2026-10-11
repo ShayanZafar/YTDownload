@@ -106,8 +106,10 @@ export default function Home() {
   const [pendingTrackId, setPendingTrackId] = useState<string>();
   // With a "Save to" folder: which of the playlist's songs are in it already.
   const folderSongs = useSongsInFolder(playlistLink !== null ? saveTo.folder : null, playlist.data);
-  // "Download all": the playlist's missing songs, found and saved one by one.
+  // "Download all": the playlist's missing songs, found and saved as many at
+  // once as the app's computer has CPU cores.
   const downloadAll = useDownloadAll({
+    atOnce: saveTo.settings?.cpuCores,
     onSaved: () => {
       void queryClient.invalidateQueries({ queryKey: [api.downloads.list.path] });
       void queryClient.invalidateQueries({ queryKey: MUSIC_KEY });
