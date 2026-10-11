@@ -144,7 +144,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
   (no history to merge). Never commit to `install` by hand
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
-  lint, type-check, unit tests + the music API test) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
+  lint, type-check, dependency licences, unit tests + the music API test) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
   10×), and on pull requests. The YouTube API and browser tests aren't run there (GitHub's machines
   get refused)
 - `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
@@ -171,8 +171,10 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 
 ## Commands
 
-- `npm run verify` — the one check before a change is done: `prettier --check`, `eslint`, `tsc`, then
-  the unit tests and the music API test (no network). CI runs the same script on every push and pull
+- `npm run verify` — the one check before a change is done: `prettier --check`, `eslint`, `tsc`,
+  `npm run licenses` (every dependency must carry a free, open-source licence; `ffmpeg-static`, GPL like
+  ffmpeg itself, is the one agreed exception, so a new copyleft or non-open package fails the check rather
+  than widening the list), then the unit tests and the music API test (no network). CI runs the same script on every push and pull
   request
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
   `scripts\windows\start.cmd` does the same with install checks and opens the browser
