@@ -30,7 +30,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/link`, `GET /api/spotify/playlist`, `GET /api/youtube/playlist`,
   `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
   `POST /api/folders/songs`, `POST /api/folders/playlist-file`, `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`),
-  `GET /api/downloads`
+  `GET/DELETE /api/downloads`, `DELETE /api/downloads/:id`, `POST /api/downloads/restore` (Undo), `GET /api/lyrics`
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
   replacing a file (`Song (1).mp3`); streams JSON-line progress (`saveEventSchema`)
@@ -59,6 +59,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/spotify.ts` — Spotify song links (`/api/search?q=<link>`): title/artists/length from the
   public embed page `open.spotify.com/embed/track/<id>` (`__NEXT_DATA__`, no account or API key),
   then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first).
+  A download's album, track number, release date and 640 px cover come from the song's own page
+  (`open.spotify.com/track/<id>` fetched with a curl User-Agent, which gets its link-preview `<meta>`
+  tags: `parseTrackPage()`).
   Playlists and albums (`/api/spotify/playlist?link=`): the songs from `embed/playlist|album/<id>`
   (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there), and past 100 the
   rest from the Web API with the embed page's anonymous pass (`readEmbedAccessToken()`,
@@ -70,8 +73,20 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/youtube-playlist.ts` — YouTube playlists (`/api/youtube/playlist?link=`): yt-dlp's
   `--flat-playlist` of `youtube.com/playlist?list=<validated id>` (first 500), `parsePlaylistJson()`
   into the Spotify playlist's shape with `source: "youtube"`; refuses mixes and personal lists
-- `server/audio.ts` — yt-dlp and ffmpeg arguments (unit-tested), `fetchAudioInfo()` (metadata pass)
-  and `startAudioPipeline()` (yt-dlp → ffmpeg, used by both download and save), yt-dlp error lines
+- `server/audio.ts` — yt-dlp and ffmpeg arguments (unit-tested), `fetchAudioInfo()` (metadata pass,
+  with YouTube Music's album and date), `prepareAudioOutput()` (the output, with the cover: written
+  to a `ytdownload-cover-` temp folder for .opus/.mka, `cleanup()` after) and `startAudioPipeline()`
+  (yt-dlp → ffmpeg, used by both download and save; an MP3's tag goes out with the first chunk,
+  `withPrefix()`), yt-dlp error lines
+- `server/tags.ts` — the MP3's ID3v2.3 tag, written by the app (`id3v2Tag()`: title, artist, album,
+  year, track, `TXXX:spotify_id`, front cover) since ffmpeg can't stream one with a cover; the Ogg
+  cover block (`flacPictureBlock()`), `jpegSize()`. Pure, unit-tested
+- `server/cover.ts` — download covers: Spotify's album cover (validated `i.scdn.co` /
+  `image-cdn-xx.spotifycdn.com` URL) or the video's thumbnail (`i.ytimg.com`, built from the video
+  id), made a ≤600 px square JPEG by ffmpeg (`squareJpeg()`); `coverFor()` waits ≤10 s, never fails
+- `server/lyrics.ts` — lyrics for the player from LRCLIB's search (`lrclib.net`, free, no key; only
+  title, artist and length sent): `searchesFor()`, `pickLyrics()` (same length ±3 s, synced first),
+  `parseLrc()`; answers cached in memory. Pure parts unit-tested
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename; `server/retry-when-busy.ts` retries the renames and deletes Windows briefly
@@ -85,7 +100,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   open a playlist, Paste, download or save), laid out from components — `find-box.tsx` (the Link /
   Search / Playlist switch, the box, Paste, the copied-link suggestion), `preview-card.tsx` (the
   chosen video, Download Audio, Original audio), `search-results.tsx` (with the inline video
-  preview) and `recent-extractions.tsx` (the history, its search and filters).
+  preview) and `recent-extractions.tsx` (the history, its search and filters; removing a song and
+  Clear history, with Undo in the note — `hooks/use-history-actions.tsx`).
   `client/src/components/ui/` holds only the shadcn/ui components in use — add more with
   `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-youtube.ts` — the page's API calls as TanStack Query hooks (history,
@@ -128,6 +144,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   page, queue/shuffle/repeat, the FLAC fallback for folder songs, Media Session) and
   `components/player-bar.tsx` (fixed to the bottom; rendered by `layout.tsx`), with `components/up-next.tsx`
   (the queue, opened from the bar; Play next / Add to queue are `queueWith()` in `lib/music.ts`),
+  `components/lyrics-panel.tsx` (Lyrics, opened from the bar in Up next's place: synced lines follow
+  the song, a click seeks; `hooks/use-lyrics.ts`, `lib/lyrics.ts`),
   `hooks/use-player-shortcuts.tsx` (keyboard shortcuts; the pure part is `lib/player-keys.ts`) and
   `lib/remembered-player.ts` (the folder-song queue and position kept in localStorage, so the next
   visit carries on, paused; pure, unit-tested). `components/music-library.tsx`
@@ -152,7 +170,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
   (no history to merge). Never commit to `install` by hand
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
-  lint, type-check, dependency licences, unit tests + the music API test) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
+  lint, type-check, dependency licences, unit tests + the music and history API tests) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
   10×), and on pull requests. The YouTube API and browser tests aren't run there (GitHub's machines
   get refused)
 - `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
@@ -182,7 +200,7 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - `npm run verify` — the one check before a change is done: `prettier --check`, `eslint`, `tsc`,
   `npm run licenses` (every dependency must carry a free, open-source licence; `ffmpeg-static`, GPL like
   ffmpeg itself, is the one agreed exception, so a new copyleft or non-open package fails the check rather
-  than widening the list), then the unit tests and the music API test (no network). CI runs the same script on every push and pull
+  than widening the list), then the unit tests and the music and history API tests (no network). CI runs the same script on every push and pull
   request
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
   `scripts\windows\start.cmd` (`scripts/unix/start.sh` on macOS and Linux) does the same with install checks and opens the browser
@@ -225,8 +243,11 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - Keep everything cross-platform: set env vars in npm scripts with `cross-env`, never a bare
   `VAR=value` prefix; no `reusePort` in `listen()` (fails with ENOTSUP on Windows).
 - Downloads stream yt-dlp stdout → ffmpeg stdin → response: `bestaudio` (best free stream, usually
-  Opus ~130 kbps; no Premium/cookies) → 320k CBR MP3, LAME `-q 2`, ID3v2.3 tags. CBR is deliberate:
-  a streamed VBR file has no seek header, so players show the wrong duration.
+  Opus ~130 kbps; no Premium/cookies) → 320k CBR MP3, LAME `-q 2`. CBR is deliberate: a streamed
+  VBR file has no seek header, so players show the wrong duration. The MP3's ID3v2.3 tag (with the
+  cover) is the app's own (`id3v2Tag()`, ffmpeg runs with `-write_id3v2 0`): ffmpeg writes a tag with
+  a picture by seeking back to fix its size, which a stream can't — the tag said size 0. A streamed
+  .m4a can't hold a cover (its header goes out before any picture), so it has none.
 - A download (or save) owns two child processes, started by `startAudioPipeline()` in `audio.ts`,
   which swallows EPIPE on `ffmpeg.stdin` and kills yt-dlp once ffmpeg is done. The routes watch `res`
   "close" from the very start and call `stop()` on cancel. Unhandled stream errors or a missed kill
@@ -235,6 +256,12 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   (Ogg) for Opus, fragmented `.m4a` for AAC, `.mka` otherwise. The metadata pass uses the same
   `bestaudio` selector and the stream is pinned to its `format_id`, so container and codec match.
   The format enum and `buildDownloadUrl()` live in `shared/routes.ts`.
+- Covers: a download never waits more than `COVER_WAIT_MS` for its cover, nor fails without one.
+  Only fixed hosts are fetched (see `server/cover.ts`); the Spotify cover URL is checked against them.
+- History changes (`DELETE /api/downloads[/:id]`, `POST /api/downloads/restore`) are allowed from any
+  device using the app, from its own page only (`sameOriginOnly()` in `local-only.ts`): the history
+  is shared like the downloads. Removing never touches files. Restore re-ids an entry whose id was
+  reused meanwhile (ids are max+1, so they restart after Clear).
 - The history search has no API: the page filters what `/api/downloads` returns. Keep that endpoint
   cheap (it's polled while a download runs) — the request log truncates JSON bodies to 200 chars.
 - A download is added to the history only after it fully succeeds (both processes exit 0 and the

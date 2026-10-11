@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ListMusic,
   Loader2,
+  MicVocal,
   Music,
   Pause,
   Play,
@@ -15,6 +16,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+import { LyricsPanel } from "@/components/lyrics-panel";
 import { UpNext } from "@/components/up-next";
 import { usePlayer, usePlayerTime } from "@/hooks/use-player";
 import { usePlayerShortcuts } from "@/hooks/use-player-shortcuts";
@@ -49,11 +51,21 @@ export function PlayerBar() {
   const { current, status, cover, upNextOpen, setUpNextOpen } = player;
   usePlayerShortcuts();
   const closeUpNext = useCallback(() => setUpNextOpen(false), [setUpNextOpen]);
+  // The lyrics open in the same place as Up next: one at a time.
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
   // A note in the corner would cover Up next, which shows what it said anyway.
   const { dismiss } = useToast();
   const toggleUpNext = () => {
-    if (!upNextOpen) dismiss();
+    if (!upNextOpen) {
+      dismiss();
+      setLyricsOpen(false);
+    }
     setUpNextOpen(!upNextOpen);
+  };
+  const toggleLyrics = () => {
+    if (!lyricsOpen) setUpNextOpen(false);
+    setLyricsOpen(!lyricsOpen);
   };
 
   // A folder song without a cover answers with nothing: show the note instead.
@@ -91,6 +103,7 @@ export function PlayerBar() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.15)] backdrop-blur-xl"
       >
         {upNextOpen && <UpNext onClose={closeUpNext} />}
+        {lyricsOpen && !upNextOpen && <LyricsPanel onClose={closeLyrics} />}
         <div className="mx-auto max-w-5xl px-3 sm:px-6">
           <div className="flex items-center gap-2 pt-2 text-[11px] tabular-nums text-muted-foreground sm:gap-3">
             <span className="w-10 text-right">
@@ -236,6 +249,17 @@ export function PlayerBar() {
               </div>
             )}
 
+            <button
+              type="button"
+              onClick={toggleLyrics}
+              aria-expanded={lyricsOpen}
+              aria-controls="player-lyrics"
+              aria-label="Lyrics"
+              title="Lyrics"
+              className={cn(iconButton, lyricsOpen && "text-primary")}
+            >
+              <MicVocal className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={toggleUpNext}

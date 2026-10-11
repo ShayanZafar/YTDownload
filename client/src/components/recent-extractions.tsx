@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { Download, FileAudio, History, Loader2, X } from "lucide-react";
+import { Download, FileAudio, History, Loader2, Trash2, X } from "lucide-react";
 import { buildDownloadUrl, type DownloadFormat } from "@shared/routes";
 import type { Download as HistoryEntry } from "@shared/schema";
 import { Highlight, HistorySearch } from "@/components/history-search";
+import { useHistoryActions } from "@/hooks/use-history-actions";
 import { formatBytes, timeAgo, validDate } from "@/lib/format";
 import {
   filterHistory,
@@ -35,7 +36,8 @@ type RecentExtractionsProps = {
 
 /**
  * Recent Extractions: the download history with Redownload links, searched
- * and filtered in the browser (lib/history-filter.ts), 25 at a time.
+ * and filtered in the browser (lib/history-filter.ts), 25 at a time. A song
+ * can be taken out of it (×), or the whole list cleared, with Undo after.
  */
 export function RecentExtractions({
   history: allHistory,
@@ -46,6 +48,9 @@ export function RecentExtractions({
   onDownload,
 }: RecentExtractionsProps) {
   const isOriginal = format === "original";
+  const historyActions = useHistoryActions();
+  // "Clear history" asks first, in place of the button.
+  const [confirmingClear, setConfirmingClear] = useState(false);
   // Searching and filtering the list (all in the browser).
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyExact, setHistoryExact] = useState(false); // a suggestion was picked
@@ -83,6 +88,40 @@ export function RecentExtractions({
               : `${allHistory.length} ${allHistory.length === 1 ? "download" : "downloads"}`}
           </span>
         )}
+        {allHistory.length > 0 &&
+          (confirmingClear ? (
+            <div role="group" aria-label="Clear the history?" className="flex items-center gap-1">
+              <span className="hidden text-xs text-muted-foreground sm:inline">Clear all?</span>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => {
+                  setConfirmingClear(false);
+                  clearHistoryFilters();
+                  void historyActions.clear();
+                }}
+                className="rounded-lg bg-destructive px-2.5 py-1 text-xs font-medium text-destructive-foreground hover:bg-destructive/90 transition-colors"
+              >
+                Clear history
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingClear(false)}
+                className="rounded-lg px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingClear(true)}
+              title="Empty the list (the downloaded files stay)"
+              className="rounded-lg px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            >
+              Clear history
+            </button>
+          ))}
       </div>
 
       {allHistory.length > 0 && (
@@ -224,6 +263,15 @@ export function RecentExtractions({
                       <span className="hidden sm:inline">Redownload</span>
                     </a>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => void historyActions.remove(item)}
+                    aria-label={`Remove ${item.title} from the history`}
+                    title="Remove from the history (the file stays)"
+                    className="-mr-1.5 shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </li>
               );
             })}

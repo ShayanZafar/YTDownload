@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   downloadSchema,
   folderEntrySchema,
+  lyricsSchema,
   folderListingSchema,
   musicLibrarySchema,
   playlistFileSongSchema,
@@ -44,6 +45,49 @@ export const api = {
       path: "/api/downloads" as const,
       responses: {
         200: z.array(downloadSchema),
+      },
+    },
+    /** Takes one entry out of the history (the file it downloaded stays). Answers with the entry. */
+    remove: {
+      method: "DELETE" as const,
+      path: "/api/downloads/:id" as const,
+      responses: { 200: downloadSchema, 404: errorSchemas.notFound },
+    },
+    /** Empties the history. Answers with the entries it had, so they can be put back. */
+    clear: {
+      method: "DELETE" as const,
+      path: "/api/downloads" as const,
+      responses: { 200: z.array(downloadSchema) },
+    },
+    /** Puts removed entries back (Undo), in date order; entries still there are skipped. */
+    restore: {
+      method: "POST" as const,
+      path: "/api/downloads/restore" as const,
+      input: z.object({ entries: z.array(downloadSchema).max(1000, "Too many entries") }),
+      responses: { 200: z.array(downloadSchema) },
+    },
+  },
+  /** A song's lyrics (from LRCLIB), for the music player. */
+  lyrics: {
+    get: {
+      method: "GET" as const,
+      path: "/api/lyrics" as const,
+      query: z.object({
+        title: z.string().trim().min(1, "Which song?").max(300, "That title is too long"),
+        artist: z.string().trim().max(300, "That artist is too long").optional(),
+        /** The song's length in seconds, to tell recordings apart. */
+        duration: z.coerce
+          .number()
+          .int()
+          .positive()
+          .max(24 * 60 * 60)
+          .optional(),
+      }),
+      responses: {
+        /** null: LRCLIB doesn't have them. */
+        200: z.object({ lyrics: lyricsSchema.nullable() }),
+        400: errorSchemas.validation,
+        502: errorSchemas.internal,
       },
     },
   },

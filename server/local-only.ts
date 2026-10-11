@@ -60,3 +60,21 @@ export function localOnly(notLocal = NOT_LOCAL): RequestHandler {
     next();
   };
 }
+
+/**
+ * For changes any device using the app may make (the download history): only
+ * this app's own page may make them, sent as JSON when they carry a body, but
+ * from any device — the history is shared by everyone using the app, like
+ * the downloads themselves.
+ */
+export function sameOriginOnly(): RequestHandler {
+  return (req, res, next) => {
+    if (!isSameOriginRequest(req)) {
+      return res.status(403).json({ message: "Only this app's own page can do that." });
+    }
+    if (req.method === "POST" && !req.is("application/json")) {
+      return res.status(415).json({ message: "Send the request as JSON." });
+    }
+    next();
+  };
+}

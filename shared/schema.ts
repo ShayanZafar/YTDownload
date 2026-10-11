@@ -21,6 +21,24 @@ export const downloadSchema = z.object({
 
 export type Download = z.infer<typeof downloadSchema>;
 
+/** One line of synced lyrics: when it's sung (seconds into the song) and the words. */
+export const lyricLineSchema = z.object({ time: z.number(), text: z.string() });
+export type LyricLine = z.infer<typeof lyricLineSchema>;
+
+/** A song's lyrics, from LRCLIB (server/lyrics.ts). */
+export const lyricsSchema = z.object({
+  /** The lines with their times, when LRCLIB has them; the player follows along. */
+  synced: z.array(lyricLineSchema).nullable(),
+  /** The words without times. */
+  plain: z.string().nullable(),
+  /** LRCLIB says the song has no words. */
+  instrumental: z.boolean(),
+  /** The song LRCLIB found, as it names it. */
+  track: z.string(),
+  artist: z.string(),
+});
+export type Lyrics = z.infer<typeof lyricsSchema>;
+
 /** One song search result (a YouTube video). */
 export const searchResultSchema = z.object({
   id: z.string(),

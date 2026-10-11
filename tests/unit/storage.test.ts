@@ -99,3 +99,38 @@ describe("FileStorage (download history)", () => {
     expect(await fs.readdir(path.dirname(file))).toEqual(["history.json"]);
   });
 });
+
+describe("FileStorage: managing the history", () => {
+  it("takes out one entry, clears the rest, and puts them back newest first, once", async () => {
+    const storage = new FileStorage(() => file);
+    const entry = (id: number, title: string, daysAgo: number) => ({
+      id,
+      url: `https://www.youtube.com/watch?v=${title.repeat(11)}`,
+      title,
+      downloadedAt: new Date(Date.now() - daysAgo * 86_400_000).toISOString(),
+    });
+    const [c, b, a] = [entry(3, "C", 1), entry(2, "B", 2), entry(1, "A", 3)];
+    await storage.restoreDownloads([c, b, a]);
+
+    expect(await storage.removeDownload(b.id)).toEqual(b);
+    expect(await storage.removeDownload(b.id)).toBeUndefined();
+    expect((await storage.getDownloads()).map((e) => e.title)).toEqual(["C", "A"]);
+
+    expect(await storage.restoreDownloads([b])).toEqual([b]);
+    expect((await storage.getDownloads()).map((e) => e.title)).toEqual(["C", "B", "A"]);
+
+    const cleared = await storage.clearDownloads();
+    expect(cleared.map((e) => e.title)).toEqual(["C", "B", "A"]);
+    expect(await storage.getDownloads()).toEqual([]);
+    // A download that finishes meanwhile stays first (and gets an old id: the
+    // list was empty); the others come back after it, each with its own id.
+    const d = await storage.createDownload({ url: "https://youtu.be/ddddddddddd", title: "D" });
+    expect(d.id).toBe(a.id);
+    const back = await storage.restoreDownloads([...cleared, ...cleared]);
+    expect(back.map((e) => e.title)).toEqual(["C", "B", "A"]);
+    const list = await storage.getDownloads();
+    expect(list.map((e) => e.title)).toEqual(["D", "C", "B", "A"]);
+    expect(new Set(list.map((e) => e.id)).size).toBe(4);
+    expect(list.find((e) => e.title === "C")?.id).toBe(c.id);
+  });
+});
