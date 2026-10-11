@@ -1,6 +1,6 @@
 ---
 name: refactor
-description: Measure what makes this code hard to change (duplication, long functions and files, dead code, churn) and apply the few cleanups with the best payoff, with npm run verify passing. Runs monthly in CI as a pull request; type /refactor to run it locally.
+description: Measure what makes this code hard to change (duplication, long functions and files, dead code, churn) and apply the few cleanups with the best payoff, with npm run verify passing; also fixes drift in the scripts, docs references and workflows. Runs monthly in CI as a pull request; type /refactor to run it locally.
 disable-model-invocation: true
 allowed-tools: Read Glob Grep Edit MultiEdit Write Bash(npm run verify) Bash(npm run check) Bash(npx *) Bash(git *) Bash(gh pr *) Bash(wc *) Bash(sort *) Bash(uniq *) Bash(head *) Bash(tail *) Bash(xargs *)
 ---
@@ -39,7 +39,15 @@ If the code you'll change has no test that would fail when its behavior changed,
 
 After every cleanup, run `npm run verify 2>&1 | tail -40`. It must pass before the commit. If a cleanup needs more than a small test change to keep verify green, revert it and pick another.
 
-## 4. Deliver
+## 4. Setup files (mechanical fixes only; doesn't count against the three)
+
+The files that steer sessions drift as the code changes. Fix what is mechanical, in one extra commit `setup: <what changed>`; judgment calls (shortening CLAUDE.md, merging docs) are for the user's `/tune`, so only report them.
+
+- References: every `scripts/…`, `npm run …`, `docs/….md` and `.github/workflows/….yml` named in `CLAUDE.md`, `README.md`, `docs/` and `.claude/skills/` exists (Grep for them, confirm with Glob); fix the name, or delete the sentence if the thing is gone.
+- Clickable scripts: each double-click action has a `.cmd`, a `.command` and a `.sh` (helpers exempt); `git ls-files --eol scripts` shows `i/lf` for all of them; `git ls-files -s scripts` shows `100755` for every `.sh` and `.command` (`git update-index --chmod=+x <file>` fixes it); a `.command` only `cd`s and `exec`s its `.sh`; the three do the same steps.
+- Workflows: the names `auto-merge.yml` lists (`workflows:`, `ON_MAIN`) match the `name:` of real workflows; `uses:` versions agree across workflows.
+- Sizes, reported in the PR body: `wc -w CLAUDE.md .claude/skills/*/SKILL.md`. `CLAUDE.md` is sent with every request; over 600 words, say so and what you'd move to the docs, but don't move it here.
+## 5. Deliver
 
 - In CI (`GITHUB_ACTIONS` is set): create a branch `refactor/<year>-<month>` from the current `main`, push it, and open one pull request with `gh pr create` titled "Monthly refactor: <one line>". The body lists each cleanup (what, why, the measurement it improves), the before/after numbers from step 1, and anything the reviewer should look at closely. If a PR for that branch already exists, push to it instead.
 - Locally: leave the commits on the current branch and summarize the same way in the conversation.
