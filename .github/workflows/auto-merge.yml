@@ -68,7 +68,8 @@ jobs:
           fi
 
           # Every check on this commit must have passed (skipped is fine); none may still be running.
-          checks=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '[.check_runs[] | select(.name != "Auto-merge")]')
+          # A re-run leaves the earlier attempt in the list, so only the latest run of each check counts.
+          checks=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '[.check_runs[] | select(.name != "Auto-merge")] | group_by(.name) | map(max_by(.id))')
           jq -r '.[] | "  \(.name): \(.status) \(.conclusion // "")"' <<<"$checks"
           if [ "$(jq 'length' <<<"$checks")" = "0" ]; then
             echo "No checks ran on this commit: left for a person."
