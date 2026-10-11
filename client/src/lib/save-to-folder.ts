@@ -28,13 +28,20 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** A 429's "try again in this many seconds" (YouTube is limiting the computer). */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
   }
 }
 
-async function errorFrom(res: Response): Promise<ApiError> {
+/** The app's error for a response that wasn't OK, from its JSON body (or the status alone). */
+export async function errorFrom(res: Response): Promise<ApiError> {
   const data: unknown = await res.json().catch(() => undefined);
+  const limited = errorSchemas.rateLimited.safeParse(data);
+  if (limited.success) {
+    return new ApiError(limited.data.message, res.status, limited.data.retryAfterSeconds);
+  }
   const parsed = errorSchemas.internal.safeParse(data);
   return new ApiError(
     parsed.success ? parsed.data.message : `Something went wrong (HTTP ${res.status}).`,

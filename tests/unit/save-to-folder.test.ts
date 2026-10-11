@@ -81,6 +81,27 @@ describe("saveOnServer", () => {
     await expect(failure).rejects.toMatchObject({ status: 404, message: /doesn't exist/ });
   });
 
+  it("passes on how long to wait when YouTube is limiting the computer (a 429)", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            message: "YouTube is limiting this computer. Wait about 10 minutes, then try again.",
+            retryAfterSeconds: 540,
+            source: "youtube",
+          }),
+          { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "540" } },
+        ),
+    );
+    const failure = saveOnServer(SONG, { fetchImpl });
+    await expect(failure).rejects.toBeInstanceOf(ApiError);
+    await expect(failure).rejects.toMatchObject({
+      status: 429,
+      retryAfterSeconds: 540,
+      message: /limiting this computer/,
+    });
+  });
+
   it("notices when the answer stops before the file is saved", async () => {
     const fetchImpl = streamingFetch([`${JSON.stringify({ type: "progress", bytes: 5 })}\n`]);
     await expect(saveOnServer(SONG, { fetchImpl })).rejects.toThrow(/stopped answering/);
