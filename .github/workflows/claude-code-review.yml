@@ -52,6 +52,7 @@ jobs:
           # The monthly refactor pull request is opened by Claude's own GitHub App (claude[bot]);
           # without this the action refuses to review it.
           allowed_bots: "claude"
+          show_full_output: true
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
