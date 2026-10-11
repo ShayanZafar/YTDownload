@@ -372,22 +372,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const canonical = `https://www.youtube.com/watch?v=${videoId}`;
 
-      const info = (await youtubeGuard.run({
+      // Only the title and thumbnail are kept (and cached): yt-dlp's whole
+      // answer lists every format and runs to hundreds of KB.
+      const video = await youtubeGuard.run({
         key: videoCacheKey(videoId),
-        attempt: () =>
-          youtubedl(canonical, {
+        attempt: async () => {
+          const info = (await youtubedl(canonical, {
             dumpSingleJson: true,
             skipDownload: true,
             ...YT_DLP_BASE_FLAGS,
-          }),
+          })) as YtDlpInfo;
+          return { title: info.title ?? "Untitled", thumbnail: pickThumbnail(info) };
+        },
         stillWanted: stillWanted(res),
-      })) as YtDlpInfo;
-
-      res.status(200).json({
-        title: info.title ?? "Untitled",
-        thumbnail: pickThumbnail(info),
-        url: input.url,
       });
+
+      res.status(200).json({ ...video, url: input.url });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({

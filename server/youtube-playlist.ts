@@ -164,16 +164,16 @@ export async function fetchYouTubePlaylist(
   { stillWanted }: { stillWanted?: () => boolean } = {},
 ): Promise<SpotifyPlaylist> {
   const id = youtubePlaylistIdOf(link);
-  let raw: unknown;
   try {
-    raw = await youtubeGuard.run({
+    // Parsed inside, so the cache holds the playlist as sent, not yt-dlp's whole listing.
+    return await youtubeGuard.run({
       key: playlistCacheKey(id),
-      attempt: () => runYtDlpJson(ytDlpPlaylistArgs(id), PLAYLIST_TIMEOUT_MS),
+      attempt: async () =>
+        parsePlaylistJson(await runYtDlpJson(ytDlpPlaylistArgs(id), PLAYLIST_TIMEOUT_MS), id),
       stillWanted,
     });
   } catch (err) {
     if (err instanceof YouTubeLimited) throw err;
     throw playlistFailure(err instanceof Error ? err.message : String(err));
   }
-  return parsePlaylistJson(raw, id);
 }

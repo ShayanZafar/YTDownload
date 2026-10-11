@@ -224,6 +224,7 @@ describe("SourceHealthStore", () => {
   });
 
   afterEach(async () => {
+    await store.flush(); // a write the store has on a timer must land before the folder goes
     await fs.rm(dir, { recursive: true, force: true });
   });
 

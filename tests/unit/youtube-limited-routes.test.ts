@@ -8,7 +8,9 @@ import path from "path";
 import {
   COOLDOWN_MS,
   LIMITED_MESSAGE,
+  playlistCacheKey,
   searchCacheKey,
+  videoCacheKey,
   youtubeGuard,
 } from "../../server/youtube-limits";
 import { sourceHealth } from "../../server/source-health";
@@ -103,6 +105,31 @@ describe("while YouTube is limiting this computer", () => {
     const res = await request(app).get("/api/search").query({ q: "Rick  Astley" });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ results });
+  });
+
+  it("still answers a video and a playlist it has cached — as they're sent, not yt-dlp's JSON", async () => {
+    const video = { title: "Never Gonna Give You Up", thumbnail: "https://i.ytimg.com/vi/x/0.jpg" };
+    youtubeGuard.cache.set(videoCacheKey("dQw4w9WgXcQ"), video, Date.now());
+    const playlist = {
+      source: "youtube",
+      kind: "playlist",
+      id: "PLBCF2DAC6FFB574DE",
+      url: PLAYLIST,
+      name: "Classics",
+      by: null,
+      image: null,
+      tracks: [],
+      maybeMore: false,
+    };
+    youtubeGuard.cache.set(playlistCacheKey("PLBCF2DAC6FFB574DE"), playlist, Date.now());
+    youtubeGuard.cooldown.start(Date.now());
+
+    const info = await request(app).post("/api/video/info").send({ url: VIDEO });
+    expect(info.status).toBe(200);
+    expect(info.body).toEqual({ ...video, url: VIDEO });
+    const listed = await request(app).get("/api/youtube/playlist").query({ link: PLAYLIST });
+    expect(listed.status).toBe(200);
+    expect(listed.body).toEqual(playlist);
   });
 
   it("the cooldown counts down in the answer", async () => {
