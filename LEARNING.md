@@ -22,7 +22,7 @@ If something feels arbitrary, jump to [Why we chose what we chose](#why-we-chose
 | `DbContext` / repository              | **`FileStorage` in `server/storage.ts`**     | Reads and writes `data/history.json`.                                                                                      |
 | DTOs / models                         | **`shared/schema.ts`**                       | Zod schemas + inferred TypeScript types — the single source of truth for both sides.                                       |
 | FluentValidation / DataAnnotations    | **Zod**                                      | Schema-based runtime validation. Used to validate request bodies in `server/routes.ts`.                                    |
-| Razor / Blazor                        | **React + JSX/TSX**                          | Server-rendered HTML at startup, then SPA navigation. Bigger conceptual leap; see §7.                                      |
+| Razor / Blazor                        | **React + JSX/TSX**                          | A single-page app: one HTML shell, then React renders everything in the browser. Bigger conceptual leap; see §7.           |
 | Refit + `IMemoryCache` + `HttpClient` | **TanStack Query (`@tanstack/react-query`)** | Typed HTTP fetching with built-in caching, retries, and request deduplication for the frontend.                            |
 | `appsettings.json` + environment      | **`.env` file + `process.env`**              | Same idea, simpler. See `.env.example`.                                                                                    |
 | `launchSettings.json`                 | **`package.json` "scripts"**                 | `npm run dev` ↔ `dotnet run`.                                                                                              |
@@ -81,7 +81,7 @@ server/                     ← Express API (the equivalent of Api + Domain + Da
   audio.ts                  ← yt-dlp / ffmpeg pipeline arguments
   youtube-url.ts            ← Pure domain helpers
 shared/                     ← Code shared by client AND server (no .NET equivalent)
-  schema.ts                 ← Zod schema for a history entry
+  schema.ts                 ← Zod schemas: history entry, search result, settings, …
   routes.ts                 ← API contract: paths, methods, request/response shapes
 tests/
   unit/                     ← Pure-function tests
@@ -153,7 +153,7 @@ The routes that touch your disk (`server/save.ts`, `server/folders.ts`) show a f
 
 ## 5. Storage: a JSON file instead of Entity Framework Core
 
-The only thing this app persists is the "Recent Extractions" list: at most 1,000 small entries (about 200 KB), for one user. A database (it used to be Postgres, via Drizzle) meant Docker, a connection string and a schema-push step just to show that list. So it's a JSON file, `data/history.json`, and there's no ORM at all.
+The main thing this app persists is the "Recent Extractions" list: at most 1,000 small entries (about 200 KB), for one user. (The only other is the **Save to** folder setting, in `data/settings.json`, stored the same way by `server/settings.ts`.) A database (it used to be Postgres, via Drizzle) meant Docker, a connection string and a schema-push step just to show that list. So it's a JSON file, `data/history.json`, and there's no ORM at all.
 
 ### Defining the shape
 
@@ -164,15 +164,16 @@ export const downloadSchema = z.object({
   url: z.string(),
   title: z.string(),
   downloadedAt: z.string(), // ISO 8601, UTC
+  spotifyId: z.string().optional(), // the Spotify song it was found from, if any
 });
 export type Download = z.infer<typeof downloadSchema>; // ← the "entity"
-export type InsertDownload = Pick<Download, "url" | "title">; // ← the create DTO
+export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId">; // ← the create DTO
 ```
 
 The C# equivalent is a record plus a validator:
 
 ```csharp
-public record Download(int Id, string Url, string Title, DateTime DownloadedAt);
+public record Download(int Id, string Url, string Title, DateTime DownloadedAt, string? SpotifyId = null);
 ```
 
 ### Reading and writing
@@ -217,7 +218,7 @@ If the app ever had several server instances, many users, or needed to search/fi
 
 ```ts
 // shared/routes.ts
-input: z.object({ url: z.string().url() }),
+input: z.object({ url: z.url() }),
 
 // server/routes.ts — runtime check at the controller boundary
 const input = api.video.info.input.parse(req.body);
@@ -231,7 +232,7 @@ Zod errors are caught in the route handler:
 ```ts
 } catch (err) {
   if (err instanceof z.ZodError) {
-    return res.status(400).json({ message: err.errors[0].message, field: err.errors[0].path.join(".") });
+    return res.status(400).json({ message: err.issues[0].message, field: err.issues[0].path.join(".") });
   }
   // ...
 }
@@ -344,12 +345,13 @@ expect(res.status).toBe(200);
 
 | Job        | Tool                     | .NET equivalent             |
 | ---------- | ------------------------ | --------------------------- |
-| Type-check | `npx tsc --noEmit`       | `dotnet build`              |
+| Type-check | `npm run check` (`tsc`)  | `dotnet build`              |
 | Lint       | `npx eslint .`           | StyleCop / .NET analyzers   |
 | Format     | `npx prettier --write .` | `dotnet format`             |
 | Dev server | `npm run dev`            | `dotnet watch run`          |
 | Build      | `npm run build`          | `dotnet publish -c Release` |
 | Run tests  | `npx vitest run`         | `dotnet test`               |
+| All checks | `npm run verify`         | a CI build + test step      |
 
 The `Commands` section of `TECHNICAL.md` has the full list with suggested npm script entries.
 
@@ -373,7 +375,7 @@ This is the section that actually answers "why didn't you just use X?"
 
 **shadcn/ui over Material UI / Chakra.** shadcn isn't an installed package — you copy components into your repo (`client/src/components/ui/`) so you own them. No version-upgrade pain, no vendor lock-in.
 
-**`yt-dlp` (via `youtube-dl-exec`) over pure-JS scrapers like `ytdl-core` / `youtubei.js`.** YouTube actively blocks pure-JS scrapers via PoToken enforcement; `yt-dlp` is the only extractor with a community large enough to keep up. Trade-off: on Linux/macOS it needs Python 3.10+ on the host (on Windows it's a standalone `.exe`).
+**`yt-dlp` (via `youtube-dl-exec`) over pure-JS scrapers like `ytdl-core` / `youtubei.js`.** YouTube actively blocks pure-JS scrapers via PoToken enforcement; `yt-dlp` is the only extractor with a community large enough to keep up. Trade-off: it's a separate program to keep up to date (`npm run update-yt-dlp`). No Python is needed: Windows gets the standalone `.exe`, and on macOS/Linux `scripts/yt-dlp.mjs` swaps in yt-dlp's standalone build after `npm install`.
 
 **No DI container.** For a single-team app with one service implementation per interface, `import` + a singleton is enough. We'd reach for a container if we ever had multiple swappable implementations or a complex object graph.
 

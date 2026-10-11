@@ -22,12 +22,12 @@ This document covers the project's architecture, local development setup, enviro
 - **TypeScript** (executed via `tsx` in development, bundled with `esbuild` in production)
 - **youtube-dl-exec** wrapping a bundled **yt-dlp** binary for YouTube video info & audio stream extraction. On every system it's yt-dlp's standalone build, so no Python is needed: youtube-dl-exec downloads `yt-dlp.exe` on Windows, and `scripts/yt-dlp.mjs` swaps in the standalone build on macOS and Linux (see [Local Development Setup](#local-development-setup)). yt-dlp is told to use Node (`--js-runtimes node`) as the JavaScript runtime YouTube now requires, so nothing extra needs installing for that.
 - **ffmpeg-static** — an ffmpeg binary fetched by `npm install` (any OS, no system install) that converts the audio to MP3 on the fly. Set `FFMPEG_BIN` to use a different ffmpeg.
-- **music-metadata** — reads the tags (title, artist, Spotify song) of the audio files in the **Save to** folder, so the playlist panel can tell which songs are there
+- **music-metadata** — reads the tags (title, artist, Spotify song) of the audio files in the **Save to** folder, so the playlist panel can tell which songs are there and the music player can list them; its browser build reads the tags of songs picked on a phone
 - **Zod 4** for request validation
 
 ### Storage
 
-- **No database.** The download history is a small JSON file (`data/history.json`), written by `server/storage.ts`. Nothing to install or run.
+- **No database.** The download history is a small JSON file (`data/history.json`), written by `server/storage.ts`, and the settings (the **Save to** folder) another (`data/settings.json`), written by `server/settings.ts`. Nothing to install or run.
 
 ---
 
@@ -54,6 +54,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers (the parsing is shared/youtube-link.ts)
 │   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first
 │   ├── spotify.ts             # Spotify song links → title, artists, length (public embed page)
+│   ├── youtube-playlist.ts    # YouTube playlists: yt-dlp --flat-playlist → the playlist panel's songs
 │   ├── library.ts             # Which of a playlist's songs are in the Save to folder (tags + names)
 │   ├── playlist-file.ts       # "Save playlist file": a playlist's songs in the folder, as an .m3u8 there
 │   ├── music.ts               # The music player: the folder's songs by id, FLAC conversions, covers
@@ -75,18 +76,27 @@ This document covers the project's architecture, local development setup, enviro
 │   └── spotify-names.ts       # cleanTrackTitle(), spotifyFileName(): "Artist - Title"
 ├── scripts/
 │   ├── build.ts               # Production build (npm run build)
+│   ├── clean.ts               # npm run clean: what test runs leave behind
+│   ├── leftovers.ts           # Each test run's globalSetup: deletes what stopped runs left
 │   ├── make-icons.ts          # The app's icons, drawn by Chrome (npx tsx scripts/make-icons.ts)
 │   ├── yt-dlp.mjs             # After npm install: yt-dlp's standalone build on macOS/Linux; npm run update-yt-dlp
 │   ├── install/               # The install branch's README, .gitignore and Start/Stop/Update shortcuts
 │   └── windows/               # Double-click helpers: start, stop, update, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
-├── .github/workflows/
-│   ├── install.yml            # Builds the ready-to-run app onto the install branch after every push to main
-│   └── tests.yml              # Type-check, lint and unit tests on Linux and Windows (macOS weekly)
+├── .github/
+│   ├── workflows/
+│   │   ├── install.yml        # Builds the ready-to-run app onto the install branch after every push to main
+│   │   ├── tests.yml          # npm run verify on Linux and Windows (macOS weekly), on pushes and pull requests
+│   │   ├── claude-code-review.yml # Claude reviews each pull request once, with inline comments
+│   │   └── claude-refactor.yml # Monthly: Claude runs /refactor and opens a pull request
+│   ├── dependabot.yml         # Monthly grouped npm and GitHub Actions updates
+│   └── pull_request_template.md # The checklist a pull request starts with
+├── .claude/skills/            # Claude Code skills: /verify (npm run verify), /refactor
 ├── docs/
 │   └── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
 ├── vite.config.ts             # Vite configuration
 ├── tests/                     # unit, api (Vitest) and browser (Playwright) tests
 ├── CLAUDE.md                  # Project notes Claude Code reads automatically
+├── LEARNING.md                # The stack, mapped onto .NET concepts
 └── package.json
 ```
 
@@ -105,7 +115,7 @@ The Express server and the Vite dev server are mounted on a single port (default
    - **Spotify song link:** also a search — `GET /api/search?q=<the link>`, see [Spotify song links](#spotify-song-links).
    - **Spotify playlist or album link** (the **Playlist** mode, though any box takes one): opens the playlist panel — `GET /api/spotify/playlist?link=<the link>`, see [Spotify playlists](#spotify-playlists). Picking a song there is a search for that song's link.
    - **YouTube playlist link** (`youtube.com/playlist?list=…`): opens the same panel — `GET /api/youtube/playlist?link=<the link>`, see [YouTube playlists](#youtube-playlists). Picking a video opens it straight away.
-   - **Search:** the frontend calls `GET /api/search?q=...`. The backend runs `yt-dlp --flat-playlist --dump-single-json ytsearch12:<query>` (`server/search.ts`), which lists YouTube's top results in a few seconds without opening each video, then ranks them (below) and returns up to 8. Picking a result fills the same preview card with the result's own title and thumbnail — no second `yt-dlp` call. The results' **Close** button hides them (resets the search) and leaves the preview card as it is.
+   - **Search:** the frontend calls `GET /api/search?q=...`. The backend runs `yt-dlp --flat-playlist --dump-single-json ytsearch12:<query>` (`server/search.ts`), which lists YouTube's top results in a few seconds without opening each video, then ranks them (below) and returns up to 8. Picking a result fills the same preview card with the result's own title and thumbnail — no second `yt-dlp` call. Clicking a result's thumbnail plays its video right there, under that result, in YouTube's embedded player (`client/src/components/video-preview.tsx`; `youtubeEmbedUrl()` in `shared/youtube-link.ts` builds the `youtube-nocookie.com` address from a validated id), one at a time and before it's chosen; the app's own player pauses meanwhile. The results' **Close** button hides them (resets the search) and leaves the preview card as it is.
 2. Both paths end at the preview card, which links to the download endpoint for that video.
 3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...`. The server does a metadata pass (for the filename and ID3 tags), then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream YouTube serves without an account (usually Opus at ~130 kbps) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies YouTube's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
    The file is named after the video's title, or after `?name=` when you renamed it in the preview card (click the title — `client/src/components/renameable-title.tsx`). Either way the name goes through `safeFileName()` in `shared/filename.ts` — used by the page too, so the name shown is the name saved: characters Windows can't store are replaced (`/` → `-`, `:` and `|` → `-`, `?*"<>` dropped), a typed `.mp3` is dropped, reserved names like `CON` get a `_`, and it's capped at 150 characters. Accents and non-Latin letters are kept: `res.attachment()` sends both an ASCII `filename` and a UTF-8 `filename*` (RFC 6266), which browsers prefer. The ID3 tags and the history keep the video's title.
@@ -429,7 +439,7 @@ If you ever host it (on a VPS, Render, Fly.io, a Docker container, …), the pic
 ```mermaid
 flowchart LR
   subgraph Host["Host / container"]
-    Node2["Node.js (dist/index.cjs)<br/>+ bundled yt-dlp + ffmpeg binaries<br/>+ Python 3 runtime (Linux)"]
+    Node2["Node.js (dist/index.cjs)<br/>+ bundled yt-dlp + ffmpeg binaries"]
   end
   Internet["Internet users"] -- HTTPS --> Node2
   Node2 -- HTTPS --> YouTubeProd["YouTube"]
@@ -439,7 +449,7 @@ flowchart LR
 Notes on this topology:
 
 - The only persistent data is `data/history.json` and `data/settings.json`. In a container, put them on a persistent volume (or point `HISTORY_FILE` / `SETTINGS_FILE` at one), or accept that they reset on redeploy.
-- `yt-dlp` and `ffmpeg` are fetched into `node_modules/` at install time (`youtube-dl-exec/bin/`, `ffmpeg-static/`), so nothing is installed at runtime. On Linux we **do** need Python 3.10+ in the container, because the Linux yt-dlp build is a Python script.
+- `yt-dlp` and `ffmpeg` are fetched into `node_modules/` at install time (`youtube-dl-exec/bin/`, `ffmpeg-static/`), so nothing is installed at runtime. No Python is needed: on Linux, `scripts/yt-dlp.mjs` (the `postinstall`) puts yt-dlp's standalone build in place of the Python one.
 - There's no object storage. Audio is streamed from `yt-dlp` through `ffmpeg` to the client and never touches disk on the server — except with **Save to**, which only a browser on the same computer can use.
 
 ### Failure modes
@@ -481,8 +491,8 @@ This stack is designed for a small-to-medium audience. Here's where it would cra
 | Subprocess fan-out             | Each download runs a `yt-dlp` + `ffmpeg` pair; MP3 encoding is the main CPU cost                          | Add a per-instance concurrency cap (e.g., a small `p-limit` queue around the download pipeline).                  |
 | Outbound bandwidth from server | Every byte of audio flows server → client                                                                 | Move to a presigned-URL or proxy-and-cache model, where popular videos hit a CDN instead of `yt-dlp` per request. |
 | History in a JSON file         | Multiple server instances, or a history far longer than the 1,000-entry cap                               | Swap `FileStorage` for a database-backed `IStorage` (SQLite or Postgres); routes don't need to change.            |
-| `yt-dlp` extractor rot         | YouTube periodically changes its players and `yt-dlp` ships a fix                                         | Bump the `youtube-dl-exec` dependency on a cadence (or pin a specific `yt-dlp` binary release).                   |
-| No background job queue        | If a future feature needs work to outlive the request (e.g., batch playlist downloads)                    | Introduce a queue (BullMQ + Redis is the conventional pick) and a worker process.                                 |
+| `yt-dlp` extractor rot         | YouTube periodically changes its players and `yt-dlp` ships a fix                                         | Run `npm run update-yt-dlp` (`yt-dlp -U`) on a cadence (or pin a specific `yt-dlp` binary release).               |
+| No background job queue        | If a future feature needs work to outlive the request ("Download all" is driven by the open page today)   | Introduce a queue (BullMQ + Redis is the conventional pick) and a worker process.                                 |
 | No caching of metadata         | Same URL fetched repeatedly costs a `yt-dlp` spawn each time                                              | Add a short TTL cache (in-memory `lru-cache` or Redis) keyed by canonical video ID.                               |
 
 None of these are problems today. They're listed here so the next person doesn't have to rediscover the ceiling.
@@ -606,10 +616,10 @@ To just use the app, double-click `scripts\windows\start.cmd`: it checks for Nod
 ### Prerequisites — install once
 
 ```powershell
-winget install -e --id OpenJS.NodeJS.LTS         # Node 20+ and npm
+winget install -e --id OpenJS.NodeJS.LTS         # Node 24 (LTS) and npm
 ```
 
-Close and reopen your terminal so the new programs are on `PATH`, then check `node --version` (v20.x or newer).
+Close and reopen your terminal so the new programs are on `PATH`, then check `node --version` (v24.x).
 
 > **PowerShell tip:** if `npm` fails with "npm.ps1 cannot be loaded because running scripts is disabled", either type `npm.cmd` instead of `npm`, or allow local scripts once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
@@ -648,14 +658,15 @@ npm start                        # serves dist/ on http://localhost:5000
 
 ### Wired-up npm scripts
 
-| Script           | What it does                                                                                                                                        |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run dev`    | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode.                                                                   |
-| `npm run build`  | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).                                                                       |
-| `npm start`      | Runs the production build from `dist/index.cjs` (production mode is baked in).                                                                      |
-| `npm run check`  | Type-checks the entire project with `tsc`.                                                                                                          |
-| `npm run verify` | The one check before a change is done, and what CI runs: Prettier, ESLint, `tsc`, then the unit tests and the music player's API test (no network). |
-| `npm run clean`  | Removes what test runs leave behind (see [Cleaning up after tests](#cleaning-up-after-tests)).                                                      |
+| Script             | What it does                                                                                                                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run dev`      | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode.                                                                                                    |
+| `npm run build`    | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).                                                                                                        |
+| `npm start`        | Runs the production build from `dist/index.cjs` (production mode is baked in).                                                                                                       |
+| `npm run check`    | Type-checks the entire project with `tsc`.                                                                                                                                           |
+| `npm run verify`   | The one check before a change is done, and what CI runs: Prettier, ESLint, `tsc`, then the unit tests and the music player's API test (no network).                                  |
+| `npm run coverage` | Runs the unit tests with V8 coverage of `client/src`, `server` and `shared` (not the shadcn/ui components): a text summary, and an HTML report in `reports/coverage/` (git-ignored). |
+| `npm run clean`    | Removes what test runs leave behind (see [Cleaning up after tests](#cleaning-up-after-tests)).                                                                                       |
 
 ### Tests, linting, and formatting
 
@@ -677,11 +688,13 @@ These tools are installed and configured but have no shortcut script in `package
 
 ## Testing
 
-The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, the history and settings files, the folder browser, finding a playlist's songs among a folder's files, the host and local-only checks, which files the development server sends, the page's save client and "Download all" rules, the music player (song ids, Ogg lengths, covers, the FLAC conversion and its cache, sorting, filtering and play order), the Windows scripts and the install branch's shortcuts, the web app manifest and its icons, and the UI's small formatting helpers.
+The project ships with two end-to-end test suites that exercise the real app against a real YouTube video — no mocks. They share small helpers that inspect a downloaded file's bytes: `tests/utils/mp3.ts` checks for a real MP3 (an optional ID3v2 tag followed by an MPEG Layer III frame header — a WebM or M4A renamed to `.mp3` fails it), and `tests/utils/original-audio.ts` checks that an original-audio download really is Ogg Opus / MP4 / Matroska as its extension says. Fast, offline unit tests in `tests/unit/` cover URL parsing, the yt-dlp/ffmpeg arguments, search ranking, YouTube playlist parsing, the history and settings files, the folder browser, finding a playlist's songs among a folder's files, the `.m3u8` playlist file, the host and local-only checks, which files the development server sends, the page's save client and "Download all" rules, the music player (song ids, Ogg lengths, covers, the FLAC conversion and its cache, sorting, filtering and play order), the Windows scripts and the install branch's shortcuts, the web app manifest and its icons, and the UI's small formatting helpers.
 
 ### Continuous integration
 
 `.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, the unit tests and the music player's API test (which makes its own songs). It's the same command you run locally before calling a change done. The other API and browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
+
+Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups; and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The two Claude workflows sign in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and skip with a warning, still green, when it isn't set.
 
 ### Layout
 
@@ -693,6 +706,8 @@ tests/
 ├── browser/
 │   ├── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request)
 │   ├── player.spec.ts           # the music player: the folder's songs, and songs picked on a phone
+│   ├── playlist.spec.ts         # YouTube playlists in the panel: open, save the rest, play, save a playlist file
+│   ├── video-preview.spec.ts    # a search result's video played in the list (stand-in search and player, no YouTube)
 │   ├── clipboard.spec.ts        # Paste and the copied-link suggestion (a stand-in clipboard, no YouTube)
 │   └── test-server-files.ts     # the test server's temp history, settings and player cache; deleted as the run ends
 ├── unit/
@@ -702,6 +717,7 @@ tests/
 │   ├── history-filter.test.ts   # history search, suggestions, date filters, highlighting
 │   ├── filename.test.ts         # safe download file names
 │   ├── spotify.test.ts          # Spotify links, song + playlist embed parsing, title clean-up, same-length ranking
+│   ├── youtube-playlist.test.ts # YouTube playlist links, yt-dlp arguments, parsing its list, errors
 │   ├── format.test.ts           # durations + link-vs-search detection
 │   ├── clipboard.test.ts        # links found in copied text, text pasted into the box, when the page may read it
 │   ├── storage.test.ts          # history file
@@ -741,7 +757,7 @@ What it checks:
 1. An invalid URL returns HTTP 400 with a message.
 2. A real YouTube URL returns title + thumbnail metadata.
 3. Searching for "me at the zoo jawed" finds the test video, with a channel, duration and thumbnail; an empty search is rejected with `400`. A Spotify link to Queen's "Bohemian Rhapsody" returns the song's details and a best match of the same length; a Spotify album link is rejected with `400`.
-4. A Spotify playlist link (Spotify's own "Today's Top Hits") lists its songs, each with a valid song id, title and artists; Daft Punk's _Random Access Memories_ lists its 13 songs; a playlist Spotify won't share is a `404` mentioning private playlists, and a song link or an empty link is a `400`.
+4. A Spotify playlist link (Spotify's own "Today's Top Hits") lists its songs, each with a valid song id, title and artists; Daft Punk's _Random Access Memories_ lists its 13 songs; a playlist Spotify won't share is a `404` mentioning private playlists, and a song link or an empty link is a `400`. A YouTube playlist link (the uploads of YouTube's first channel) lists "Me at the zoo" with `source: "youtube"`; a mix and a video link are a `400`, and a missing playlist a `404`. `/api/spotify/link` says where a Spotify link leads.
 5. The download endpoint streams `audio/mpeg` content with a `.mp3` `Content-Disposition`, the bytes are written to disk, and the file is verified to be a real MP3 (ID3 tag + MPEG frame), not just an audio file with an `.mp3` name.
 6. `?format=original` returns YouTube's audio unconverted, with a matching extension and content type, and the file is what its extension says.
 7. An unknown `format`, or a malformed Spotify song id, is rejected with `400`.
@@ -770,7 +786,7 @@ What it checks:
 4. Switching to **Search by song**, searching for the test video and picking it shows the preview with a download link for that video; the mode survives a reload, and a link typed into the search box is opened (the switch flips back to **Paste a link**).
 5. Pasting a Spotify song link into the link box switches to **Search by song**, shows the song from Spotify, and picks the best YouTube match with a download link ready.
 6. **Spotify playlist** (with a made-up playlist served in place of `/api/spotify/playlist`, holding the real "Bohemian Rhapsody"): opening its link lists the 12 songs, counts and marks the one already in the (made-up) history as downloaded, and the filter narrows the list; clicking the song finds it on YouTube for real, picks the best match with `spotifyId` on its download link, named "Queen - Bohemian Rhapsody", and shows the song from Spotify above the matches. The playlist reopens after a reload, and stays closed once closed.
-7. **YouTube playlists** (`playlist.spec.ts`, with a made-up playlist served in place of `/api/youtube/playlist` and made-up saves): a playlist link typed into the link box opens the panel and switches to **Playlist**; clicking a video opens it in the preview card without a search; the panel reopens after a reload and closes for good. With a temporary **Save to** folder that has "Me at the zoo.mp3", the panel counts 1 in the folder and 2 missing, and **Download 2 songs** saves the other two as they are (their own links and names, no search).
+7. **YouTube playlists** (`playlist.spec.ts`, with a made-up playlist served in place of `/api/youtube/playlist` and made-up saves): a playlist link typed into the link box opens the panel and switches to **Playlist**; clicking a video opens it in the preview card without a search; the panel reopens after a reload and closes for good. With a temporary **Save to** folder that has "Me at the zoo.mp3", the panel counts 1 in the folder and 2 missing, and **Download 2 songs** saves the other two as they are (their own links and names, no search). With two of its videos already in the folder, **Play 2 songs** plays them in the playlist's order, not the folder's, and **Save playlist file** writes "Road Trip.m3u8" listing them in that order.
 8. **The playlist and the Save to folder** (a temporary folder holding "Queen\Bohemian Rhapsody.mp3", and a made-up playlist of that song plus two whose searches are made up to find "Me at the zoo" — one the same length as the video, one not): the panel counts 1 in the folder and 2 missing, and marks Bohemian Rhapsody **In folder**; **Not in folder** lists the 2, both ticked; **Download 2 songs** saves the same-length one for real as "jawed - Me at the zoo.mp3" (a valid MP3) and marks the other **Check**, unticked; the counts update to 2 and 1.
 9. **Save to** can be set before opening a video, in the app's folder browser: typing a temporary folder's path opens it, **New folder** makes "Test Music" there and opens it, and **Use** chooses it. Cancelling a download leaves the folder empty; a full download lands there on disk as a valid MP3 — not through the browser's download manager — and appears in the history; the folder is still chosen after a reload; and the **×** goes back to the browser's downloads. A path typed while the folder browser is still opening (its first answer held back by the test) isn't replaced when that answer arrives, and Enter opens it.
 10. A browser on another device (simulated by answering `/api/settings` with `canSaveToFolder: false`) gets a note saying where downloads go, and no **Choose folder** button.
@@ -778,6 +794,7 @@ What it checks:
 12. Submitting an invalid URL surfaces a friendly error (toast or inline) instead of crashing.
 13. **The music player** (`player.spec.ts`, songs made with ffmpeg in a temporary folder — a tagged MP3 and a 24-bit AIFF): with that folder under **Save to**, **Your music** lists both; clicking the MP3 plays it from `/api/music/<id>`, as it is, and Pause pauses it; **Next song** plays the AIFF — converted by the app (`/flac`) in a browser that can't play AIFF; Repeat cycles; and Close stops the song and hides the player. As a phone (`canSaveToFolder: false`), **Choose songs** takes the two files: their tags are read in the page, the AIFF is marked if the browser can't play it, the MP3 plays from a `blob:` address, and nothing is sent to the app. The folder's songs can be put in order by title. (Playwright's WebKit on Windows plays media through Windows Media Foundation, which takes several seconds to open a song — so clicks that start one get longer — and can't play `blob:` addresses at all, so there the test checks that the player says it can't. Safari can.)
 14. **The clipboard** (`clipboard.spec.ts`, with a stand-in `navigator.clipboard` and clipboard-read permission inside the page — never this computer's real clipboard — and the answers for a video, a search and a playlist given by the test): **Paste** opens a copied YouTube link, opens a copied Spotify playlist in the panel, follows a copied `spotify.link` short link to its playlist or song, and searches for other text, put in the box on one line; it says so when there's no text, says how to allow the clipboard when Chrome or Edge blocks it, and does nothing when the browser's own question is dismissed; and there's no **Paste** button without the Clipboard API or a secure context. Once the permission is `granted`, a copied link — just the link, never the rest of the text — is offered under the empty box: typing hides it, a click or Enter opens it (a Spotify playlist in the panel), Esc or its × dismisses it, and a link that was opened or dismissed isn't offered again — even after a reload — until something else is copied. With the permission `prompt`, `denied` or unknown, nothing is offered, and the clipboard isn't even read.
+15. **The video preview** (`video-preview.spec.ts`, with the search answered by the test and a stand-in for YouTube's embedded player, so nothing reaches YouTube): a search result's thumbnail opens its video under it, playing, without choosing it; another result's thumbnail swaps the player over; **Choose this one** picks it for download while the video keeps playing; and **Close preview**, or the thumbnail again, closes it.
 
 The Chrome tests use your installed Google Chrome (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in; WebKit and Firefox are Playwright's own builds. Install whichever are missing (free, one time):
 
@@ -805,17 +822,14 @@ npx playwright show-report
 Both suites depend on `yt-dlp` (invoked via the `youtube-dl-exec` wrapper) being able to talk to YouTube's API. YouTube actively changes its internals — signed/encrypted stream URLs, PoToken (proof-of-origin token) requirements, format reshuffling — so any extractor can break between releases. yt-dlp is the most aggressively maintained option in this space, but you should still expect periodic breakage.
 
 - The negative tests (invalid URLs → 400) keep passing regardless — they prove the wiring still works.
-- The metadata, search and download tests all depend on yt-dlp successfully reaching YouTube (and the Spotify tests on reaching open.spotify.com). If they start failing, first reinstall to get the latest bundled binary:
+- The metadata, search and download tests all depend on yt-dlp successfully reaching YouTube (and the Spotify tests on reaching open.spotify.com). If they start failing, first get the newest yt-dlp, which updates it in place on every system:
 
   ```bash
-  # via the package manager — do not edit package.json directly
-  # this re-runs youtube-dl-exec's postinstall, which downloads the
-  # current yt-dlp release from GitHub
-  npm rebuild youtube-dl-exec
+  npm run update-yt-dlp
   ```
 
-- On Linux/macOS, yt-dlp is a Python script: the host (or container) must have `python3` (3.10+) on `$PATH`. Make sure your image installs it. On Windows, yt-dlp is a standalone `.exe` and needs no Python.
-- yt-dlp needs a JavaScript runtime for YouTube. The server passes `--js-runtimes node`, so it uses the same Node that runs the app (Node 20+).
+- yt-dlp is a standalone program on every system (`yt-dlp.exe` on Windows; on macOS and Linux, `scripts/yt-dlp.mjs` swaps in the standalone build), so no Python is needed. Don't use `npm rebuild youtube-dl-exec` on macOS or Linux: it brings back the Python version until `node scripts/yt-dlp.mjs` runs again.
+- yt-dlp needs a JavaScript runtime for YouTube. The server passes `--js-runtimes node`, so it uses the same Node that runs the app (Node 24).
 
 ### Test and tooling dependencies
 
@@ -887,7 +901,7 @@ A typical flow:
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tsx: not found` when running `npm run dev`       | `node_modules` is incomplete. Run `npm install` again.                                                                                                                                                                                                           |
 | `Invalid YouTube URL` on the info endpoint        | The URL isn't a recognised YouTube link. Try a standard `youtube.com/watch?v=...` link.                                                                                                                                                                          |
-| Download fails with "Couldn't download the audio" | YouTube refused the stream (age-restricted, region-locked, removed, or bot check). Try another video, or update yt-dlp with `npm rebuild youtube-dl-exec`.                                                                                                       |
+| Download fails with "Couldn't download the audio" | YouTube refused the stream (age-restricted, region-locked, removed, or bot check). Try another video, or update yt-dlp with `npm run update-yt-dlp`.                                                                                                             |
 | Port `5000` already in use                        | Set `PORT=<other-port>` in the environment, then restart.                                                                                                                                                                                                        |
 | History list is empty after an update             | Check for `data/history.json.broken-*` — the old file couldn't be read and was set aside.                                                                                                                                                                        |
 | "The app isn't allowed to save into …"            | Windows keeps some folders for administrators (the top of `C:\`, Program Files, Windows). Pick a folder inside your user folder, like Music. If it's a folder you own, Windows Security's **Controlled folder access** may be blocking Node.js — allow it there. |

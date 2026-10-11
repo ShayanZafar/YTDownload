@@ -71,7 +71,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   and `startAudioPipeline()` (yt-dlp → ffmpeg, used by both download and save), yt-dlp error lines
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
-  temp-file + rename
+  temp-file + rename; `server/retry-when-busy.ts` retries the renames and deletes Windows briefly
+  blocks (antivirus, the indexer)
 - `shared/` — schema and API contracts shared by client and server; `shared/filename.ts` has
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
@@ -84,6 +85,10 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   preview) and `recent-extractions.tsx` (the history, its search and filters).
   `client/src/components/ui/` holds only the shadcn/ui components in use — add more with
   `npx shadcn@latest add <name>` (config in `components.json`)
+- `client/src/hooks/use-youtube.ts` — the page's API calls as TanStack Query hooks (history,
+  search, Spotify links, playlists — `usePlaylist()` — and video info)
+- `client/src/lib/clipboard.ts` + `hooks/use-clipboard-link.ts` — Paste and the copied-link
+  suggestion (`findCopiedLink()`, `textToPaste()`, `canReadClipboard()`; unit-tested)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
   Original audio toggle (`use-download-format.ts`) and the Link / Search / Playlist switch;
   `use-stored-value.ts` remembers free text (the open playlist's link)
@@ -137,7 +142,16 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   (no history to merge). Never commit to `install` by hand
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
   lint, type-check, unit tests + the music API test) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
-  10×). The YouTube API and browser tests aren't run there (GitHub's machines get refused)
+  10×), and on pull requests. The YouTube API and browser tests aren't run there (GitHub's machines
+  get refused)
+- `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
+  marked ready; not drafts, forks or Dependabot's) with inline comments, on a different model.
+  `claude-refactor.yml` — monthly, runs the `/refactor` skill and opens a pull request. Both need
+  the `CLAUDE_CODE_OAUTH_TOKEN` secret and skip, green, without it. `.github/dependabot.yml` —
+  monthly grouped npm and Actions updates (TypeScript majors by hand);
+  `.github/pull_request_template.md` — the PR checklist
+- `.claude/skills/` — `verify` (runs `npm run verify`, before each commit) and `refactor` (measure,
+  then at most three behaviour-preserving cleanups)
 - `scripts/yt-dlp.mjs` — the `postinstall`: on macOS/Linux, swaps youtube-dl-exec's Python yt-dlp
   (needs Python 3.10+) for yt-dlp's standalone build (`yt-dlp_macos`, `yt-dlp_linux[_aarch64]`,
   musl builds); a no-op on Windows (`yt-dlp.exe` is standalone). `--update` (`npm run
@@ -166,6 +180,8 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   port 5099); `--project=chrome|webkit` for one; `E2E_BROWSERS=chrome,webkit,firefox` adds Firefox.
   First time: `npx playwright install chrome webkit firefox`
 - `npx eslint .` and `npx prettier --check .`
+- `npm run coverage` — the unit tests with V8 coverage of `client/src`, `server` and `shared` (not
+  `components/ui`): a text summary and an HTML report in `reports/coverage/` (git-ignored)
 - `npm run build`, then `npm start` — production bundle
 - `npm run update-yt-dlp` — the newest yt-dlp, on any system (Windows: `update-yt-dlp.cmd` too)
 - `npm run clean` — removes what test runs leave behind: their temp files, Playwright's
@@ -175,8 +191,8 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 ## Local setup (Windows, macOS, Linux)
 
 - No setup beyond `npm install` (Node 24 LTS; no Python on any system). `.env` is optional (`PORT`,
-  `HOST`, `HISTORY_FILE`, `SETTINGS_FILE`, `FFMPEG_BIN`, `PLAYER_CACHE_DIR`); shell variables override
-  it. Delete `data/history.json` to clear the history.
+  `HOST`, `ALLOWED_HOSTS`, `HISTORY_FILE`, `SETTINGS_FILE`, `FFMPEG_BIN`, `PLAYER_CACHE_DIR`); shell
+  variables override it. Delete `data/history.json` to clear the history.
 - The API tests point `HISTORY_FILE`/`SETTINGS_FILE` at a temp folder, and the Playwright config starts its
   own server on port 5099 with a temp history and settings, so tests never touch the real ones.
 - `npm install` needs `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment on a system without Python
