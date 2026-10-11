@@ -7,15 +7,18 @@ on the computer running the app, or songs picked on a phone. Developed on Window
 on macOS and Linux (CI checks Linux and Windows on every push, macOS weekly — `.github/workflows/tests.yml`).
 `README.md` is the user guide, `docs/run/README.md` says how to
 install and run it (the ready-to-run build, scripts, terminal, phone, hosting), `TECHNICAL.md` has
-architecture, setup and deployment details, and `LEARNING.md` maps the stack onto .NET concepts.
+architecture, setup and deployment details, `docs/sources.md` is the register of the outside
+sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was rejected), and
+`LEARNING.md` maps the stack onto .NET concepts.
 
 ## Stack
 
 - **Frontend:** React 19 + Vite 8, wouter (routing), TanStack Query, shadcn/ui, Tailwind CSS 4 — `client/`
 - **Backend:** Express 5 + TypeScript (`tsx` in dev, esbuild bundle in prod) — `server/`
-- **Storage:** no database — the download history is `data/history.json` and the settings are
-  `data/settings.json` (both git-ignored), written by `server/storage.ts` and `server/settings.ts`;
-  shapes in `shared/schema.ts`
+- **Storage:** no database — the download history is `data/history.json`, the settings are
+  `data/settings.json` and the source-health report is `data/source-health.json` (all git-ignored),
+  written by `server/storage.ts`, `server/settings.ts` and `server/source-health.ts`; shapes in
+  `shared/schema.ts`
 - **YouTube:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads into
   `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed)
 - **MP3:** `ffmpeg-static` (ffmpeg fetched by `npm install`; `FFMPEG_BIN` overrides it)
@@ -30,7 +33,28 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/link`, `GET /api/spotify/playlist`, `GET /api/youtube/playlist`,
   `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
   `POST /api/folders/songs`, `POST /api/folders/playlist-file`, `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`),
-  `GET/DELETE /api/downloads`, `DELETE /api/downloads/:id`, `POST /api/downloads/restore` (Undo), `GET /api/lyrics`
+  `GET/DELETE /api/downloads`, `DELETE /api/downloads/:id`, `POST /api/downloads/restore` (Undo), `GET /api/lyrics`,
+  `GET /api/health/sources`
+- `server/youtube-limits.ts` — `youtubeGuard`, which every yt-dlp call but the audio stream goes
+  through (search, video info, playlists, the metadata pass before a download): a 10-minute cache
+  of search/video/playlist answers (`TtlCache`, 200 entries, LRU), a gate of 2 yt-dlp runs at once
+  (`limitConcurrent()`), `classifyYtDlpError()` (throttled / bot-check / broken / unavailable /
+  other), and a 10-minute `Cooldown` started by a throttled or bot-check failure: meanwhile every
+  call throws `YouTubeLimited` and the routes answer `429` through `sendLimited()` — JSON with
+  `message`, `retryAfterSeconds` and `source: "youtube"`, plus a `Retry-After` header — download
+  and save too when nothing has been sent yet (`pipelineEnded()`). A broken/bot-check failure also
+  triggers the self-update and one retry if the browser is still waiting (`stillWanted`). Pure
+  parts take the time as an argument; unit-tested with a fake clock
+- `server/yt-dlp-update.ts` — `YtDlpUpdater`: runs `node scripts/yt-dlp.mjs --update` (what
+  `npm run update-yt-dlp` runs; never through a shell) at most once an hour, 2-minute limit, one
+  log line at the start and one at the end; a failed update counts as the hour's try
+- `server/source-health.ts` — records every attempt against `youtube`, `spotify` and
+  `spotify-oembed` (ok, or throttled / blocked / error with a note; the last 24 h, ≤500 events, in
+  memory) and writes the report to `data/source-health.json` (`SOURCE_HEALTH_FILE`; debounced,
+  temp file + rename): per source `ok`/`failed`/`throttled`/`lastOk`/`lastError`, `unreliable`
+  (a primary with ≥5 attempts and under half successful, and every fallback for its job
+  unreliable too — or none) and a one-sentence `summary`. `GET /api/health/sources` serves it
+  (not local-only; no paths in it). Pure parts unit-tested with a fake clock
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
   replacing a file (`Song (1).mp3`); streams JSON-line progress (`saveEventSchema`)
@@ -62,6 +86,12 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   A download's album, track number, release date and 640 px cover come from the song's own page
   (`open.spotify.com/track/<id>` fetched with a curl User-Agent, which gets its link-preview `<meta>`
   tags: `parseTrackPage()`).
+  Every Spotify request goes through `fetchSpotify()`: recorded in source health, and after a 429
+  retried once after `Retry-After` (≤`RETRY_AFTER_MAX_MS`). When the embed page fails for any
+  reason but 404, `fetchSpotifyTrack()` falls back to the keyless oEmbed endpoint
+  (`fetchOembedTrack()`, `parseOembed()`): title and cover only — artists `[]`, `duration: null`,
+  `source: "spotify-oembed"` on the track (optional field in `spotifyTrackSchema`); the page then
+  searches by title and "Download all" marks such a song "check".
   Playlists and albums (`/api/spotify/playlist?link=`): the songs from `embed/playlist|album/<id>`
   (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there), and past 100 the
   rest from the Web API with the embed page's anonymous pass (`readEmbedAccessToken()`,
@@ -222,10 +252,12 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 ## Local setup (Windows, macOS, Linux)
 
 - No setup beyond `npm install` (Node 24 LTS; no Python on any system). `.env` is optional (`PORT`,
-  `HOST`, `ALLOWED_HOSTS`, `HISTORY_FILE`, `SETTINGS_FILE`, `FFMPEG_BIN`, `PLAYER_CACHE_DIR`); shell
-  variables override it. Delete `data/history.json` to clear the history.
-- The API tests point `HISTORY_FILE`/`SETTINGS_FILE` at a temp folder, and the Playwright config starts its
-  own server on port 5099 with a temp history and settings, so tests never touch the real ones.
+  `HOST`, `ALLOWED_HOSTS`, `HISTORY_FILE`, `SETTINGS_FILE`, `SOURCE_HEALTH_FILE`, `FFMPEG_BIN`,
+  `PLAYER_CACHE_DIR`); shell variables override it. Delete `data/history.json` to clear the history.
+- The API tests point `HISTORY_FILE`/`SETTINGS_FILE`/`SOURCE_HEALTH_FILE` at a temp folder, and the
+  Playwright config starts its own server on port 5099 with a temp history, settings and health
+  file, so tests never touch the real ones. A unit test that makes the app record a source-health
+  event (a stubbed Spotify fetch, a route through `youtubeGuard`) sets `SOURCE_HEALTH_FILE` too.
 - `npm install` needs `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment on a system without Python
   3.9+: youtube-dl-exec's installer demands it though the app doesn't use Python (`yt-dlp.exe` on
   Windows; `scripts/yt-dlp.mjs` installs the standalone build on macOS/Linux afterwards). Don't use
@@ -283,8 +315,15 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   Regexes with the `u` flag (`\p{L}`) must be built with `new RegExp(...)`: tsc refuses the literal at
   this project's default ES5 target.
 - "Download all" stays one song at a time, and never downloads a match that isn't the same length as
-  the Spotify song: unattended picks must be near-certain, and bursts of downloads invite YouTube's
-  bot checks.
+  the Spotify song (a song whose length Spotify's fallback didn't give is "check"): unattended picks
+  must be near-certain, and bursts of downloads invite YouTube's bot checks. The same worry shapes
+  `youtube-limits.ts`: at most 2 yt-dlp runs at once, a 10-minute cache, a 10-minute cooldown
+  answered with `429` once YouTube throttles or bot-checks us (the page and "Download all" wait it
+  out — one retry, then the run stops), a self-update of yt-dlp at most once an hour when a
+  failure looks like a stale yt-dlp, and `data/source-health.json` saying how the sources have been
+  answering. A new yt-dlp call goes through `youtubeGuard.run()`; a new route that can hit YouTube
+  answers `YouTubeLimited` with `sendLimited()`. `docs/sources.md` is the register to update when a
+  source or fallback changes.
 - Spotify: only a validated kind (track/playlist/album) and 22-character id go into the embed URL we
   fetch, and only a validated code into a short link's (no user-controlled URLs are ever fetched).
   If Spotify links break, check the embed page's `__NEXT_DATA__` shape first (`parseEmbedPage()`,
