@@ -45,6 +45,7 @@ import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import { songsInFolder, type AudioFile } from "./library";
 import { writePlaylistFile } from "./playlist-file";
 import { convertedForBrowser, findMusicFile, listMusic, readCover } from "./music";
+import { sourceHealth } from "./source-health";
 
 type YtDlpInfo = ThumbnailLike & { title?: string };
 
@@ -335,6 +336,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         message: err instanceof LyricsError ? err.message : "Couldn't look up the lyrics.",
       });
     }
+  });
+
+  // How YouTube and Spotify have been answering lately (see source-health.ts).
+  // Nothing in it is about this computer: no paths, no secrets.
+  app.get(api.health.sources.path, (_req, res) => {
+    res.set("Cache-Control", "no-store").json(sourceHealth.report());
   });
 
   app.post(api.video.info.path, async (req, res) => {

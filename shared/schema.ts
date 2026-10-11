@@ -261,3 +261,43 @@ export const saveEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SaveEvent = z.infer<typeof saveEventSchema>;
+
+/**
+ * How the outside sources the app depends on have been answering (the last
+ * 24 hours), as `GET /api/health/sources` and `data/source-health.json` report
+ * it (see server/source-health.ts). A source is `primary` for a job (`for`),
+ * or a `fallback` tried when the primary fails.
+ */
+export const sourceRoles = ["primary", "fallback"] as const;
+
+export const sourceHealthSchema = z.object({
+  role: z.enum(sourceRoles),
+  /** The job it's for: "audio", "song details". */
+  for: z.string(),
+  /** Attempts that worked, in the last 24 hours. */
+  ok: z.number(),
+  failed: z.number(),
+  /** Of the failed: the source said to slow down (HTTP 429, "too many requests"). */
+  throttled: z.number(),
+  /** When it last worked (ISO 8601), or null. */
+  lastOk: z.string().nullable(),
+  /** What its last failure said, or null. */
+  lastError: z.string().nullable(),
+});
+
+export type SourceHealth = z.infer<typeof sourceHealthSchema>;
+
+export const sourceHealthReportSchema = z.object({
+  updatedAt: z.string(),
+  /**
+   * True when some job can't be done: its primary source is unreliable (at
+   * least 5 attempts in 24 hours, under half of them successful) and so is
+   * every fallback that could stand in for it.
+   */
+  unreliable: z.boolean(),
+  /** One plain sentence: "YouTube: 2 of 20 requests succeeded in the last 24 h (last error: …)." */
+  summary: z.string(),
+  sources: z.record(z.string(), sourceHealthSchema),
+});
+
+export type SourceHealthReport = z.infer<typeof sourceHealthReportSchema>;

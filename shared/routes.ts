@@ -11,6 +11,7 @@ import {
   searchResultSchema,
   songToFindSchema,
   songsInFolderSchema,
+  sourceHealthReportSchema,
   spotifyIdSchema,
   spotifyPlaylistSchema,
   spotifyTrackSchema,
@@ -218,6 +219,17 @@ export const api = {
         404: errorSchemas.notFound,
         502: errorSchemas.internal,
       },
+    },
+  },
+  health: {
+    /**
+     * How YouTube and Spotify have been answering over the last 24 hours (the
+     * same report as `data/source-health.json`; see server/source-health.ts).
+     */
+    sources: {
+      method: "GET" as const,
+      path: "/api/health/sources" as const,
+      responses: { 200: sourceHealthReportSchema },
     },
   },
   settings: {
