@@ -2,14 +2,15 @@
 
 Small full-stack app: paste a YouTube URL (or search for a song, paste a Spotify song link, or pick
 songs from a Spotify or YouTube playlist — with a Save to folder, it shows which are already there
-and downloads the rest), preview it, download the audio track — and play your music: the Save to folder's songs
+and downloads the rest), preview it, download the audio track — from YouTube, or from SoundCloud
+when YouTube can't answer — and play your music: the Save to folder's songs
 on the computer running the app, or songs picked on a phone. Developed on Windows, and works the same
 on macOS and Linux (CI checks Linux and Windows on every push, macOS weekly — `.github/workflows/tests.yml`).
 `README.md` is the user guide, `docs/run/README.md` says how to
 install and run it (the ready-to-run build, scripts, terminal, phone, hosting), `TECHNICAL.md` has
 architecture, setup and deployment details, `docs/sources.md` is the register of the outside
-sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was rejected), and
-`LEARNING.md` maps the stack onto .NET concepts.
+sources (YouTube, SoundCloud, Spotify: primary, fallbacks, what "unreliable" means, what was
+rejected), and `LEARNING.md` maps the stack onto .NET concepts.
 
 ## Stack
 
@@ -19,8 +20,9 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
   `data/settings.json` and the source-health report is `data/source-health.json` (all git-ignored),
   written by `server/storage.ts`, `server/settings.ts` and `server/source-health.ts`; shapes in
   `shared/schema.ts`
-- **YouTube:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads into
-  `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed)
+- **YouTube and SoundCloud:** `youtube-dl-exec` wrapping a yt-dlp binary that `npm install` downloads
+  into `node_modules/youtube-dl-exec/bin/` (`yt-dlp.exe` on Windows — no Python needed); SoundCloud
+  through the same yt-dlp, with no key or account
 - **MP3:** `ffmpeg-static` (ffmpeg fetched by `npm install`; `FFMPEG_BIN` overrides it)
 - **Tags:** `music-metadata` reads the audio files' tags in the Save to folder (`server/library.ts`),
   and — its browser build, loaded on demand — the tags of songs picked on a phone for the player
@@ -30,38 +32,44 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
 - `server/index.ts` — entry point; Vite middleware in dev, static `dist/public` in prod
 - `server/env.ts` — loads `.env`; imported first by `index.ts`
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
-- `server/routes.ts` — `POST /api/video/info`, `GET /api/search`, `GET /api/spotify/link`, `GET /api/spotify/playlist`, `GET /api/youtube/playlist`,
-  `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings`, `GET/POST /api/folders`,
-  `POST /api/folders/songs`, `POST /api/folders/playlist-file`, `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`),
-  `GET/DELETE /api/downloads`, `DELETE /api/downloads/:id`, `POST /api/downloads/restore` (Undo), `GET /api/lyrics`,
+- `server/routes.ts` — `POST /api/video/info`, `GET /api/search` (`?source=soundcloud`: SoundCloud
+  alone), `GET /api/spotify/link`, `GET /api/spotify/playlist`, `GET /api/youtube/playlist`,
+  `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings` (with `cpuCores`),
+  `GET/POST /api/folders`, `POST /api/folders/songs`, `POST /api/folders/playlist-file`,
+  `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`), `GET/DELETE /api/downloads`,
+  `DELETE /api/downloads/:id`, `POST /api/downloads/restore` (Undo), `GET /api/lyrics`,
   `GET /api/health/sources`
-- `server/youtube-limits.ts` — `youtubeGuard`, which every yt-dlp call but the audio stream goes
-  through (search, video info, playlists, the metadata pass before a download): a 10-minute cache
-  of search/video/playlist answers (`TtlCache`, 200 entries, LRU), a gate of 2 yt-dlp runs at once
-  (`limitConcurrent()`), `classifyYtDlpError()` (throttled / bot-check / broken / unavailable /
-  other), and a 10-minute `Cooldown` started by a throttled or bot-check failure: meanwhile every
-  call throws `YouTubeLimited` and the routes answer `429` through `sendLimited()` — JSON with
-  `message`, `retryAfterSeconds` and `source: "youtube"`, plus a `Retry-After` header — download
-  and save too when nothing has been sent yet (`pipelineEnded()`). A broken/bot-check failure also
-  triggers the self-update and one retry if the browser is still waiting (`stillWanted`). Pure
-  parts take the time as an argument; unit-tested with a fake clock
+- `server/youtube-limits.ts` — `youtubeGuard`, which every yt-dlp call to YouTube but the audio stream
+  goes through (search, video info, playlists, the metadata pass before a download): a 10-minute
+  cache of search/video/playlist answers (`TtlCache`, 200 entries, LRU) and
+  `classifyYtDlpError()` (throttled / bot-check / broken / unavailable / other). Every call is made
+  at once — nothing gates, holds back or delays one. A throttled or bot-check failure throws
+  `YouTubeRefused`, which the routes answer at once with a `502` through `sendRefused()` —
+  `{ message, source: "youtube", limited: true }`, the message saying what to do instead — download
+  and save too when nothing has been sent yet (`pipelineEnded()`); it's remembered for 10 minutes
+  (`refusedRecently()`, `HEDGE_FOR_MS`), during which searches ask SoundCloud at the same time as
+  YouTube. A broken/bot-check failure also starts the yt-dlp self-update in the background (nobody
+  waits for it). Pure parts take the time as an argument; unit-tested with a fake clock
 - `server/yt-dlp-update.ts` — `YtDlpUpdater`: runs `node scripts/yt-dlp.mjs --update` (what
   `npm run update-yt-dlp` runs; never through a shell) at most once an hour, 2-minute limit, one
   log line at the start and one at the end; a failed update counts as the hour's try
-- `server/source-health.ts` — records every attempt against `youtube`, `spotify` and
-  `spotify-oembed` (ok, or throttled / blocked / error with a note; the last 24 h, ≤500 events, in
-  memory) and writes the report to `data/source-health.json` (`SOURCE_HEALTH_FILE`; debounced,
-  temp file + rename): per source `ok`/`failed`/`throttled`/`lastOk`/`lastError`, `unreliable`
+- `server/source-health.ts` — records every attempt against `youtube` (primary for audio),
+  `soundcloud` (its fallback), `spotify` (primary for song details) and `spotify-oembed` (its
+  fallback) — ok, or throttled / blocked / error with a note; the last 24 h, ≤500 events, in
+  memory — and writes the report to `data/source-health.json` (`SOURCE_HEALTH_FILE`; debounced,
+  temp file + rename): per source `role`/`for`/`ok`/`failed`/`throttled`/`lastOk`/`lastError`, `unreliable`
   (a primary with ≥5 attempts and under half successful, and every fallback for its job
   unreliable too — or none) and a one-sentence `summary`. `GET /api/health/sources` serves it
   (not local-only; no paths in it). Pure parts unit-tested with a fake clock
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
-  browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete, never
-  replacing a file (`Song (1).mp3`); streams JSON-line progress (`saveEventSchema`)
+  browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete onto a name
+  claimed with `wx` too (`claimNewName()`), so saves finishing together never take the same name and
+  none waits for another — never replacing a file (`Song (1).mp3`); streams JSON-line progress
+  (`saveEventSchema`)
 - `server/settings.ts` — app settings (the Save to folder) in `data/settings.json` (`SETTINGS_FILE`)
 - `server/library.ts` — which of a playlist's songs are in the Save to folder (`POST /api/folders/songs`):
-  walks it and its subfolders (≤6 deep, ≤`MAX_SONG_FILES`), reads tags (cached per file until it
-  changes), and `findSongs()` matches by the Spotify id in the tags, else title + an artist (tags, file
+  walks it and its subfolders (≤6 deep, ≤`MAX_SONG_FILES`), reads tags (one file per CPU core;
+  cached per file until it changes), and `findSongs()` matches by the Spotify id in the tags, else title + an artist (tags, file
   name, folder names), else an exact file name with no contradicting artist tag. Pure parts unit-tested.
   `readFolderTags()` (the scan + tags) also feeds the player; `oggDuration()` reads an Ogg file's
   length from its last page (music-metadata would read the whole file)
@@ -75,28 +83,45 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
   `PLAYER_CACHE_DIR` (temp folder, ≤2 GB, oldest-played go first); requests share one conversion,
   and when all of them are gone ffmpeg is killed and the `.part` deleted
 - `server/folders.ts` — the folder browser (list/make folders, quick links — on Windows from the
-  registry's User Shell Folders — writable check, `createNewFile()`, `availablePath()`)
+  registry's User Shell Folders — writable check), and new files that never replace one:
+  `createNewFile()` (the `.part`) and `claimNewName()` (the finished name), both opened `wx`
+- `server/cpu-cores.ts` — `cpuCores()` (`os.availableParallelism()`: how many things the app does at
+  once wherever it can — Download all's songs, the folder's tag reads, a long Spotify playlist's
+  pages) and `mapAtOnce()` (one per core, results in order)
 - `server/local-only.ts` — `localOnly()`: folder routes answer only loopback, same-origin, JSON
   requests with no proxy headers; `GET /api/settings` says `canSaveToFolder: false` elsewhere
 - `server/search.ts` — song search: `yt-dlp ytsearch12:` (flat, ~4s) + `rankResults()` (official
-  uploads up; partial matches and live/cover/remix down unless searched for); pure parts unit-tested
+  uploads up; partial matches and live/cover/remix down unless searched for), and SoundCloud's
+  `scsearch12:` ranked the same way (30-second previews last). `searchSongs()` always asks YouTube;
+  SoundCloud at once when YouTube's search fails or finds nothing, and at the same time while YouTube
+  has refused in the last 10 minutes (hedging); YouTube's results when it has some, else
+  SoundCloud's — each result and the answer carry `source`. `searchSoundCloudOnly()` for
+  `?source=soundcloud`. SoundCloud's answers are cached like YouTube's; pure parts unit-tested
+- `server/soundcloud.ts` — SoundCloud, the fallback for audio: `soundCloudResult()` (a search entry
+  as a result with its canonical link), `looksLikePreview()` (a 30-second preview of a
+  subscribers-only track), `lookUpSoundCloud()` (the look-up before a download, recorded in source
+  health; refuses a preview: yt-dlp's format id ends "_preview"), `recordSoundCloud()`
+- `server/audio-source.ts` — `lookUpAudio()` and `audioEnded()`: the download and save routes' look-up
+  and end of stream for a YouTube video (through `youtubeGuard`) or a SoundCloud track
 - `server/spotify.ts` — Spotify song links (`/api/search?q=<link>`): title/artists/length from the
   public embed page `open.spotify.com/embed/track/<id>` (`__NEXT_DATA__`, no account or API key),
-  then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first).
+  then a search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first;
+  `spotifySearchQuery()` adds "audio" for YouTube, not SoundCloud).
   A download's album, track number, release date and 640 px cover come from the song's own page
   (`open.spotify.com/track/<id>` fetched with a curl User-Agent, which gets its link-preview `<meta>`
   tags: `parseTrackPage()`).
-  Every Spotify request goes through `fetchSpotify()`: recorded in source health, and after a 429
-  retried once after `Retry-After` (≤`RETRY_AFTER_MAX_MS`). When the embed page fails for any
-  reason but 404, `fetchSpotifyTrack()` falls back to the keyless oEmbed endpoint
+  Every Spotify request goes through `fetchSpotify()`: recorded in source health, never retried or
+  delayed. When the embed page fails for any reason but 404 (a 429 included), at once,
+  `fetchSpotifyTrack()` falls back to the keyless oEmbed endpoint
   (`fetchOembedTrack()`, `parseOembed()`): title and cover only — artists `[]`, `duration: null`,
   `source: "spotify-oembed"` on the track (optional field in `spotifyTrackSchema`); the page then
   searches by title and "Download all" marks such a song "check".
   Playlists and albums (`/api/spotify/playlist?link=`): the songs from `embed/playlist|album/<id>`
   (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there), and past 100 the
   rest from the Web API with the embed page's anonymous pass (`readEmbedAccessToken()`,
-  `fetchMorePlaylistSongs()`, ≤`SPOTIFY_PLAYLIST_MAX_SONGS`; Spotify's own playlists answer 404 and
-  stay at 100 → `maybeMore`)
+  `fetchMorePlaylistSongs()`: the first page gives the total, the rest are asked for together, one
+  per CPU core; ≤`SPOTIFY_PLAYLIST_MAX_SONGS`; Spotify's own playlists answer 404 and stay at 100 →
+  `maybeMore`)
   `spotify.link` short links: `resolveShortLink()` asks Spotify's short-link host where it leads
   (redirects followed only between `spotify.link`/`spotify.app.link`); `GET /api/spotify/link`
   tells the page where one leads, so it can search or open the playlist panel
@@ -106,14 +131,16 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
 - `server/audio.ts` — yt-dlp and ffmpeg arguments (unit-tested), `fetchAudioInfo()` (metadata pass,
   with YouTube Music's album and date), `prepareAudioOutput()` (the output, with the cover: written
   to a `ytdownload-cover-` temp folder for .opus/.mka, `cleanup()` after) and `startAudioPipeline()`
-  (yt-dlp → ffmpeg, used by both download and save; an MP3's tag goes out with the first chunk,
-  `withPrefix()`), yt-dlp error lines
+  (yt-dlp → ffmpeg, used by both download and save, for a YouTube video or a SoundCloud track alike;
+  an MP3's tag goes out with the first chunk, `withPrefix()`, and on a cancel the stream handed out
+  is drained so ffmpeg can't block), yt-dlp error lines
 - `server/tags.ts` — the MP3's ID3v2.3 tag, written by the app (`id3v2Tag()`: title, artist, album,
   year, track, `TXXX:spotify_id`, front cover) since ffmpeg can't stream one with a cover; the Ogg
   cover block (`flacPictureBlock()`), `jpegSize()`. Pure, unit-tested
 - `server/cover.ts` — download covers: Spotify's album cover (validated `i.scdn.co` /
   `image-cdn-xx.spotifycdn.com` URL) or the video's thumbnail (`i.ytimg.com`, built from the video
-  id), made a ≤600 px square JPEG by ffmpeg (`squareJpeg()`); `coverFor()` waits ≤10 s, never fails
+  id; a SoundCloud track has none, so Spotify's cover when it's a Spotify song), made a ≤600 px
+  square JPEG by ffmpeg (`squareJpeg()`); `coverFor()` waits ≤10 s, never fails
 - `server/lyrics.ts` — lyrics for the player from LRCLIB's search (`lrclib.net`, free, no key; only
   title, artist and length sent): `searchesFor()`, `pickLyrics()` (same length ±3 s, synced first),
   `parseLrc()`; answers cached in memory. Pure parts unit-tested
@@ -121,7 +148,12 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename; `server/retry-when-busy.ts` retries the renames and deletes Windows briefly
   blocks (antivirus, the indexer)
-- `shared/` — schema and API contracts shared by client and server; `shared/filename.ts` has
+- `shared/` — schema and API contracts shared by client and server; `shared/soundcloud-link.ts` has
+  `parseSoundCloudLink()` (a SoundCloud track's one canonical link,
+  `https://api.soundcloud.com/tracks/<digits>`, from that or the URL-encoded URN form yt-dlp lists —
+  exact text matching, nothing else) and `audioLinkOf()` (what a download or save may fetch: a
+  YouTube video's canonical watch link or a SoundCloud track's — the only links that reach yt-dlp);
+  `shared/filename.ts` has
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
   default name of any download found from Spotify); `shared/audio-types.ts` has `AUDIO_TYPES` (the
@@ -130,12 +162,14 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
   open a playlist, Paste, download or save), laid out from components — `find-box.tsx` (the Link /
   Search / Playlist switch, the box, Paste, the copied-link suggestion), `preview-card.tsx` (the
   chosen video, Download Audio, Original audio), `search-results.tsx` (with the inline video
-  preview) and `recent-extractions.tsx` (the history, its search and filters; removing a song and
-  Clear history, with Undo in the note — `hooks/use-history-actions.tsx`).
+  preview; a SoundCloud mark on SoundCloud's results, and **Search SoundCloud** over YouTube's) and
+  `recent-extractions.tsx` (the history, its search and filters; removing a song and Clear history,
+  with Undo in the note — `hooks/use-history-actions.tsx`).
   `client/src/components/ui/` holds only the shadcn/ui components in use — add more with
   `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-youtube.ts` — the page's API calls as TanStack Query hooks (history,
-  search, Spotify links, playlists — `usePlaylist()` — and video info)
+  search — `searchSongs()`, `soundCloudOnly` for SoundCloud alone — Spotify links, playlists —
+  `usePlaylist()` — and video info)
 - `client/src/lib/clipboard.ts` + `hooks/use-clipboard-link.ts` — Paste and the copied-link
   suggestion (`findCopiedLink()`, `textToPaste()`, `canReadClipboard()`; unit-tested)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
@@ -150,9 +184,12 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
   and YouTube playlists — `source`; `usePlaylist()` picks the endpoint from the link): lists the songs
   (filter); picking a Spotify song searches its song link, picking a video opens it. With a Save to
   folder: In folder marks and counts (`hooks/use-songs-in-folder.ts`, refetched on focus and after
-  saves), a Not in folder view, tick boxes and Download (`hooks/use-download-all.ts`: one song at a
-  time — search, `confidentMatch()` (same length as on Spotify) or mark "check", then
-  `saveOnServer()`; a YouTube playlist's videos are saved as they are; Stop aborts), and Play / Shuffle
+  saves), a Not in folder view, tick boxes and Download (`hooks/use-download-all.ts`:
+  `downloadSongs()` works on as many songs at once as the app's computer has CPU cores
+  (`cpuCores` from `/api/settings`) — search, `confidentMatch()` (same length as on Spotify) or mark
+  "check", then `saveOnServer()`, and after a save YouTube refused, the same on SoundCloud alone; a
+  YouTube playlist's videos are saved as they are; Stop, or a problem with the folder, aborts every
+  song in flight), and Play / Shuffle
   (the songs in the folder, in the playlist's order: `playlistQueue()` in `lib/music.ts`) and Save
   playlist file. Without a
   folder: Downloaded marks from history entries' `spotifyId` (or video id). Downloads carry
@@ -180,7 +217,8 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
   `lib/remembered-player.ts` (the folder-song queue and position kept in localStorage, so the next
   visit carries on, paused; pure, unit-tested). `components/music-library.tsx`
   is "Your music": the folder's songs (`hooks/use-folder-music.ts`) or songs picked on the device
-  (`hooks/use-device-music.ts`, `lib/device-music.ts`: tags read in the page, played from blob URLs);
+  (`hooks/use-device-music.ts`, `lib/device-music.ts`: tags read in the page, one per core of that
+  device, played from blob URLs);
   `lib/music.ts` has the pure parts (songs, sort/filter, play order; unit-tested)
 - `scripts/build.ts` — the production build (`npm run build`). `scripts/windows/` — double-click
   helpers for running the app (`start.cmd`, `stop.cmd`, `update.cmd`, `update-yt-dlp.cmd`,
@@ -217,7 +255,9 @@ sources (YouTube, Spotify: primary, fallbacks, what "unreliable" means, what was
 update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch ships it too
 - `client/public/` — `manifest.webmanifest` and the icons (tab, phones' home screens), drawn by
   `scripts/make-icons.ts` with Chrome (`npx tsx scripts/make-icons.ts`; `tests/unit/web-app.test.ts`)
-- `tests/unit` (no network), `tests/api` (Vitest + Supertest, real YouTube), `tests/browser`
+- `tests/unit` (no network: yt-dlp, SoundCloud and Spotify played by stand-ins — `audio-routes.test.ts`
+  runs the real routes and pipeline with a Node process writing ffmpeg-made audio), `tests/api`
+  (Vitest + Supertest, real YouTube, SoundCloud — `soundcloud.e2e.test.ts` — and Spotify), `tests/browser`
   (Playwright, in Chrome and WebKit; Firefox on request). The player's tests (`music*.test.ts`,
   `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed. Tests name their temp
   files `yt-audio-<what>-` + `fs.mkdtemp()`'s suffix and delete them afterwards; each run's
@@ -257,7 +297,8 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - The API tests point `HISTORY_FILE`/`SETTINGS_FILE`/`SOURCE_HEALTH_FILE` at a temp folder, and the
   Playwright config starts its own server on port 5099 with a temp history, settings and health
   file, so tests never touch the real ones. A unit test that makes the app record a source-health
-  event (a stubbed Spotify fetch, a route through `youtubeGuard`) sets `SOURCE_HEALTH_FILE` too.
+  event (a stubbed Spotify fetch, a route through `youtubeGuard`, a SoundCloud search or look-up)
+  sets `SOURCE_HEALTH_FILE` too, or hands the code a stand-in health store.
 - `npm install` needs `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment on a system without Python
   3.9+: youtube-dl-exec's installer demands it though the app doesn't use Python (`yt-dlp.exe` on
   Windows; `scripts/yt-dlp.mjs` installs the standalone build on macOS/Linux afterwards). Don't use
@@ -274,18 +315,19 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 
 - Keep everything cross-platform: set env vars in npm scripts with `cross-env`, never a bare
   `VAR=value` prefix; no `reusePort` in `listen()` (fails with ENOTSUP on Windows).
-- Downloads stream yt-dlp stdout → ffmpeg stdin → response: `bestaudio` (best free stream, usually
-  Opus ~130 kbps; no Premium/cookies) → 320k CBR MP3, LAME `-q 2`. CBR is deliberate: a streamed
-  VBR file has no seek header, so players show the wrong duration. The MP3's ID3v2.3 tag (with the
-  cover) is the app's own (`id3v2Tag()`, ffmpeg runs with `-id3v2_version 0`): ffmpeg writes a tag with
-  a picture by seeking back to fix its size, which a stream can't — the tag said size 0. A streamed
-  .m4a can't hold a cover (its header goes out before any picture), so it has none.
+- Downloads stream yt-dlp stdout → ffmpeg stdin → response: `bestaudio` (best free stream — on
+  YouTube usually Opus ~130 kbps, on SoundCloud MP3 or Opus; no Premium/cookies) → 320k CBR MP3,
+  LAME `-q 2`. CBR is deliberate: a streamed VBR file has no seek header, so players show the wrong
+  duration. The MP3's ID3v2.3 tag (with the cover) is the app's own (`id3v2Tag()`; ffmpeg runs with
+  `-id3v2_version 0` and writes none — its mp3 muxer has no `-write_id3v2`): ffmpeg writes a tag
+  with a picture by seeking back to fix its size, which a stream can't — the tag said size 0. A
+  streamed .m4a can't hold a cover (its header goes out before any picture), so it has none.
 - A download (or save) owns two child processes, started by `startAudioPipeline()` in `audio.ts`,
   which swallows EPIPE on `ffmpeg.stdin` and kills yt-dlp once ffmpeg is done. The routes watch `res`
   "close" from the very start and call `stop()` on cancel. Unhandled stream errors or a missed kill
   mean a crashed server or processes left running forever, so re-test cancel paths after edits.
 - `?format=original` (the "Original audio" toggle) skips re-encoding: ffmpeg `-c:a copy` into `.opus`
-  (Ogg) for Opus, fragmented `.m4a` for AAC, `.mka` otherwise. The metadata pass uses the same
+  (Ogg) for Opus, fragmented `.m4a` for AAC, `.mp3` for MP3 (SoundCloud's), `.mka` otherwise. The metadata pass uses the same
   `bestaudio` selector and the stream is pinned to its `format_id`, so container and codec match.
   The format enum and `buildDownloadUrl()` live in `shared/routes.ts`.
 - Covers: a download never waits more than `COVER_WAIT_MS` for its cover, nor fails without one.
@@ -303,9 +345,12 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - Download names: always `safeFileName()` + `res.attachment()` (ASCII `filename` plus UTF-8
   `filename*`), so accents and non-Latin titles survive. Linux Chromium with no UTF-8 locale
   (`LANG` unset) can't use non-ASCII file names — run such browsers with `LANG=C.UTF-8`.
-- Search spawns yt-dlp directly (no shell) with the query after `--`; keep it that way so search
-  text can't become a command or a yt-dlp option. Results carry their own title/thumbnail, so
-  picking one needs no `/api/video/info` call.
+- Search spawns yt-dlp directly (no shell) with the query after `--` (`ytsearch12:`/`scsearch12:`);
+  keep it that way so search text can't become a command or a yt-dlp option. Results carry their own
+  title/thumbnail, so picking one needs no `/api/video/info` call. Only canonical links reach yt-dlp
+  for a download or save: `audioLinkOf()` rebuilds a YouTube video's from its id and a SoundCloud
+  track's from its number, and turns anything else down with a `400` (look-alike hosts,
+  credentials, http:, sets, users' pages, odd encodings — `soundcloud.test.ts` lists them).
 - A download with `spotifyId` is tagged with it — ID3 `TXXX:spotify_id` (MP3), `SPOTIFY_ID` (.opus/.mka),
   or the song's link as the comment of an .m4a (the ipod muxer drops custom keys; `use_metadata_tags`
   breaks the standard ones) — and with Spotify's title/artists (`spotifySongTags()`, ≤5 s, else
@@ -314,16 +359,27 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   TypeScript's `bundler` resolution ignores: `library.ts` loads it with `import()` and types it by hand.
   Regexes with the `u` flag (`\p{L}`) must be built with `new RegExp(...)`: tsc refuses the literal at
   this project's default ES5 target.
-- "Download all" stays one song at a time, and never downloads a match that isn't the same length as
-  the Spotify song (a song whose length Spotify's fallback didn't give is "check"): unattended picks
-  must be near-certain, and bursts of downloads invite YouTube's bot checks. The same worry shapes
-  `youtube-limits.ts`: at most 2 yt-dlp runs at once, a 10-minute cache, a 10-minute cooldown
-  answered with `429` once YouTube throttles or bot-checks us (the page and "Download all" wait it
-  out — one retry, then the run stops), a self-update of yt-dlp at most once an hour when a
-  failure looks like a stale yt-dlp, and `data/source-health.json` saying how the sources have been
-  answering. A new yt-dlp call goes through `youtubeGuard.run()`; a new route that can hit YouTube
-  answers `YouTubeLimited` with `sendLimited()`. `docs/sources.md` is the register to update when a
-  source or fallback changes.
+- Never slow the app down (the owner's rule, Oct 11, 2026): no cooldowns, queues or concurrency caps
+  of our own — parallel work runs one per CPU core (`cpuCores()`, `mapAtOnce()`), never capped by a
+  number we picked — and pacing only to a service's published limit (YouTube and SoundCloud publish
+  none). When a source refuses or fails, switch to the next source for that data at once; wait only
+  when there's no other source, and then on its own, honouring `Retry-After`. Cache answers that
+  don't change; results say which source they came from (`source`), errors say what to do. Test
+  against stand-ins, never the live services. What stays is what holds nothing back: the timeouts
+  that end a hung process or request, `retryWhenBusy()` for Windows' brief file locks, and one
+  writer per JSON file (history, settings, health report).
+- "Download all" works on as many songs at once as the app's computer has CPU cores (the page gets
+  `cpuCores` from `/api/settings`; it may be on a phone), and never downloads a match that isn't the
+  same length as the Spotify song (a song whose length Spotify's fallback didn't give is "check"):
+  unattended picks must be near-certain. A save YouTube refuses switches that song to SoundCloud
+  alone, once, at once. Stop or a folder problem aborts every song in flight (their pipelines are
+  killed and `.part` files deleted). `youtube-limits.ts` has the 10-minute cache, the refusal memory
+  that makes searches hedge, the background yt-dlp self-update (at most once an hour: `yt-dlp -U`
+  asks GitHub's API, which allows 60 unauthenticated requests an hour), and
+  `data/source-health.json` says how the sources have been answering. A new yt-dlp call to YouTube
+  goes through `youtubeGuard.run()`; a new route that can hit YouTube answers `YouTubeRefused` with
+  `sendRefused()`, at once. `docs/sources.md` is the register to update when a source or fallback
+  changes.
 - Spotify: only a validated kind (track/playlist/album) and 22-character id go into the embed URL we
   fetch, and only a validated code into a short link's (no user-controlled URLs are ever fetched).
   If Spotify links break, check the embed page's `__NEXT_DATA__` shape first (`parseEmbedPage()`,

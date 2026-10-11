@@ -408,7 +408,7 @@ describe("downloadSongs, as many songs at once as the app's computer has cores",
     );
   });
 
-  it("works on one song at a time when it's told one, and on all of them if there are fewer", async () => {
+  it("works on a single song when it's told one, and on all of them if there are fewer", async () => {
     const one = busyApp();
     const sequential = start(songs.slice(0, 2), one.calls, 1);
     await one.whenSaving(1);

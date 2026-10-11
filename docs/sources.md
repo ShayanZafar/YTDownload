@@ -1,32 +1,51 @@
 # The app's outside sources
 
-Everything the app knows comes from two places it doesn't control: YouTube (through yt-dlp) and Spotify. This page is the register of those sources: what each is used for, what stands in when it fails, how the app copes when YouTube limits the computer, where their health is recorded, and what was considered instead. The code is in `server/youtube-limits.ts`, `server/yt-dlp-update.ts`, `server/source-health.ts` and `server/spotify.ts`.
+Everything the app knows comes from places it doesn't control: YouTube and SoundCloud (both through yt-dlp) and Spotify. This page is the register of those sources: what each is used for, what stands in when it fails, how the app copes when YouTube limits the computer, where their health is recorded, and what was considered instead. The code is in `server/youtube-limits.ts`, `server/search.ts`, `server/soundcloud.ts`, `shared/soundcloud-link.ts`, `server/yt-dlp-update.ts`, `server/source-health.ts` and `server/spotify.ts`.
+
+## The rule: never slow the app down
+
+The owner's rule (October 11, 2026) for every outside service:
+
+- The app never slows itself down: no cooldowns, queues or caps of its own on how much runs at once. Work that can run in parallel runs one per CPU core of the computer (`cpuCores()` in `server/cpu-cores.ts`), never capped by a number we picked. Pacing is allowed only to a service's published limit — YouTube and SoundCloud publish none, so there is none here.
+- When a source refuses or fails, the app switches to the next source for that data at once. It waits only when there's no other source, and then on its own, honouring `Retry-After`.
+- Answers that don't change are cached. Results say which source they came from; errors say what to do.
+- Tests use stand-ins for the services, never the live ones (`tests/unit`); `tests/api` checks the real ones on a computer that can reach them.
 
 ## What comes from where
 
-| Need                                                 | Primary source                                                               | Fallbacks, in order                                                                                                                                                                                                                                                                              |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Audio** (search, video info, the download)         | YouTube, through yt-dlp (`youtube`)                                          | None that brings audio from elsewhere. When yt-dlp looks outdated the app updates it itself and tries once more (below); when YouTube is limiting the computer the app waits (below). A song YouTube refuses is marked **Check** in a playlist, to pick by hand.                                 |
-| **Song details** from a Spotify song link            | Spotify's public embed page, `open.spotify.com/embed/track/<id>` (`spotify`) | Spotify's keyless oEmbed endpoint, `open.spotify.com/oembed?url=…` (`spotify-oembed`): it knows the song's title and cover, not its artists or length. Such a song is searched for by title alone, and **Download all** marks it **Check** rather than guess which upload is the same recording. |
-| **Playlists**: a Spotify playlist's or album's songs | The embed page of the playlist or album, which lists its first 100 songs     | Past 100 songs, Spotify's Web API with the embed page's anonymous pass; if that fails, the first 100 stay (`maybeMore`). No oEmbed fallback: it knows nothing about a playlist's songs.                                                                                                          |
-| **Playlists**: a YouTube playlist's videos           | YouTube, through yt-dlp's flat listing (`youtube`)                           | None.                                                                                                                                                                                                                                                                                            |
+| Need                                                    | Primary source                                                               | Fallbacks, in order                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Audio**: a search, and the download of what it found  | YouTube, through yt-dlp (`youtube`)                                          | SoundCloud, through the same yt-dlp (`soundcloud`): asked at once when YouTube's search fails or finds nothing, and at the same time as YouTube while YouTube has refused this computer in the last 10 minutes (below). A song YouTube refuses to hand over can be looked for on SoundCloud alone: **Search SoundCloud** over the results, **Find on SoundCloud** on a refused save, and **Download all** does it by itself. |
+| **Audio**: a pasted YouTube link, or a YouTube playlist | YouTube, through yt-dlp (`youtube`)                                          | None: only YouTube has that exact video or playlist. A refusal is answered at once, saying to search for the song by name instead.                                                                                                                                                                                                                                                                                           |
+| **Song details** from a Spotify song link               | Spotify's public embed page, `open.spotify.com/embed/track/<id>` (`spotify`) | Spotify's keyless oEmbed endpoint, `open.spotify.com/oembed?url=…` (`spotify-oembed`), at once when the embed page fails for any reason but "no such song" (a `429` included): it knows the song's title and cover, not its artists or length. Such a song is searched for by title alone, and **Download all** marks it **Check** rather than guess which upload is the same recording.                                     |
+| **Playlists**: a Spotify playlist's or album's songs    | The embed page of the playlist or album, which lists its first 100 songs     | Past 100 songs, Spotify's Web API with the embed page's anonymous pass — the first page says how many there are, and the rest are asked for together, one per CPU core; if one fails, the songs before it stay (`maybeMore`). No oEmbed fallback: it knows nothing about a playlist's songs.                                                                                                                                 |
 
-The embed page and the oEmbed endpoint are both Spotify's own, public and keyless, so the app never needs a Spotify account (and can't have one: see "Considered and rejected").
+The embed page and the oEmbed endpoint are both Spotify's own, public and keyless, so the app never needs a Spotify account (and can't have one: see "Considered and rejected"). SoundCloud needs no account or key either: yt-dlp uses SoundCloud's own web client.
+
+## SoundCloud, the fallback for audio
+
+- **Searching:** `yt-dlp --flat-playlist --dump-single-json -- "scsearch12:<query>"` lists tracks in a few seconds, ranked like YouTube's results (the song searched for first; live, cover and remix versions down unless asked for). A Spotify song's search leaves out the "audio" its YouTube search adds, and puts tracks the same length as the Spotify song first. Answers are cached like YouTube's. Each result, and the answer, carries `source: "soundcloud"`; the page marks them **SoundCloud**.
+- **Links:** yt-dlp lists a track by its URN, URL-encoded — `https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A254112129`. The app makes that one canonical link, `https://api.soundcloud.com/tracks/254112129`, which yt-dlp opens the same way (it asks SoundCloud for track 254112129 either way). A result's link goes to the page and comes back to be downloaded, so the server checks it again (`audioLinkOf()` in `shared/soundcloud-link.ts`): only that canonical link, or a YouTube video's canonical watch link built from its id, ever reaches yt-dlp. The check matches the text exactly, without a URL parser that would quietly drop a `user:password@`, a `:443` or a trailing dot, or decode `%2F` — so look-alike hosts, credentials, `http:`, private tracks' `secret_token`, sets, playlists, users' pages and any other encoding are turned down with a `400`.
+- **Previews:** a track only SoundCloud's subscribers can hear in full gives everyone else a 30-second preview. A search lists such a track as exactly 30 seconds long, and it's ranked after every whole track; the look-up before a download refuses it (yt-dlp names its stream `…_preview`): "SoundCloud shares only a 30-second preview of this track…". Thirty seconds of a song is never saved — not even by **Download all** for a 30-second song.
+- **Downloading:** the same yt-dlp → ffmpeg pipeline as a YouTube video, to the same 320 kbps MP3. With **Original audio**, SoundCloud's own stream is kept as it is: an MP3 stays an `.mp3`, Opus becomes `.opus`. The history remembers a download came from SoundCloud (`source: "soundcloud"`), and Recent Extractions and the playlist panel say so.
 
 ## When YouTube limits the computer
 
-YouTube limits computers that ask too much — "HTTP Error 429: Too Many Requests", or "Sign in to confirm you're not a bot" — and yt-dlp stops understanding YouTube's pages every few weeks until it's updated. Every yt-dlp call that isn't an audio stream (a search, a video's details, a playlist listing, the look-up before a download) goes through one guard (`server/youtube-limits.ts`), which:
+YouTube limits computers that ask too much — "HTTP Error 429: Too Many Requests", "Sign in to confirm you're not a bot", or "This content isn't available, try again later" — and yt-dlp stops understanding YouTube's pages every few weeks until it's updated. Every yt-dlp call to YouTube that isn't an audio stream (a search, a video's details, a playlist listing, the look-up before a download) goes through one guard (`server/youtube-limits.ts`), which:
 
+- **Makes every call, at once.** Nothing is queued, gated or held back, refused a minute ago or not.
+- **Answers a refusal at once** with a `502` that says what happened and what to do — `{ message, source: "youtube", limited: true }` — for a pasted link's video, a YouTube playlist, and a download or save refused before any audio was sent (one refused mid-stream is cut short, as before).
+- **Hedges searches for 10 minutes after a refusal.** While YouTube has refused this computer in the last 10 minutes, a search asks SoundCloud at the same time as YouTube, so a refusal costs no time: YouTube's results are used when it answers with some, SoundCloud's otherwise. Outside those 10 minutes SoundCloud is asked only once YouTube's search has failed or found nothing — straight away.
 - **Answers repeats from a cache.** The same search, video or playlist asked for again within 10 minutes is answered without asking YouTube (200 entries at most; the least recently used go first).
-- **Runs at most two yt-dlp calls at once.** Others wait their turn, in order. Bursts are what YouTube's checks look for; **Download all** was already one song at a time for the same reason.
-- **Backs off for 10 minutes once YouTube has limited it.** The app answers `429` with how long to wait (`{ message, retryAfterSeconds, source: "youtube" }`, plus a `Retry-After` header) and runs no yt-dlp meanwhile — cached answers are still served. A download that YouTube refuses before any audio has been sent gets the same `429` instead of a `502`; one refused mid-stream is cut short as before. The page shows the message; **Download all** shows the song waiting, waits that long (Stop ends the wait; 15 minutes at most), tries the song once more, and if YouTube still won't have it, stops there — the songs it didn't get to are left as they were.
-- **Updates yt-dlp itself.** The first time in an hour that a yt-dlp call fails in a way an outdated yt-dlp fails ("Requested format is not available", "Unable to extract…", a signature or `nsig` problem, or a bot check, which an old yt-dlp earns more easily), the app runs the repo's own updater (`node scripts/yt-dlp.mjs --update`, what `npm run update-yt-dlp` runs) with a two-minute limit, logs one line when it starts and one when it's done, and then tries the failed call once more — if whoever asked is still waiting. If the update can't run (no network, say), the app carries on with the yt-dlp it has.
+- **Updates yt-dlp itself, in the background.** The first time in an hour that a call fails in a way an outdated yt-dlp fails ("Requested format is not available", "Unable to extract…", a signature or `nsig` problem, or a bot check, which an old yt-dlp earns more easily), the app runs the repo's own updater (`node scripts/yt-dlp.mjs --update`, what `npm run update-yt-dlp` runs) with a two-minute limit, and logs one line when it starts and one when it's done. Nothing waits for it: the call that failed has been answered, and later ones use the new yt-dlp. (Once an hour because `yt-dlp -U` asks GitHub's API, which allows 60 unauthenticated requests an hour.)
+
+**Download all** works on as many songs at once as the app's computer has CPU cores. When YouTube refuses a Spotify song's save, that song is looked for on SoundCloud alone at once, and saved from there if a track is the same length as the song on Spotify; otherwise it's marked failed and the run goes on. (A YouTube playlist's videos have no fallback: only YouTube has them.) Only a problem with the folder itself stops a run.
 
 ## What "unreliable" means
 
-Every attempt against a source is recorded: when, whether it worked, and for a failure whether the source said to slow down (`throttled`: HTTP 429), refused the computer (`blocked`: YouTube's bot check, or an HTTP 403 from Spotify) or anything else (`error`), with its last error line. A video that's private or removed is YouTube answering properly, so it counts as a success.
+Every attempt against a source is recorded: when, whether it worked, and for a failure whether the source said to slow down (`throttled`: HTTP 429), refused the computer (`blocked`: YouTube's bot check, or an HTTP 403 from Spotify) or anything else (`error`), with its last error line. A video or track that's private or removed is the source answering properly, so it counts as a success.
 
-A source is **unreliable** when it has been asked at least 5 times in the last 24 hours and under half of those attempts worked. The report's top-level `unreliable` is true when some job can't be done: its primary source is unreliable and so is every fallback for it — or it has no fallback (audio has none, so an unreliable YouTube makes it true). The `summary` names the unreliable sources with their counts and last error, or says "All sources healthy."
+A source is **unreliable** when it has been asked at least 5 times in the last 24 hours and under half of those attempts worked. The report's top-level `unreliable` is true when some job can't be done: its primary source is unreliable and so is every fallback for it — or it has no fallback. YouTube's fallback for audio is SoundCloud, so an unreliable YouTube alone doesn't make it true; YouTube and SoundCloud both unreliable does. The `summary` names the unreliable sources with their counts and last error, or says "All sources healthy."
 
 ## Where health is recorded
 
@@ -37,16 +56,25 @@ A source is **unreliable** when it has been asked at least 5 times in the last 2
 {
   "updatedAt": "2026-10-11T12:00:00.000Z",
   "unreliable": false,
-  "summary": "All sources healthy.",
+  "summary": "YouTube: 2 of 20 requests succeeded in the last 24 h (last error: HTTP Error 429: Too Many Requests).",
   "sources": {
     "youtube": {
       "role": "primary",
       "for": "audio",
-      "ok": 18,
-      "failed": 2,
-      "throttled": 2,
-      "lastOk": "2026-10-11T11:58:02.000Z",
+      "ok": 2,
+      "failed": 18,
+      "throttled": 18,
+      "lastOk": "2026-10-11T11:20:02.000Z",
       "lastError": "HTTP Error 429: Too Many Requests"
+    },
+    "soundcloud": {
+      "role": "fallback",
+      "for": "audio",
+      "ok": 12,
+      "failed": 0,
+      "throttled": 0,
+      "lastOk": "2026-10-11T11:58:40.000Z",
+      "lastError": null
     },
     "spotify": {
       "role": "primary",
@@ -74,10 +102,8 @@ The events behind it live in memory only (the newest 500 of the last 24 hours), 
 
 ## Considered and rejected
 
-- **Invidious or Piped public instances** as a second source of audio: they fetch from YouTube themselves, so they're throttled and blocked the same way — more often, since many people share each instance — and they come and go. Not reliable enough to be a fallback for anything.
+- **Invidious or Piped public instances** as a source of audio: they fetch from YouTube themselves, so they're throttled and blocked the same way — more often, since many people share each instance — they come and go, and they'd see every search the app makes. Not reliable enough to be a fallback for anything; SoundCloud is a different service, with its own catalogue and its own limits.
 - **YouTube cookies or a sign-in** to get past the bot check: not by design. Giving the app a YouTube login puts that account at risk, and the app must stay usable without any account.
-- **The YouTube Data API** for search and video details: needs a key, a Google project and a quota, and gives no audio anyway. The app stays keyless.
-- **Spotify's Web API with the app's own key** for song details: since February 2026 a development-mode app can only read its owner's own data, and its owner would need Premium. The embed page and oEmbed endpoint are public and need nothing.
+- **Keyed APIs**: the YouTube Data API for search and video details needs a key, a Google project and a quota, and gives no audio anyway; SoundCloud's own API needs an app registered with SoundCloud and its credentials, where yt-dlp gets by with SoundCloud's public web client; Spotify's Web API with the app's own key can, since February 2026, read only its owner's own data, and its owner would need Premium. The app stays keyless.
+- **Waiting YouTube's limits out** — a cooldown after a refusal, a cap of two yt-dlp runs at once, one song at a time in **Download all**, retries after a delay: they made the app slower than YouTube ever asked for, and they're gone. A refusal now switches to SoundCloud at once where SoundCloud can answer, and is answered at once where it can't.
 - **A second music catalogue** (MusicBrainz, say) for song details: another dependency for a job Spotify's two public endpoints already cover between them.
-
-A SoundCloud fallback for audio was left open: the places to add one are where the app decides YouTube refused a song — `searchYouTube()` throwing `YouTubeLimited` in `server/search.ts`, and `downloadSong()` in `client/src/hooks/use-download-all.ts`, where a song ends up **Check** or waits out a 429 — with results carrying a `source` field the way a Spotify song carries `source: "spotify-oembed"`.
