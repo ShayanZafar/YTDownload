@@ -23,6 +23,7 @@ import type { IAudioMetadata, IOptions } from "music-metadata";
 import { AUDIO_TYPES } from "@shared/audio-types";
 import { foundByValues, type SongToFind, type SongsInFolder } from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
+import { mapAtOnce } from "./cpu-cores";
 import { folderError, isHiddenFolder } from "./folders";
 
 /** Files looked at as songs: .mp3, .m4a, .opus, .flac… (see shared/audio-types.ts). */
@@ -34,8 +35,6 @@ export const MAX_SONG_FILES = 5_000;
 const MAX_DEPTH = 6;
 /** Folder entries looked at in all, files and folders alike — a limit for a folder like C:\. */
 const MAX_ENTRIES = 50_000;
-/** Files whose tags are read at the same time. */
-const READ_AT_ONCE = 8;
 
 export type FoundBy = (typeof foundByValues)[number];
 
@@ -274,26 +273,13 @@ export function tagsFrom({
   };
 }
 
-/** Runs `fn` on every item, at most `limit` at a time. */
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>) {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async () => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
 /** The audio files in `folder` (and its subfolders), each with its tags. */
 export async function readFolderTags(
   folder: string,
 ): Promise<{ files: (AudioFile & { tags: FileTags })[]; complete: boolean }> {
   const { files, complete } = await findAudioFiles(folder);
-  const tags = await mapLimit(files, READ_AT_ONCE, readTags);
+  // As many files at once as this computer has CPU cores.
+  const tags = await mapAtOnce(files, readTags);
   return { files: files.map((file, i) => ({ ...file, tags: tags[i] })), complete };
 }
 

@@ -25,6 +25,7 @@ import {
 } from "../../server/spotify";
 import { rankResults, type RawSearchEntry } from "../../server/search";
 import { sourceHealth } from "../../server/source-health";
+import { cpuCores } from "../../server/cpu-cores";
 
 const ID = "4u7EnebtmKWzUH433cf5Qv"; // Queen – Bohemian Rhapsody (Remastered 2011)
 
@@ -532,6 +533,67 @@ describe("fetchSpotifyPlaylist", () => {
 
     stubFetch(page(full), new Response("not json"));
     expect((await fetchSpotifyPlaylist("playlist", PLAYLIST)).tracks).toHaveLength(100);
+  });
+
+  it("asks for the remaining pages together once the first says how many there are", async () => {
+    // The answer for each request, once the test says (by offset; the embed page at once).
+    const answers = new Map<string, (res: Response) => void>();
+    const fetch = vi.fn((url: string) =>
+      url.startsWith("https://open.spotify.com/")
+        ? Promise.resolve(page(full))
+        : new Promise<Response>((resolve) =>
+            answers.set(new URL(url).searchParams.get("offset")!, resolve),
+          ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const answered = new Set<string>();
+    const waiting = () => [...answers.keys()].filter((offset) => !answered.has(offset));
+    const answer = (offset: string) => {
+      answered.add(offset);
+      const from = Number(offset);
+      answers.get(offset)!(apiPage(from, Math.min(from + 100, 450), 450));
+    };
+
+    const playlist = fetchSpotifyPlaylist("playlist", PLAYLIST);
+    await vi.waitFor(() => expect(waiting()).toEqual(["100"]));
+    answer("100");
+    // Pages 200, 300 and 400 go out together: as many at once as this computer has cores.
+    await vi.waitFor(() =>
+      expect(waiting()).toEqual(["200", "300", "400"].slice(0, Math.min(cpuCores(), 3))),
+    );
+    // Answered last page first, the songs still come in the playlist's order.
+    while (answered.size < 4) {
+      await vi.waitFor(() => expect(waiting().length).toBeGreaterThan(0));
+      answer(waiting().sort((a, b) => Number(b) - Number(a))[0]);
+    }
+    const done = await playlist;
+    expect(done.tracks).toHaveLength(450);
+    expect(done.tracks.map((t) => t.title).slice(199, 202)).toEqual([
+      "Song 199",
+      "Song 200",
+      "Song 201",
+    ]);
+    expect(done.maybeMore).toBe(false);
+  });
+
+  it("keeps the songs before a page that fails, even when later pages came", async () => {
+    stubFetch(
+      page(full),
+      apiPage(100, 200, 500),
+      apiPage(200, 300, 500),
+      json({}, 500),
+      apiPage(400, 500, 500),
+    );
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(300);
+    expect(playlist.maybeMore).toBe(true);
+  });
+
+  it("stops at a short page before the end, rather than leave a gap", async () => {
+    stubFetch(page(full), apiPage(100, 200, 400), apiPage(200, 250, 400), apiPage(300, 400, 400));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(250);
+    expect(playlist.maybeMore).toBe(true);
   });
 
   it(`stops at ${PLAYLIST_MAX_SONGS} songs`, async () => {

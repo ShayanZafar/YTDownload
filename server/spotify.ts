@@ -7,9 +7,9 @@
  *
  * The embed player for a playlist or album lists its songs the same way, which
  * is what the playlist panel shows. It lists only the first 100 of a playlist;
- * for the rest, `fetchMorePlaylistSongs()` pages through Spotify's Web API with
- * the anonymous pass the embed page itself carries (the owner agreed to this
- * unofficial route). Spotify answers that only for playlists people made — its
+ * for the rest, `fetchMorePlaylistSongs()` asks Spotify's Web API for its pages
+ * with the anonymous pass the embed page itself carries (the owner agreed to
+ * this unofficial route). Spotify answers that only for playlists people made — its
  * own (editorial, mixes) stay at 100 — and anything that fails keeps the 100.
  */
 import {
@@ -20,6 +20,7 @@ import {
   type SpotifyTrack,
 } from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
+import { mapAtOnce } from "./cpu-cores";
 import { sourceHealth } from "./source-health";
 
 export { cleanTrackTitle };
@@ -545,42 +546,62 @@ export function parsePlaylistItemsPage(json: unknown): {
   };
 }
 
+/** One page of a playlist's songs from the Web API, from `offset` on — or undefined if Spotify didn't give it. */
+async function fetchPlaylistItemsPage(
+  id: string,
+  token: string,
+  offset: number,
+): Promise<ReturnType<typeof parsePlaylistItemsPage> | undefined> {
+  const params = new URLSearchParams({
+    offset: String(offset),
+    limit: String(Math.min(PLAYLIST_PAGE_SIZE, PLAYLIST_MAX_SONGS - offset)),
+    fields: "total,items(is_local,track(type,id,name,duration_ms,explicit,artists(name)))",
+  });
+  try {
+    const res = await fetchSpotify(
+      "spotify",
+      `https://api.spotify.com/v1/playlists/${id}/tracks?${params}`,
+      { headers: { Authorization: `Bearer ${token}`, "User-Agent": USER_AGENT } },
+    );
+    return res.ok ? parsePlaylistItemsPage(await res.json()) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * The songs of a playlist after the embed page's first 100, a page at a time
- * from Spotify's Web API with the embed page's anonymous pass — up to
- * `PLAYLIST_MAX_SONGS` in all. `complete` is false if Spotify wouldn't share
- * them all (its own playlists answer 404) or the list was cut at the limit;
- * a failed page keeps what came before it.
+ * The songs of a playlist after the embed page's first 100, from Spotify's Web
+ * API with the embed page's anonymous pass — up to `PLAYLIST_MAX_SONGS` in
+ * all. The first page says how many there are; the rest are then asked for
+ * together, a page per CPU core at a time (Spotify publishes no limit to keep
+ * to). `complete` is false if Spotify wouldn't share them all (its own
+ * playlists answer 404) or the list was cut at the limit; a failed page keeps
+ * what came before it.
  */
 export async function fetchMorePlaylistSongs(
   id: string,
   token: string,
 ): Promise<{ tracks: SpotifyPlaylistTrack[]; complete: boolean }> {
-  const tracks: SpotifyPlaylistTrack[] = [];
-  let offset = PLAYLIST_EMBED_LIMIT;
-  while (offset < PLAYLIST_MAX_SONGS) {
-    const params = new URLSearchParams({
-      offset: String(offset),
-      limit: String(Math.min(PLAYLIST_PAGE_SIZE, PLAYLIST_MAX_SONGS - offset)),
-      fields: "total,items(is_local,track(type,id,name,duration_ms,explicit,artists(name)))",
-    });
-    let page: ReturnType<typeof parsePlaylistItemsPage>;
-    try {
-      const res = await fetchSpotify(
-        "spotify",
-        `https://api.spotify.com/v1/playlists/${id}/tracks?${params}`,
-        { headers: { Authorization: `Bearer ${token}`, "User-Agent": USER_AGENT } },
-      );
-      if (!res.ok) return { tracks, complete: false };
-      page = parsePlaylistItemsPage(await res.json());
-    } catch {
-      return { tracks, complete: false };
-    }
+  const first = await fetchPlaylistItemsPage(id, token, PLAYLIST_EMBED_LIMIT);
+  if (!first) return { tracks: [], complete: false };
+  const tracks = [...first.tracks];
+  let offset = PLAYLIST_EMBED_LIMIT + first.count;
+  if (first.count === 0 || offset >= first.total) return { tracks, complete: true };
+
+  const offsets: number[] = [];
+  for (let at = offset; at < Math.min(first.total, PLAYLIST_MAX_SONGS); at += PLAYLIST_PAGE_SIZE) {
+    offsets.push(at);
+  }
+  const pages = await mapAtOnce(offsets, (at) => fetchPlaylistItemsPage(id, token, at));
+  for (const page of pages) {
+    if (!page) return { tracks, complete: false };
     tracks.push(...page.tracks);
     offset += page.count;
     if (page.count === 0 || offset >= page.total) return { tracks, complete: true };
+    // A short page before the end would leave a gap before the next: stop there.
+    if (page.count < PLAYLIST_PAGE_SIZE) return { tracks, complete: false };
   }
-  return { tracks, complete: false };
+  return { tracks, complete: false }; // cut at PLAYLIST_MAX_SONGS
 }
 
 /**
