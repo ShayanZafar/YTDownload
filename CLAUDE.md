@@ -86,7 +86,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   `npx shadcn@latest add <name>` (config in `components.json`)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
   Original audio toggle (`use-download-format.ts`) and the Link / Search / Playlist switch;
-  `use-stored-value.ts` remembers free text (the open playlist's link)
+  `use-stored-value.ts` remembers free text (the open playlist's link); `use-recent-playlists.ts`
+  the playlists opened lately (`lib/recent-playlists.ts`, pure, unit-tested), listed under the box in
+  Playlist mode by `components/recent-playlists.tsx`
 - `client/src/lib/format.ts` — `formatDuration()`, `isSpotifyLink()`, `isSpotifyPlaylistLink()` and
   `asLink()` (a YouTube link is opened, a playlist/album link opens the panel, anything else is
   searched)
@@ -116,7 +118,8 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   filters to that exact title), date ranges, highlighting; the list pages 25 at a time
 - The music player: `hooks/use-player.tsx` (`PlayerProvider` in `App.tsx`: one `<audio>` for the
   page, queue/shuffle/repeat, the FLAC fallback for folder songs, Media Session) and
-  `components/player-bar.tsx` (fixed to the bottom; rendered by `layout.tsx`). `components/music-library.tsx`
+  `components/player-bar.tsx` (fixed to the bottom; rendered by `layout.tsx`), with `components/up-next.tsx`
+  (the queue, opened from the bar; Play next / Add to queue are `queueWith()` in `lib/music.ts`). `components/music-library.tsx`
   is "Your music": the folder's songs (`hooks/use-folder-music.ts`) or songs picked on the device
   (`hooks/use-device-music.ts`, `lib/device-music.ts`: tags read in the page, played from blob URLs);
   `lib/music.ts` has the pure parts (songs, sort/filter, play order; unit-tested)

@@ -8,6 +8,7 @@ import {
   Download,
   ExternalLink,
   FileMusic,
+  ListEnd,
   ListMusic,
   Loader2,
   Play,
@@ -65,6 +66,8 @@ type SpotifyPlaylistPanelProps = {
   playableCount: number;
   /** Plays those songs in the music player, in order or shuffled. Called inside the click. */
   onPlay: (shuffle: boolean) => void;
+  /** Adds those songs to the end of the player's queue. */
+  onQueue: () => void;
   /** Writes those songs into the folder as an .m3u8 playlist file. */
   onSavePlaylistFile: () => void;
   savingPlaylistFile: boolean;
@@ -196,6 +199,7 @@ export function SpotifyPlaylistPanel({
   onDownloadAll,
   playableCount,
   onPlay,
+  onQueue,
   onSavePlaylistFile,
   savingPlaylistFile,
   onStop,
@@ -465,6 +469,17 @@ export function SpotifyPlaylistPanel({
             >
               <Shuffle className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Shuffle</span>
+            </button>
+            <button
+              type="button"
+              disabled={playableCount === 0}
+              onClick={onQueue}
+              aria-label={`Add the songs in ${where} to the queue`}
+              title={`Add the songs in ${where} to the end of the player's queue`}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-50"
+            >
+              <ListEnd className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Add to queue</span>
             </button>
             <button
               type="button"
