@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { UpNext } from "@/components/up-next";
 import { usePlayer, usePlayerTime } from "@/hooks/use-player";
+import { usePlayerShortcuts } from "@/hooks/use-player-shortcuts";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -37,7 +38,8 @@ const iconButton =
 /**
  * The player, pinned to the bottom of the page while a song is loaded: the
  * song, play/pause, previous/next, a seek bar, shuffle, repeat and volume.
- * The page keeps room for it at the end, so it never hides anything.
+ * The page keeps room for it at the end, so it never hides anything. Its
+ * keyboard shortcuts work anywhere on the page (their keys are in the tooltips).
  */
 export function PlayerBar() {
   const player = usePlayer();
@@ -45,6 +47,7 @@ export function PlayerBar() {
   const [coverFailed, setCoverFailed] = useState(false);
   const [showVolume] = useState(hasFinePointer);
   const { current, status, cover, upNextOpen, setUpNextOpen } = player;
+  usePlayerShortcuts();
   const closeUpNext = useCallback(() => setUpNextOpen(false), [setUpNextOpen]);
   // A note in the corner would cover Up next, which shows what it said anyway.
   const { dismiss } = useToast();
@@ -96,6 +99,7 @@ export function PlayerBar() {
             <input
               type="range"
               aria-label="Seek"
+              title="Seek (← → 5 seconds, J L 10 seconds; ? for all the shortcuts)"
               aria-valuetext={`${formatDuration(time)} of ${length ? formatDuration(length) : "unknown"}`}
               min={0}
               max={length ?? 0}
@@ -159,7 +163,7 @@ export function PlayerBar() {
                 type="button"
                 onClick={player.previous}
                 aria-label="Previous song"
-                title="Previous (or back to the start)"
+                title="Previous, or back to the start (Shift+P)"
                 className={iconButton}
               >
                 <SkipBack className="h-5 w-5" />
@@ -168,6 +172,7 @@ export function PlayerBar() {
                 type="button"
                 onClick={player.toggle}
                 aria-label={playing || loading ? "Pause" : "Play"}
+                title={`${playing || loading ? "Pause" : "Play"} (Space or K)`}
                 className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md transition-transform hover:scale-105 active:scale-95"
               >
                 {loading ? (
@@ -183,7 +188,7 @@ export function PlayerBar() {
                 onClick={player.next}
                 disabled={!player.hasNext}
                 aria-label="Next song"
-                title="Next"
+                title="Next (Shift+N)"
                 className={iconButton}
               >
                 <SkipForward className="h-5 w-5" />
@@ -213,7 +218,7 @@ export function PlayerBar() {
                   type="button"
                   onClick={player.toggleMute}
                   aria-label={player.muted ? "Unmute" : "Mute"}
-                  title={player.muted ? "Unmute" : "Mute"}
+                  title={player.muted ? "Unmute (M)" : "Mute (M)"}
                   className={iconButton}
                 >
                   <VolumeIcon className="h-4 w-4" />

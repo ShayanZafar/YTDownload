@@ -37,6 +37,8 @@ const audio = (page: Page) =>
       src: element.currentSrc,
       hasSource: element.hasAttribute("src"),
       error: element.error?.code ?? null,
+      time: element.currentTime,
+      muted: element.muted,
     };
   });
 
@@ -205,6 +207,86 @@ test.describe("Music player (browser)", () => {
     await expect(page.getByText("Added to the queue", { exact: true })).toBeVisible();
     await expect(player.getByRole("button", { name: "Next song" })).toBeEnabled();
     await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
+  });
+
+  test("keyboard shortcuts work anywhere on the page, except while typing", async ({
+    page,
+    request,
+  }) => {
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    const player = page.getByRole("region", { name: "Music player" });
+    await library.getByRole("button", { name: /^Play “Test Tone”/ }).click(START_SONG);
+    await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+
+    // K pauses and plays; L goes 10 seconds on; M mutes.
+    await page.keyboard.press("k");
+    await expect.poll(() => audio(page)).toMatchObject({ paused: true });
+    await page.keyboard.press("l");
+    await expect.poll(async () => (await audio(page)).time).toBeGreaterThanOrEqual(9.5);
+    await page.keyboard.press("j");
+    await expect.poll(async () => (await audio(page)).time).toBeLessThan(5);
+    await page.keyboard.press("m");
+    await expect.poll(() => audio(page)).toMatchObject({ muted: true });
+    await page.keyboard.press("m");
+    await expect.poll(() => audio(page)).toMatchObject({ muted: false });
+
+    // Typing in a box types; the song stays paused.
+    const filter = page.getByLabel("YouTube link", { exact: true });
+    await filter.click();
+    await page.keyboard.type("k");
+    await expect(filter).toHaveValue("k");
+    expect((await audio(page)).paused).toBe(true);
+    await filter.fill("");
+    await filter.blur();
+
+    // Shift+N: the next song.
+    await page.keyboard.press("Shift+N", START_SONG);
+    await expect(player.getByTestId("player-title")).toHaveText("Studio Master");
+
+    // ? lists the shortcuts.
+    await page.keyboard.press("?");
+    await expect(page.getByText("Keyboard shortcuts", { exact: true })).toBeVisible();
+    await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
+  });
+
+  test("carries on where it left off, after the page is opened again", async ({
+    page,
+    request,
+  }) => {
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    const player = page.getByRole("region", { name: "Music player" });
+    await library.getByRole("button", { name: /^Play “Test Tone”/ }).click(START_SONG);
+    await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+    await page.keyboard.press("k");
+    await expect.poll(() => audio(page)).toMatchObject({ paused: true });
+    await player.getByRole("slider", { name: "Seek" }).fill("12");
+
+    // Opened again: the same song, paused where it was, and nothing loaded yet.
+    await page.reload();
+    await expect(player.getByTestId("player-title")).toHaveText("Test Tone");
+    await expect(player.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+    await expect(player.getByRole("slider", { name: "Seek" })).toHaveAttribute(
+      "aria-valuetext",
+      "0:12 of 0:20",
+    );
+    expect(await audio(page)).toMatchObject({ paused: true, hasSource: false });
+    // The rest of the queue is there too.
+    await expect(player.getByRole("button", { name: "Next song" })).toBeEnabled();
+
+    // Play carries on from there.
+    await player.getByRole("button", { name: "Play", exact: true }).click(START_SONG);
+    await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+    expect((await audio(page)).time).toBeGreaterThanOrEqual(11.5);
+
+    // Closed, it's forgotten.
+    await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
+    await page.reload();
+    await expect(library.getByRole("button", { name: /^Play “Test Tone”/ })).toBeVisible();
+    await expect(player).toBeHidden();
   });
 
   test("the folder's songs can be filtered and put in order", async ({ page, request }) => {
