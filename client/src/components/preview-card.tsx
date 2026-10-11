@@ -1,5 +1,6 @@
-import { Download, Loader2, Music } from "lucide-react";
+import { Cloud, Download, Loader2, Music } from "lucide-react";
 import type { DownloadFormat } from "@shared/routes";
+import type { AudioSource } from "@shared/schema";
 import { RenameableTitle } from "@/components/renameable-title";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -7,7 +8,7 @@ import { formatBytes, formatDuration } from "@/lib/format";
 import { folderName, type ActiveSave } from "@/lib/save-to-folder";
 
 // What the preview card shows: a video opened from a link or picked from the
-// search results.
+// search results (a SoundCloud track, when YouTube couldn't answer the search).
 export type Selected = {
   url: string;
   title: string;
@@ -21,6 +22,8 @@ export type Selected = {
    * song (rather than the YouTube video's title).
    */
   fileTitle?: string;
+  /** Where it is: YouTube when left out. */
+  source?: AudioSource;
 };
 
 type PreviewCardProps = {
@@ -55,6 +58,8 @@ export function PreviewCard({
   onClear,
 }: PreviewCardProps) {
   const isOriginal = format === "original";
+  const fromSoundCloud = video.source === "soundcloud";
+  const from = fromSoundCloud ? "SoundCloud" : "YouTube";
   return (
     <div className="glass-card rounded-4xl p-4 md:p-6 flex flex-col md:flex-row gap-6 items-center">
       {/* Thumbnail */}
@@ -80,15 +85,30 @@ export function PreviewCard({
             extension={isOriginal ? ".opus" : ".mp3"}
             extensionHint={
               isOriginal
-                ? "Usually .opus — .m4a when YouTube only has AAC audio for this video"
+                ? fromSoundCloud
+                  ? "SoundCloud's own stream: .opus or .mp3, whichever it has for this track"
+                  : "Usually .opus — .m4a when YouTube only has AAC audio for this video"
                 : undefined
             }
             onRename={onRename}
           />
-          {video.channel && (
-            <p className="mt-1 text-sm text-muted-foreground">
-              {video.channel}
-              {video.duration != null && ` · ${formatDuration(video.duration)}`}
+          {(video.channel || fromSoundCloud) && (
+            <p className="mt-1 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm text-muted-foreground md:justify-start">
+              {video.channel && (
+                <span>
+                  {video.channel}
+                  {video.duration != null && ` · ${formatDuration(video.duration)}`}
+                </span>
+              )}
+              {fromSoundCloud && (
+                <span
+                  title="On SoundCloud: YouTube couldn't answer the search"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground"
+                >
+                  <Cloud className="w-3 h-3" />
+                  SoundCloud
+                </span>
+              )}
             </p>
           )}
         </div>
@@ -145,8 +165,8 @@ export function PreviewCard({
                 Original audio
               </Label>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                YouTube's own stream, not converted (usually .opus). Smaller and untouched; plays in
-                VLC, but not on some phones and car stereos.
+                {`${from}'s own stream, not converted (${fromSoundCloud ? ".mp3 or .opus" : "usually .opus"}).`}{" "}
+                Smaller and untouched; plays in VLC, but not on some phones and car stereos.
               </p>
             </div>
             <Switch

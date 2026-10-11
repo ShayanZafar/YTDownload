@@ -32,12 +32,21 @@ export function useRecentDownloads(pollEveryMs: number | false = false) {
 }
 
 /**
- * Song search: YouTube results for a text query, official uploads first. A
- * Spotify song link also returns the song it points to (`spotify`). A failure
- * is an `ApiError` with the app's message (`limited` when YouTube refused).
+ * Song search: results for a text query, official uploads first — YouTube's,
+ * or SoundCloud's when YouTube can't answer (`source` says which, and so does
+ * each result). A Spotify song link also returns the song it points to
+ * (`spotify`). `soundCloudOnly` asks SoundCloud alone, for a song YouTube
+ * refused to hand over. A failure is an `ApiError` with the app's message
+ * (`limited` when YouTube refused).
  */
-export async function searchSongs(query: string, signal?: AbortSignal) {
-  const res = await fetch(`${api.video.search.path}?${new URLSearchParams({ q: query })}`, {
+export async function searchSongs(
+  query: string,
+  signal?: AbortSignal,
+  { soundCloudOnly = false }: { soundCloudOnly?: boolean } = {},
+) {
+  const params = new URLSearchParams({ q: query });
+  if (soundCloudOnly) params.set("source", "soundcloud");
+  const res = await fetch(`${api.video.search.path}?${params}`, {
     credentials: "include",
     signal,
   });
@@ -60,8 +69,14 @@ export function useSpotifyLink() {
   return useMutation({ mutationFn: openSpotifyLink });
 }
 
+/** A search the page runs: `soundCloudOnly` to look on SoundCloud alone. */
+export type SongSearchRequest = { query: string; soundCloudOnly?: boolean };
+
 export function useSongSearch() {
-  return useMutation({ mutationFn: (query: string) => searchSongs(query) });
+  return useMutation({
+    mutationFn: ({ query, soundCloudOnly }: SongSearchRequest) =>
+      searchSongs(query, undefined, { soundCloudOnly }),
+  });
 }
 
 /**

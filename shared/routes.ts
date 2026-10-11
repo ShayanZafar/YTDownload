@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  audioSources,
   downloadSchema,
   folderEntrySchema,
   lyricsSchema,
@@ -20,8 +21,9 @@ import {
 /**
  * What the download endpoint can produce:
  * - "mp3": converted to a 320 kbps MP3 — plays everywhere (the default).
- * - "original": YouTube's own audio stream, not re-encoded — smaller and
- *   untouched, saved as .opus (or .m4a when YouTube only has AAC).
+ * - "original": the source's own audio stream, not re-encoded — smaller and
+ *   untouched, saved as .opus (or .m4a when YouTube only has AAC; SoundCloud's
+ *   MP3 stays an .mp3).
  */
 export const downloadFormats = ["mp3", "original"] as const;
 export type DownloadFormat = (typeof downloadFormats)[number];
@@ -39,8 +41,9 @@ export const errorSchemas = {
   }),
   /**
    * A `502` for a request YouTube refused because it's limiting this computer
-   * (throttled, or a bot check): the usual message, plus which source refused
-   * and `limited: true`. Answered at once — the app never waits it out.
+   * (throttled, or a bot check): the usual message — what to do instead — plus
+   * which source refused and `limited: true`. Answered at once: the app never
+   * waits it out.
    */
   limited: z.object({
     message: z.string(),
@@ -132,10 +135,17 @@ export const api = {
           .trim()
           .min(1, "Type something to search for")
           .max(200, "That search is too long"),
+        /**
+         * "soundcloud": search SoundCloud alone — for a song YouTube refused to
+         * hand over. Left out: YouTube, with SoundCloud as its fallback.
+         */
+        source: z.literal("soundcloud", { error: 'source must be "soundcloud"' }).optional(),
       }),
       responses: {
         200: z.object({
           results: z.array(searchResultSchema),
+          /** Which source the results are from (each result says so too). */
+          source: z.enum(audioSources),
           /** Present when the search was a Spotify song link: the song it points to. */
           spotify: spotifyTrackSchema.optional(),
         }),
@@ -149,7 +159,8 @@ export const api = {
       method: "GET" as const,
       path: "/api/video/download" as const,
       query: z.object({
-        url: z.string().min(1, "Missing YouTube URL"),
+        /** A YouTube video's link, or a SoundCloud track's canonical link (a search result's). */
+        url: z.string().min(1, "Missing YouTube or SoundCloud link"),
         format: z
           .enum(downloadFormats, { error: 'format must be "mp3" or "original"' })
           .default("mp3"),
@@ -164,7 +175,7 @@ export const api = {
       method: "POST" as const,
       path: "/api/video/save" as const,
       input: z.object({
-        url: z.string().min(1, "Missing YouTube URL"),
+        url: z.string().min(1, "Missing YouTube or SoundCloud link"),
         format: z
           .enum(downloadFormats, { error: 'format must be "mp3" or "original"' })
           .default("mp3"),
@@ -239,8 +250,9 @@ export const api = {
   },
   health: {
     /**
-     * How YouTube and Spotify have been answering over the last 24 hours (the
-     * same report as `data/source-health.json`; see server/source-health.ts).
+     * How YouTube, SoundCloud and Spotify have been answering over the last 24
+     * hours (the same report as `data/source-health.json`; see
+     * server/source-health.ts).
      */
     sources: {
       method: "GET" as const,

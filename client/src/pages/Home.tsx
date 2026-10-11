@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { Layout } from "@/components/layout";
 import { FindBox, inputModes, type InputMode } from "@/components/find-box";
 import { PreviewCard, type Selected } from "@/components/preview-card";
@@ -262,18 +263,22 @@ export default function Home() {
     });
   };
 
-  const runSearch = (query: string, playlistTrackId?: string) => {
+  // `soundCloudOnly`: look on SoundCloud alone (YouTube refused the song, or you asked).
+  const runSearch = (query: string, playlistTrackId?: string, soundCloudOnly = false) => {
     setPendingTrackId(playlistTrackId);
-    search(query, {
-      // A Spotify link asks for one particular song: show the best match
-      // straight away (the other matches stay listed below).
-      onSuccess: (data) => {
-        if (data.spotify && data.results[0]) pick(data.results[0], data.spotify);
+    search(
+      { query, soundCloudOnly },
+      {
+        // A Spotify link asks for one particular song: show the best match
+        // straight away (the other matches stay listed below).
+        onSuccess: (data) => {
+          if (data.spotify && data.results[0]) pick(data.results[0], data.spotify);
+        },
+        onError: (err) => {
+          toast({ title: "Search failed", description: err.message, variant: "destructive" });
+        },
       },
-      onError: (err) => {
-        toast({ title: "Search failed", description: err.message, variant: "destructive" });
-      },
-    });
+    );
   };
 
   // Opens a Spotify playlist or album, or a YouTube playlist, in the panel (or
@@ -399,6 +404,7 @@ export default function Home() {
       duration: result.duration,
       spotifyId: song?.id,
       fileTitle: song ? spotifyFileName(song) : undefined,
+      source: result.source,
     });
     setScrollRequest((n) => n + 1);
   };
@@ -442,7 +448,13 @@ export default function Home() {
   // Downloads into the "Save to" folder: the app saves the file itself, and
   // the page shows progress on the button instead of the browser's download
   // bar. Cancelling stops the app's work, as with a normal download.
-  const saveIntoFolder = async (href: string, request: SaveRequest, folder: string) => {
+  // `soundCloudQuery`: what to look for on SoundCloud if YouTube refuses it.
+  const saveIntoFolder = async (
+    href: string,
+    request: SaveRequest,
+    folder: string,
+    soundCloudQuery?: string,
+  ) => {
     const controller = new AbortController();
     const cancel = () => controller.abort();
     setSaves((current) => ({ ...current, [href]: { bytes: 0, folder, cancel } }));
@@ -465,10 +477,22 @@ export default function Home() {
       }
       // The folder may be gone or off-limits now, or changed in another tab.
       if (err instanceof ApiError && [403, 404, 409].includes(err.status)) void saveTo.refresh();
+      // YouTube refused it: SoundCloud may have the song.
+      const findElsewhere = err instanceof ApiError && err.limited && soundCloudQuery;
       toast({
         title: "Couldn't save the audio",
         description: err instanceof Error ? err.message : "Something went wrong.",
         variant: "destructive",
+        ...(findElsewhere && {
+          action: (
+            <ToastAction
+              altText="Look for this song on SoundCloud"
+              onClick={() => runSearch(soundCloudQuery, undefined, true)}
+            >
+              Find on SoundCloud
+            </ToastAction>
+          ),
+        }),
       });
     } finally {
       setSaves(({ [href]: _done, ...rest }) => rest);
@@ -477,10 +501,15 @@ export default function Home() {
 
   // Every download link goes through here: with a "Save to" folder the app
   // saves the file itself; otherwise the browser downloads it as usual.
-  const startDownload = (event: React.MouseEvent, href: string, request: SaveRequest) => {
+  const startDownload = (
+    event: React.MouseEvent,
+    href: string,
+    request: SaveRequest,
+    soundCloudQuery?: string,
+  ) => {
     if (saveTo.folder) {
       event.preventDefault();
-      if (!saves[href]) void saveIntoFolder(href, request, saveTo.folder);
+      if (!saves[href]) void saveIntoFolder(href, request, saveTo.folder, soundCloudQuery);
       return false;
     }
     watchForDownload(request.url);
@@ -495,12 +524,19 @@ export default function Home() {
       name: fileName ?? selected.fileTitle,
       spotifyId: selected.spotifyId,
     };
-    if (!startDownload(event, selectedHref, request)) return;
+    // If YouTube refuses it: the Spotify song (found by its length again), or the video's title.
+    const soundCloudQuery =
+      selected.source === "soundcloud"
+        ? undefined
+        : selected.spotifyId
+          ? `https://open.spotify.com/track/${selected.spotifyId}`
+          : selected.title;
+    if (!startDownload(event, selectedHref, request, soundCloudQuery)) return;
 
     toast({
       title: "Download Started",
       description: isOriginal
-        ? "Fetching the original audio from YouTube. It'll appear in Recent Extractions once it finishes."
+        ? `Fetching the original audio from ${selected.source === "soundcloud" ? "SoundCloud" : "YouTube"}. It'll appear in Recent Extractions once it finishes.`
         : "Converting to MP3. It'll appear in Recent Extractions once it finishes.",
     });
   };
@@ -684,7 +720,12 @@ export default function Home() {
           isSearching={isSearching}
           results={results}
           spotify={spotify}
-          searchedFor={searchedFor}
+          searchedFor={searchedFor?.query}
+          source={searchData?.source}
+          soundCloudOnly={searchedFor?.soundCloudOnly}
+          onSearchSoundCloud={
+            searchedFor ? () => runSearch(searchedFor.query, pendingTrackId, true) : undefined
+          }
           selectedUrl={selected?.url}
           previewing={previewing}
           onTogglePreview={togglePreview}

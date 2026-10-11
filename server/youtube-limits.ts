@@ -1,5 +1,7 @@
 /**
- * Coping with YouTube limiting this computer, without ever slowing the app down.
+ * Coping with YouTube limiting this computer, without ever slowing the app
+ * down: no cooldown, no queue, no cap on how many calls run at once, and no
+ * waiting on a timer of ours (the owner's rule; see CLAUDE.md).
  *
  * YouTube limits computers that ask too much ("HTTP Error 429", "Sign in to
  * confirm you're not a bot", "This content isn't available, try again
@@ -8,12 +10,15 @@
  * (search, video info, playlists, the look-up before a download) goes through
  * `youtubeGuard`, and an audio stream reports how it ended:
  *
- *   - a cache answers repeats of the same search, video or playlist for a
- *     while, without asking YouTube again (it only makes answers faster);
+ *   - every call is made, refused a minute ago or not. A cache answers
+ *     repeats of the same search, video or playlist for a while without
+ *     asking YouTube again — it only makes answers faster;
  *   - when YouTube refuses (throttled, or a bot check), the request is
  *     answered at once with a 502 that says so (`YouTubeRefused`,
- *     `sendRefused()`) — the app never waits, queues or turns a later request
- *     away on its own account;
+ *     `sendRefused()`), and the guard remembers when (`refusedRecently()`):
+ *     for the next 10 minutes a search asks SoundCloud at the same time as
+ *     YouTube (search.ts), so a refusal costs no time. Nothing is ever turned
+ *     away or held back on that account;
  *   - when a failure looks like an outdated yt-dlp (or a bot check, which an
  *     old yt-dlp earns more often), yt-dlp is updated in the background
  *     (yt-dlp-update.ts: once an hour at most). Nobody waits for it: the
@@ -67,9 +72,25 @@ export const isRefusal = (kind: YtDlpErrorKind): kind is "throttled" | "bot-chec
 /** The kinds an outdated yt-dlp earns: worth updating it over, for the calls to come. */
 export const callsForUpdate = (kind: YtDlpErrorKind) => kind === "broken" || kind === "bot-check";
 
-/** What the app answers when YouTube refuses a request. */
+/** How a failure counts in the source-health report. */
+export function failureKindOf(kind: YtDlpErrorKind): FailureKind {
+  return kind === "throttled" ? "throttled" : kind === "bot-check" ? "blocked" : "error";
+}
+
+/**
+ * For how long after YouTube last refused this computer a search asks
+ * SoundCloud at the same time as YouTube (hedging): YouTube's limits usually
+ * last minutes, and a hedged search costs nothing but a SoundCloud search.
+ */
+export const HEDGE_FOR_MS = 10 * 60_000;
+
+/**
+ * What the app answers when YouTube refuses a request only YouTube can answer
+ * (a YouTube link's video or playlist, or a YouTube video's download): what
+ * happened, and what to do instead.
+ */
 export const REFUSED_MESSAGE =
-  "YouTube is limiting this computer right now. Try again in a few minutes.";
+  "YouTube is refusing this computer right now (it limits computers that ask it a lot), and only YouTube has this. Search for the song by name and pick a result marked SoundCloud: while YouTube refuses, searches look on SoundCloud too.";
 
 /** YouTube refused this request: it's limiting this computer (throttled, or a bot check). */
 export class YouTubeRefused extends Error {
@@ -179,6 +200,8 @@ export class YouTubeGuard {
   private readonly now: () => number;
   private readonly failureText: (err: unknown) => string;
   private readonly log: (line: string) => void;
+  /** When YouTube last refused a call (ms since the epoch). */
+  private lastRefusedAt: number | undefined;
 
   constructor({
     health = sourceHealth,
@@ -194,6 +217,15 @@ export class YouTubeGuard {
     this.updater = updater;
     this.failureText = failureText;
     this.log = log;
+  }
+
+  /**
+   * Has YouTube refused this computer (throttled, or a bot check) in the last
+   * 10 minutes? Searches then ask SoundCloud at the same time as YouTube.
+   * Nothing else changes: every call is still made.
+   */
+  refusedRecently(): boolean {
+    return this.lastRefusedAt !== undefined && this.now() - this.lastRefusedAt < HEDGE_FOR_MS;
   }
 
   /**
@@ -238,12 +270,18 @@ export class YouTubeGuard {
     // An outdated yt-dlp: update it for the calls to come. Nobody waits for it.
     if (callsForUpdate(kind)) void this.updater.update(this.now(), text);
     if (!isRefusal(kind)) return error;
-    this.log(`YouTube is limiting this computer ("${text}").`);
+    if (!this.refusedRecently()) {
+      this.log(
+        `YouTube is limiting this computer ("${text}"): for the next ${HEDGE_FOR_MS / 60_000} minutes, searches ask SoundCloud at the same time.`,
+      );
+    }
+    this.lastRefusedAt = this.now();
     return new YouTubeRefused(kind, text, { cause: error });
   }
 
-  /** Forgets the cache and the last update (tests). */
+  /** Forgets the last refusal, the cache and the last update (tests). */
   reset(): void {
+    this.lastRefusedAt = undefined;
     this.cache.clear();
     this.updater.forget();
   }
@@ -254,9 +292,7 @@ export class YouTubeGuard {
       this.health.record("youtube", true);
       return;
     }
-    const failureKind: FailureKind =
-      kind === "throttled" ? "throttled" : kind === "bot-check" ? "blocked" : "error";
-    this.health.record("youtube", false, { kind: failureKind, note: text });
+    this.health.record("youtube", false, { kind: failureKindOf(kind), note: text });
   }
 }
 

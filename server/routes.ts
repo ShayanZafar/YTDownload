@@ -4,7 +4,8 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { extractVideoId } from "./youtube-url";
-import { searchYouTube } from "./search";
+import { SearchFailed, searchSongs, searchSoundCloudOnly, type SongSearchOptions } from "./search";
+import { audioLinkOf } from "@shared/soundcloud-link";
 import { safeFileName } from "@shared/filename";
 import { audioTypeOf } from "@shared/audio-types";
 import { musicIdSchema, type SaveSettings } from "@shared/schema";
@@ -20,13 +21,13 @@ import {
   unusableLinkError,
 } from "./spotify";
 import {
-  prepareAudioOutput,
-  type PreparedOutput,
-  fetchAudioInfo,
   fetchVideoInfo,
+  prepareAudioOutput,
   startAudioPipeline,
   ytDlpFailure,
+  type PreparedOutput,
 } from "./audio";
+import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
 import { settings } from "./settings";
 import { isLocalRequest, localOnly, sameOriginOnly } from "./local-only";
@@ -336,7 +337,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // How YouTube and Spotify have been answering lately (see source-health.ts).
+  // How YouTube, SoundCloud and Spotify have been answering lately (see source-health.ts).
   // Nothing in it is about this computer: no paths, no secrets.
   app.get(api.health.sources.path, (_req, res) => {
     res.set("Cache-Control", "no-store").json(sourceHealth.report());
@@ -374,30 +375,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Song search: top YouTube results for a text query, official uploads first.
-  // A Spotify song link searches for that song, preferring same-length uploads.
+  // Song search: top results for a text query, official uploads first. A
+  // Spotify song link searches for that song, preferring same-length uploads.
+  // YouTube's results, or SoundCloud's when YouTube's search fails or finds
+  // nothing — SoundCloud is asked at the same time while YouTube has been
+  // refusing this computer (searchSongs()). `source=soundcloud` asks
+  // SoundCloud alone: for a song YouTube refused to hand over.
   app.get(api.video.search.path, async (req, res) => {
     const query = api.video.search.query.safeParse(req.query);
     if (!query.success) {
-      return res.status(400).json({ message: query.error.issues[0].message, field: "q" });
+      const [issue] = query.error.issues;
+      return res.status(400).json({ message: issue.message, field: issue.path.join(".") || "q" });
     }
-    const { q } = query.data;
+    const { q, source } = query.data;
+    const search = (text: string, options: SongSearchOptions = {}) =>
+      source === "soundcloud"
+        ? searchSoundCloudOnly(options.soundCloudQuery ?? text, options)
+        : searchSongs(text, options);
     try {
       const spotifyLink = await readSpotifyLink(q);
-      if (!spotifyLink) return res.json({ results: await searchYouTube(q) });
+      if (!spotifyLink) return res.json(await search(q));
       if (spotifyLink.kind !== "track") {
         return res.status(400).json({ message: spotifyLinkError(spotifyLink), field: "q" });
       }
       const spotify = await fetchSpotifyTrack(spotifyLink.id);
-      const results = await searchYouTube(spotifySearchQuery(spotify), {
+      const answer = await search(spotifySearchQuery(spotify), {
         targetDuration: spotify.duration,
+        soundCloudQuery: spotifySearchQuery(spotify, "soundcloud"),
       });
-      res.json({ results, spotify });
+      res.json({ ...answer, spotify });
     } catch (err) {
       if (err instanceof SpotifyError) {
         return res.status(err.status).json({ message: err.message });
       }
-      if (err instanceof YouTubeRefused) return sendRefused(res);
+      if (err instanceof SearchFailed) {
+        return res
+          .status(err.status)
+          .json(
+            err.limited
+              ? { message: err.message, source: "youtube", limited: true }
+              : { message: err.message },
+          );
+      }
       console.error("Search failed:", err);
       res.status(500).json({ message: err instanceof Error ? err.message : "Search failed" });
     }
@@ -463,9 +482,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  // Streams a video's audio as a download: yt-dlp → ffmpeg → response.
-  // `?format=mp3` (default) converts to MP3; `?format=original` keeps YouTube's
-  // own stream untouched. See server/audio.ts for the details.
+  // Streams a video's audio as a download: yt-dlp → ffmpeg → response. `url`
+  // is a YouTube video, or a SoundCloud track (a SoundCloud search result).
+  // `?format=mp3` (default) converts to MP3; `?format=original` keeps the
+  // source's own stream untouched. See server/audio.ts for the details.
   app.get(api.video.download.path, async (req, res) => {
     // Watch for the browser going away (download cancelled, tab closed) from the
     // very start — the metadata lookup below can take 10–20s, and a cancel during
@@ -486,23 +506,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(400).send(query.error.issues[0].message);
       }
       const { url, format, name, spotifyId } = query.data;
-      const videoId = extractVideoId(url);
-      if (!videoId) {
-        return res.status(400).send("Invalid or missing YouTube URL");
+      // Only a YouTube video or a SoundCloud track, and only its canonical link
+      // goes to yt-dlp.
+      const link = audioLinkOf(url);
+      if (!link) {
+        return res.status(400).send("Invalid or missing YouTube or SoundCloud link");
       }
 
-      const canonical = `https://www.youtube.com/watch?v=${videoId}`;
-
       // A Spotify song is tagged with Spotify's title and artists (looked up
-      // while YouTube is asked about the video).
+      // while the source is asked about the audio).
       const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
-      // And its cover: Spotify's album cover, or the video's thumbnail.
-      const cover = coverFor(videoId, songTags);
+      // And its cover: Spotify's album cover, or the video's thumbnail (a
+      // SoundCloud track has no video: Spotify's cover, if it's a Spotify song).
+      const cover = coverFor(link.source === "youtube" ? link.videoId : undefined, songTags);
 
-      // Metadata first, so a video that can't be downloaded fails with a clean
-      // error before a streaming response is opened. (Through the guard: a
-      // refusal from YouTube is answered at once with a 502 that says so.)
-      const info = await youtubeGuard.run({ attempt: () => fetchAudioInfo(canonical) });
+      // Metadata first, so audio that can't be downloaded fails with a clean
+      // error before a streaming response is opened. (A refusal from YouTube
+      // is answered at once with a 502 that says so.)
+      const info = await lookUpAudio(link);
       const tags = { ...info, ...(await songTags), spotifyId };
 
       // Cancelled while we were looking up the video: don't start any work.
@@ -521,7 +542,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // yt-dlp is pinned to the stream the metadata pass picked, so the container
       // chosen for "original" always matches the audio that arrives.
       const pipeline = startAudioPipeline(
-        canonical,
+        link.url,
         info.formatId,
         output.ffmpegArgs,
         output.prefix,
@@ -532,7 +553,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { ok, reason } = await pipeline.finished;
       if (clientGone) return;
       // Recorded for the source-health report; YouTube may have refused it.
-      const refused = youtubeGuard.pipelineEnded(ok, reason);
+      const refused = audioEnded(link, ok, reason);
 
       if (!res.headersSent) {
         // Failed before producing any audio (e.g. YouTube refused the stream).
@@ -541,7 +562,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           console.error(`Download refused by YouTube before any audio was sent: ${reason}`);
           return sendRefused(res);
         }
-        const why = reason || "YouTube sent no audio";
+        const why = reason || `${sourceName(link)} sent no audio`;
         console.error(`Download failed before any audio was sent: ${why}`);
         return res.status(502).type("text/plain").send(`Couldn't download the audio: ${why}`);
       }
@@ -556,7 +577,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.once("finish", () => {
         if (!ok || clientGone) return;
         storage
-          .createDownload({ url, title: info.title, spotifyId })
+          .createDownload({ url, title: info.title, spotifyId, source: link.source })
           .catch((err) => console.error("Failed to save download history", err));
       });
       res.end();

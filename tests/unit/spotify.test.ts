@@ -577,6 +577,12 @@ describe("spotifySearchQuery", () => {
     ).toBe("Daft Punk Get Lucky audio");
     expect(spotifySearchQuery({ title: "Song", artists: [] })).toBe("Song audio");
   });
+
+  it("leaves out “audio” on SoundCloud, whose tracks are all audio", () => {
+    const track = { title: "One More Time", artists: ["Daft Punk"] };
+    expect(spotifySearchQuery(track, "soundcloud")).toBe("Daft Punk One More Time");
+    expect(spotifySearchQuery(track, "youtube")).toBe("Daft Punk One More Time audio");
+  });
 });
 
 describe("rankResults with a known length (from Spotify)", () => {

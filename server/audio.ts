@@ -1,11 +1,13 @@
 /**
- * Turning a YouTube video into a downloadable audio stream.
+ * Turning a YouTube video (or a SoundCloud track: the same pipeline) into a
+ * downloadable audio stream.
  *
  *   yt-dlp  ──(best audio on stdout)──▶  ffmpeg  ──(file on stdout)──▶  HTTP response
  *                                                                   or a file in the "Save to" folder
  *
  * ffmpeg either converts to MP3 (the default) or, for "original", just
- * repackages YouTube's own stream into a proper audio file without re-encoding.
+ * repackages the source's own stream into a proper audio file without
+ * re-encoding.
  * No temporary files: the browser's download starts with the first chunk (or,
  * with a "Save to" folder, the file is written as the audio arrives).
  * Both binaries are fetched by `npm install` (youtube-dl-exec → yt-dlp,
@@ -135,10 +137,20 @@ export function ffmpegMp3Args(): string[] {
 }
 
 /**
- * Where to put YouTube's original stream so it's a normal, tagged audio file.
- * The audio itself is copied bit-for-bit (`-c:a copy`); only the container changes.
+ * Where to put the source's original stream so it's a normal, tagged audio
+ * file. The audio itself is copied bit-for-bit (`-c:a copy`); only the
+ * container changes.
  */
 export function originalContainer(acodec: string | undefined): Container {
+  if (acodec?.startsWith("mp3")) {
+    // MP3 (what SoundCloud often streams) stays an .mp3, with the same
+    // ID3v2.3 tags as a converted one.
+    return {
+      ext: "mp3",
+      contentType: "audio/mpeg",
+      muxerArgs: ["-id3v2_version", "3", "-f", "mp3"],
+    };
+  }
   if (acodec?.startsWith("opus")) {
     // Ogg Opus (.opus) — the standard file for Opus audio. Players treat it as
     // music (a .webm is often mistaken for video) and show its tags.
@@ -160,11 +172,11 @@ export function originalContainer(acodec: string | undefined): Container {
       ],
     };
   }
-  // Anything else YouTube might serve: Matroska audio holds any codec.
+  // Anything else a source might serve: Matroska audio holds any codec.
   return { ext: "mka", contentType: "audio/x-matroska", muxerArgs: ["-f", "matroska"] };
 }
 
-/** The file a download produces, for the requested format and the stream YouTube picked. */
+/** The file a download produces, for the requested format and the stream the source picked. */
 export function audioOutput(
   format: DownloadFormat,
   meta: AudioMetadata,
@@ -314,18 +326,32 @@ export function spawnFfmpeg(args: string[]) {
   return spawn(FFMPEG_PATH, args, { windowsHide: true });
 }
 
-/** What the metadata pass found out about a video's audio. */
+/** What the metadata pass found out about a video's (or a track's) audio. */
 export type AudioInfo = AudioMetadata & {
-  /** The audio stream yt-dlp picked; the download is pinned to it. */
+  /**
+   * The audio stream yt-dlp picked; the download is pinned to it. (SoundCloud's
+   * 30-second previews end in "_preview": see soundcloud.ts.)
+   */
   formatId?: string;
-  /** Its codec ("opus", "mp4a.40.2"…), which decides the "original" file type. */
+  /** Its codec ("opus", "mp4a.40.2", "mp3"…), which decides the "original" file type. */
   acodec?: string;
 };
 
 /**
+ * A stream's codec: yt-dlp's `acodec` — or, where it doesn't say (SoundCloud's
+ * MP3 and Opus streams can leave it out), what the stream's file type means.
+ */
+export function codecOf({ acodec, ext }: { acodec?: string; ext?: string }): string | undefined {
+  if (acodec && acodec !== "none") return acodec;
+  return ext === "mp3" || ext === "opus" ? ext : undefined;
+}
+
+/**
  * The light metadata pass before a download: the title and artist (for the
- * file name and tags) and which audio stream YouTube will give us. A video
- * that can't be downloaded fails here, before any response or file is started.
+ * file name and tags) and which audio stream the source (YouTube, or
+ * SoundCloud) will give us. Audio that can't be downloaded fails here, before
+ * any response or file is started. `videoUrl` is always a canonical link
+ * (shared/soundcloud-link.ts: `audioLinkOf()`).
  */
 export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
   let info: {
@@ -337,6 +363,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     album?: string;
     release_year?: number;
     release_date?: string;
+    ext?: string;
   };
   try {
     info = (await youtubedl(videoUrl, {
@@ -354,7 +381,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     // YouTube Music's uploads say which album the song is from, and when it came out.
     ...youtubeAlbumTags(info),
     formatId: info.format_id,
-    acodec: info.acodec,
+    acodec: codecOf(info),
   };
 }
 

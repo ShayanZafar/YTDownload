@@ -100,6 +100,21 @@ describe("buildReport", () => {
       lastOk: null,
       lastError: null,
     });
+    expect(report.sources.soundcloud).toEqual({
+      role: "fallback",
+      for: "audio",
+      ok: 0,
+      failed: 0,
+      throttled: 0,
+      lastOk: null,
+      lastError: null,
+    });
+    expect(Object.keys(report.sources).sort()).toEqual([
+      "soundcloud",
+      "spotify",
+      "spotify-oembed",
+      "youtube",
+    ]);
     expect(report.unreliable).toBe(false);
     expect(report.summary).toBe("All sources healthy.");
   });
@@ -119,9 +134,31 @@ describe("buildReport", () => {
 
   it("names an unreliable source, with its counts and last error", () => {
     const report = buildReport(attempts("youtube", 2, 18, "HTTP Error 429"), NOW);
-    expect(report.unreliable).toBe(true);
     expect(report.summary).toBe(
       "YouTube: 2 of 20 requests succeeded in the last 24 h (last error: HTTP Error 429).",
+    );
+    // SoundCloud hasn't failed: it can still stand in for audio.
+    expect(report.unreliable).toBe(false);
+  });
+
+  it("calls the app unreliable when YouTube and SoundCloud both are (no audio from anywhere)", () => {
+    const report = buildReport(
+      [
+        ...attempts("youtube", 2, 18, "HTTP Error 429"),
+        ...attempts("soundcloud", 1, 6, "HTTP Error 403: Forbidden"),
+      ],
+      NOW,
+    );
+    expect(report.unreliable).toBe(true);
+    expect(report.sources.soundcloud).toMatchObject({
+      role: "fallback",
+      for: "audio",
+      ok: 1,
+      failed: 6,
+      lastError: "HTTP Error 403: Forbidden",
+    });
+    expect(report.summary).toBe(
+      "YouTube: 2 of 20 requests succeeded in the last 24 h (last error: HTTP Error 429); SoundCloud: 1 of 7 requests succeeded in the last 24 h (last error: HTTP Error 403: Forbidden).",
     );
   });
 });
@@ -140,9 +177,15 @@ describe("anyJobUnreliable", () => {
       }),
     ) as Record<SourceName, SourceHealth>;
 
-  it("is true when a primary with no fallback is unreliable (YouTube, for audio)", () => {
-    expect(anyJobUnreliable(sources({ youtube: [1, 9] }))).toBe(true);
+  it("is false while SoundCloud stands in for an unreliable YouTube (audio)", () => {
+    expect(anyJobUnreliable(sources({ youtube: [1, 9], soundcloud: [8, 1] }))).toBe(false);
+    // SoundCloud hasn't been asked enough to be called unreliable either.
+    expect(anyJobUnreliable(sources({ youtube: [1, 9] }))).toBe(false);
     expect(anyJobUnreliable(sources({ youtube: [9, 1] }))).toBe(false);
+  });
+
+  it("is true when YouTube and SoundCloud are both unreliable", () => {
+    expect(anyJobUnreliable(sources({ youtube: [1, 9], soundcloud: [0, 5] }))).toBe(true);
   });
 
   it("is false while a fallback stands in for an unreliable primary", () => {

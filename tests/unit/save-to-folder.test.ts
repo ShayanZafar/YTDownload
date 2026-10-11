@@ -5,6 +5,7 @@ import {
   parseSaveEvent,
   saveOnServer,
 } from "../../client/src/lib/save-to-folder";
+import { REFUSED_MESSAGE } from "../../server/youtube-limits";
 
 const encoder = new TextEncoder();
 const SONG = { url: "https://www.youtube.com/watch?v=jNQXAC9IVRw", format: "mp3" as const };
@@ -82,7 +83,7 @@ describe("saveOnServer", () => {
   });
 
   it("says when YouTube refused the save (it's limiting the computer): a 502 that says so", async () => {
-    const message = "YouTube is limiting this computer right now. Try again in a few minutes.";
+    const message = REFUSED_MESSAGE;
     const fetchImpl = vi.fn(
       async () =>
         new Response(JSON.stringify({ message, source: "youtube", limited: true }), {

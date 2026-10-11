@@ -222,6 +222,7 @@ export function RecentExtractions({
                       title={validDate(item.downloadedAt)?.toLocaleString()}
                     >
                       {timeAgo(item.downloadedAt)}
+                      {item.source === "soundcloud" && " · from SoundCloud"}
                     </p>
                   </div>
                   {save ? (

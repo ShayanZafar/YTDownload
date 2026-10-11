@@ -5,6 +5,13 @@ export const spotifyIdSchema = z
   .string()
   .regex(/^[A-Za-z0-9]{22}$/, "That isn't a Spotify song id");
 
+/**
+ * Where audio comes from: YouTube, or SoundCloud — the fallback a search uses
+ * when YouTube can't answer (see docs/sources.md). Left out means YouTube.
+ */
+export const audioSources = ["youtube", "soundcloud"] as const;
+export type AudioSource = (typeof audioSources)[number];
+
 /** One entry in the download history (stored in data/history.json by the server). */
 export const downloadSchema = z.object({
   id: z.number().int(),
@@ -17,6 +24,8 @@ export const downloadSchema = z.object({
    * or playlist), so the playlist panel can show which songs you already have.
    */
   spotifyId: z.string().optional(),
+  /** Where the audio came from, when it wasn't YouTube. */
+  source: z.enum(audioSources).optional(),
 });
 
 export type Download = z.infer<typeof downloadSchema>;
@@ -39,7 +48,7 @@ export const lyricsSchema = z.object({
 });
 export type Lyrics = z.infer<typeof lyricsSchema>;
 
-/** One song search result (a YouTube video). */
+/** One song search result: a YouTube video, or a SoundCloud track (`source`). */
 export const searchResultSchema = z.object({
   id: z.string(),
   url: z.string(),
@@ -50,6 +59,8 @@ export const searchResultSchema = z.object({
   thumbnail: z.string(),
   /** Uploaded by the artist or label ("Artist - Topic", VEVO, or the artist's own verified channel). */
   official: z.boolean(),
+  /** Where it is: YouTube when left out, or SoundCloud (searched when YouTube can't answer). */
+  source: z.enum(audioSources).optional(),
 });
 
 export type SearchResult = z.infer<typeof searchResultSchema>;
@@ -83,7 +94,7 @@ export const spotifyTrackSchema = z.object({
 });
 
 export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
-export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId">;
+export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId" | "source">;
 
 /** One song in a Spotify playlist or album, as the playlist panel lists it. */
 /** A YouTube video id: 11 letters, digits, - and _. */

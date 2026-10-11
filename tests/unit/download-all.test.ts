@@ -68,7 +68,7 @@ describe("downloadSongs", () => {
       search: vi.fn(async (query: string) => {
         const answer = answers[query];
         if (answer instanceof Error) throw answer;
-        return { results: answer ?? [] };
+        return { results: answer ?? [], source: "youtube" as const };
       }),
       save: vi.fn(async (request: { name?: string }) => {
         if (failSave) throw failSave;
@@ -123,6 +123,54 @@ describe("downloadSongs", () => {
     expect(await summary).toEqual({ saved: 0, check: 1, failed: 1, stopped: false });
     expect(finished[0]).toEqual([A.id, { state: "failed", reason: refused.message }]);
     expect(finished[1]).toEqual([B.id, { state: "check", reason: checkReason([], 354) }]);
+  });
+
+  it("switches to SoundCloud alone, at once, for a song whose save YouTube refused", async () => {
+    vi.useFakeTimers();
+    const refused = new ApiError("YouTube is refusing this computer right now.", 502, true);
+    const onSoundCloud: SearchResult = {
+      ...result("x", 355),
+      id: "soundcloud:tracks:254112129",
+      url: "https://api.soundcloud.com/tracks/254112129",
+      official: false,
+      source: "soundcloud",
+    };
+    const calls: DownloadAllCalls = {
+      search: vi.fn(async (_query: string, _signal?: AbortSignal, options?) =>
+        options?.soundCloudOnly
+          ? { results: [onSoundCloud], source: "soundcloud" as const }
+          : {
+              results: [{ ...result("aaaaaaaaaaa", 354), source: "youtube" as const }],
+              source: "youtube" as const,
+            },
+      ),
+      save: vi.fn(async (request: { url: string; name?: string }) => {
+        if (request.url.startsWith("https://www.youtube.com/")) throw refused;
+        return {
+          type: "done" as const,
+          fileName: `${request.name}.mp3`,
+          folder: "/Music",
+          path: `/Music/${request.name}.mp3`,
+          bytes: 1,
+        };
+      }),
+    };
+    const { summary, finished } = run([A], calls);
+    expect(await summary).toEqual({ saved: 1, check: 0, failed: 0, stopped: false });
+    expect(finished).toEqual([
+      [
+        A.id,
+        { state: "saved", file: "Someone - Song AAAAAAAAAAAAAAAAAAAAAA.mp3", source: "soundcloud" },
+      ],
+    ]);
+    expect(calls.search).toHaveBeenLastCalledWith(A.url, expect.any(AbortSignal), {
+      soundCloudOnly: true,
+    });
+    expect(calls.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: onSoundCloud.url, spotifyId: A.id }),
+      expect.anything(),
+    );
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("marks a song whose length isn't known “check”, rather than guess", async () => {

@@ -8,6 +8,8 @@ import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { REFUSED_MESSAGE, searchCacheKey, youtubeGuard } from "../../server/youtube-limits";
+import { soundCloudCache } from "../../server/search";
+import { PREVIEW_ONLY } from "../../server/soundcloud";
 import { sourceHealth } from "../../server/source-health";
 import { FFMPEG_PATH } from "../../server/audio";
 import { errorSchemas } from "../../shared/routes";
@@ -25,8 +27,9 @@ const fake = vi.hoisted(() => ({
   runJson: vi.fn(),
   /** What plays yt-dlp's audio stream for the next download or save. */
   source: undefined as undefined | (() => ChildProcessWithoutNullStreams),
-  /** Every stand-in started, and how each pipeline ended. */
+  /** Every stand-in started, the link each was given, and how each pipeline ended. */
   sources: [] as ChildProcessWithoutNullStreams[],
+  links: [] as string[],
   pipelines: [] as Promise<{ ok: boolean; reason: string }>[],
 }));
 
@@ -44,9 +47,10 @@ vi.mock("../../server/audio", async (importOriginal) => {
       prefix?: Buffer,
     ) => {
       const pipeline = real.startAudioPipeline(url, formatId, args, prefix, {
-        spawnSource: () => {
+        spawnSource: (link) => {
           const child = fake.source!();
           fake.sources.push(child);
+          fake.links.push(link);
           return child;
         },
       });
@@ -62,6 +66,29 @@ vi.mock("../../server/cover", () => ({ coverFor: async () => undefined }));
 
 const VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const PLAYLIST = "https://www.youtube.com/playlist?list=PLBCF2DAC6FFB574DE";
+// A SoundCloud track: its canonical link, and the URN form yt-dlp's search lists it by.
+const TRACK = "https://api.soundcloud.com/tracks/254112129";
+const TRACK_URN = "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A254112129";
+/** What yt-dlp's SoundCloud search lists (the shape the owner's PC saw; see soundcloud.test.ts). */
+const SOUNDCLOUD_ENTRIES = [
+  { title: "One More Time", uploader: "Daft Punk", duration: 30.0, url: TRACK_URN },
+  {
+    title: "One More Time",
+    uploader: "Daft Punk",
+    duration: 320.403,
+    url: "https://api.soundcloud.com/tracks/soundcloud%3Atracks%3A300000002",
+  },
+];
+const YOUTUBE_ENTRIES = [
+  {
+    id: "dQw4w9WgXcQ",
+    title: "Daft Punk - One More Time (Official Audio)",
+    duration: 320,
+    channel: "Daft Punk",
+    channel_is_verified: true,
+  },
+];
+const isYouTubeSearch = (args: string[]) => args.at(-1)!.startsWith("ytsearch");
 const BOT_CHECK = "Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies";
 const TOO_MANY = "HTTP Error 429: Too Many Requests";
 
@@ -166,11 +193,13 @@ beforeEach(() => {
 
 afterEach(() => {
   youtubeGuard.reset();
+  soundCloudCache.clear();
   vi.restoreAllMocks();
   fake.videoInfo.mockReset();
   fake.audioInfo.mockReset();
   fake.runJson.mockReset();
   fake.sources.length = 0;
+  fake.links.length = 0;
   fake.pipelines.length = 0;
 });
 
@@ -304,10 +333,58 @@ describe("when YouTube refuses (it's limiting this computer)", () => {
     expect(fake.videoInfo).toHaveBeenCalledTimes(2);
   });
 
-  it("a search and a YouTube playlist are answered the same way", async () => {
+  it("a YouTube playlist is answered the same way", async () => {
     fake.runJson.mockRejectedValue(new Error(TOO_MANY));
-    expectRefused(await request(app).get("/api/search").query({ q: "daft punk get lucky" }));
     expectRefused(await request(app).get("/api/youtube/playlist").query({ link: PLAYLIST }));
+  });
+
+  it("a search is answered from SoundCloud instead, at once", async () => {
+    fake.runJson.mockImplementation(async (args: string[]) => {
+      if (isYouTubeSearch(args)) throw new Error(TOO_MANY);
+      return { entries: SOUNDCLOUD_ENTRIES };
+    });
+    const res = await request(app).get("/api/search").query({ q: "daft punk one more time" });
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe("soundcloud");
+    expect(res.body.results).toEqual([
+      expect.objectContaining({
+        url: "https://api.soundcloud.com/tracks/300000002",
+        duration: 320,
+        source: "soundcloud",
+      }),
+      // The 30-second preview, last.
+      expect.objectContaining({ url: TRACK, duration: 30, source: "soundcloud" }),
+    ]);
+  });
+
+  it("…and the next search asks YouTube and SoundCloud at once, using YouTube's results if it has some", async () => {
+    fake.videoInfo.mockRejectedValueOnce(new Error(TOO_MANY));
+    expectRefused(await request(app).post("/api/video/info").send({ url: VIDEO }));
+    fake.runJson.mockImplementation(async (args: string[]) =>
+      isYouTubeSearch(args) ? { entries: YOUTUBE_ENTRIES } : { entries: SOUNDCLOUD_ENTRIES },
+    );
+    const res = await request(app).get("/api/search").query({ q: "daft punk one more time" });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      source: "youtube",
+      results: [{ id: "dQw4w9WgXcQ", source: "youtube" }],
+    });
+    expect(fake.runJson.mock.calls.map(([args]) => (args as string[]).at(-1))).toEqual([
+      "scsearch12:daft punk one more time",
+      "ytsearch12:daft punk one more time",
+    ]);
+  });
+
+  it("a search neither source can answer says so, without telling you to wait for the app", async () => {
+    fake.runJson.mockRejectedValue(new Error(TOO_MANY));
+    const res = await request(app).get("/api/search").query({ q: "daft punk get lucky" });
+    expect(res.status).toBe(502);
+    expect(errorSchemas.limited.parse(res.body)).toMatchObject({
+      source: "youtube",
+      limited: true,
+    });
+    expect(res.body.message).toMatch(/SoundCloud couldn't be searched either/);
+    expect(res.body.message).not.toMatch(/try again in/i);
   });
 
   it("a download refused at its look-up gets the 502, with no file name", async () => {
@@ -351,8 +428,117 @@ describe("cached answers", () => {
     youtubeGuard.cache.set(searchCacheKey("rick astley"), results, Date.now());
     const res = await request(app).get("/api/search").query({ q: "Rick  Astley" });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ results });
+    expect(res.body).toEqual({ results, source: "youtube" });
     expect(fake.runJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("SoundCloud", () => {
+  const trackInfo = { title: "One More Time", artist: "Daft Punk", formatId: "http_mp3_1_0" };
+
+  it("?source=soundcloud searches SoundCloud alone", async () => {
+    fake.runJson.mockResolvedValue({ entries: SOUNDCLOUD_ENTRIES });
+    const res = await request(app)
+      .get("/api/search")
+      .query({ q: "daft punk one more time", source: "soundcloud" });
+    expect(res.status).toBe(200);
+    expect(res.body.source).toBe("soundcloud");
+    expect(fake.runJson).toHaveBeenCalledTimes(1);
+    expect(fake.runJson.mock.calls[0][0].at(-1)).toBe("scsearch12:daft punk one more time");
+    const wrong = await request(app).get("/api/search").query({ q: "x", source: "youtube" });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body).toEqual({ message: 'source must be "soundcloud"', field: "source" });
+  });
+
+  it("a track downloads through the same pipeline, by its canonical link, into the history", async () => {
+    fake.audioInfo.mockResolvedValue(trackInfo);
+    const res = await request(app)
+      .get("/api/video/download")
+      .query({ url: TRACK_URN })
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    expect(res.headers["content-disposition"]).toContain("One More Time.mp3");
+    // Only the canonical link reached yt-dlp, for the look-up and the stream.
+    expect(fake.audioInfo).toHaveBeenCalledWith(TRACK);
+    expect(fake.links).toEqual([TRACK]);
+    const file = path.join(dir, "soundcloud.mp3");
+    await fs.writeFile(file, res.body as Buffer);
+    expect((await verifyMp3File(file)).isValid).toBe(true);
+    const [entry] = await waitForHistory(TRACK_URN, 1);
+    expect(entry).toMatchObject({ title: "One More Time", source: "soundcloud" });
+  });
+
+  it("a track SoundCloud only previews is refused before anything starts", async () => {
+    fake.audioInfo.mockResolvedValue({ ...trackInfo, formatId: "http_mp3_1_0_preview" });
+    const download = await request(app).get("/api/video/download").query({ url: TRACK });
+    expect(download.status).toBe(500);
+    expect(download.text).toBe(PREVIEW_ONLY);
+    await useFolder();
+    const save = await request(app).post("/api/video/save").send({ url: TRACK });
+    expect(save.status).toBe(502);
+    expect(save.body.message).toBe(`Couldn't download the audio: ${PREVIEW_ONLY}`);
+    expect(fake.sources).toHaveLength(0);
+    expect(await fs.readdir(folder)).toEqual([]);
+  });
+
+  it("a track saves into the folder, and is remembered as SoundCloud's", async () => {
+    await useFolder();
+    fake.audioInfo.mockResolvedValue(trackInfo);
+    const lines = await saveLines({ url: TRACK, name: "Daft Punk - One More Time" });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Daft Punk - One More Time.mp3" });
+    expect(fake.links).toEqual([TRACK]);
+    const saved = path.join(folder, "Daft Punk - One More Time.mp3");
+    expect((await verifyMp3File(saved)).isValid).toBe(true);
+    expect((await historyOf(TRACK)).at(0)).toMatchObject({ source: "soundcloud" });
+    await fs.rm(saved);
+  });
+
+  it("a track's save cancelled part-way stops both processes and leaves no .part file", async () => {
+    await useFolder();
+    fake.audioInfo.mockResolvedValue(trackInfo);
+    fake.source = playing(tone, { slow: true });
+    const before = (await historyOf(TRACK)).length;
+    expect(
+      await cancelPartWay("/api/video/save", {
+        method: "POST",
+        json: { url: TRACK, name: "Cancelled track" },
+      }),
+    ).toBe(true);
+    await pipelineGone();
+    expect(await folderEmptied()).toEqual([]);
+    expect(await historyOf(TRACK)).toHaveLength(before);
+  });
+
+  it("anything but a YouTube video or a canonical track never reaches yt-dlp", async () => {
+    await useFolder();
+    for (const url of [
+      "https://soundcloud.com.evil.example/daftpunk/one-more-time",
+      "https://evil.example/soundcloud.com/daftpunk/one-more-time",
+      "https://user:password@api.soundcloud.com/tracks/254112129",
+      "http://api.soundcloud.com/tracks/254112129",
+      "https://soundcloud.com/daftpunkofficialmusic/sets/discovery",
+      "https://soundcloud.com/daftpunkofficialmusic",
+      "https://api.soundcloud.com/tracks/soundcloud%253Atracks%253A254112129",
+      "https://api.soundcloud.com/tracks/254112129?secret_token=s-x",
+      "--exec=calc",
+    ]) {
+      const download = await request(app).get("/api/video/download").query({ url });
+      expect(download.status, url).toBe(400);
+      expect(download.text).toBe("Invalid or missing YouTube or SoundCloud link");
+      const save = await request(app).post("/api/video/save").send({ url });
+      expect(save.status, url).toBe(400);
+      expect(save.body).toEqual({
+        message: "Invalid or missing YouTube or SoundCloud link",
+        field: "url",
+      });
+    }
+    expect(fake.audioInfo).not.toHaveBeenCalled();
+    expect(fake.sources).toHaveLength(0);
   });
 });
 
@@ -428,7 +614,15 @@ describe("GET /api/health/sources", () => {
     });
     expect(report.sources.youtube.throttled).toBeGreaterThanOrEqual(1);
     expect(report.sources.youtube.ok).toBeGreaterThanOrEqual(1);
-    expect(Object.keys(report.sources).sort()).toEqual(["spotify", "spotify-oembed", "youtube"]);
+    expect(report.sources.soundcloud).toMatchObject({ role: "fallback", for: "audio" });
+    // SoundCloud's searches, look-ups and streams in the tests above were recorded.
+    expect(report.sources.soundcloud.ok).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(report.sources).sort()).toEqual([
+      "soundcloud",
+      "spotify",
+      "spotify-oembed",
+      "youtube",
+    ]);
     expect(JSON.stringify(report)).not.toContain(dir); // no paths in it
   });
 

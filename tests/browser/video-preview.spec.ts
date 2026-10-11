@@ -21,7 +21,9 @@ async function answerApp(page: Page) {
           duration: 212,
           thumbnail: THUMBNAIL,
           official: false,
+          source: "youtube",
         })),
+        source: "youtube",
       },
     }),
   );

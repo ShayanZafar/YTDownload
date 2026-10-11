@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CACHE_TTL_MS,
+  HEDGE_FOR_MS,
   REFUSED_MESSAGE,
   TtlCache,
   YouTubeGuard,
@@ -273,6 +274,38 @@ describe("YouTubeGuard", () => {
       kind: "throttled",
       note: "HTTP Error 429: Too Many Requests",
     });
+  });
+
+  it("remembers a refusal for 10 minutes, for searches to hedge, and holds nothing back", async () => {
+    const { guard, log, tick } = makeGuard();
+    expect(guard.refusedRecently()).toBe(false);
+    await guard.run({ attempt: failing("HTTP Error 429: Too Many Requests") }).catch(() => {});
+    expect(guard.refusedRecently()).toBe(true);
+    expect(log.mock.calls[0][0]).toBe(
+      'YouTube is limiting this computer ("HTTP Error 429: Too Many Requests"): for the next 10 minutes, searches ask SoundCloud at the same time.',
+    );
+    // Calls are still made, and a success changes nothing: YouTube often lets some calls
+    // through while it limits a computer.
+    expect(await guard.run({ attempt: async () => "ok" })).toBe("ok");
+    expect(guard.refusedRecently()).toBe(true);
+    // Another refusal within the 10 minutes starts them again, without another log line.
+    tick(5 * 60_000);
+    await guard.run({ attempt: failing("Sign in to confirm you're not a bot") }).catch(() => {});
+    expect(log).toHaveBeenCalledTimes(1);
+    tick(HEDGE_FOR_MS - 1);
+    expect(guard.refusedRecently()).toBe(true);
+    tick(1);
+    expect(guard.refusedRecently()).toBe(false);
+    // An audio stream YouTube refused counts too.
+    guard.pipelineEnded(false, "HTTP Error 429: Too Many Requests");
+    expect(guard.refusedRecently()).toBe(true);
+    guard.reset();
+    expect(guard.refusedRecently()).toBe(false);
+  });
+
+  it("says what to do in its refusal, and never to wait for the app", () => {
+    expect(REFUSED_MESSAGE).toMatch(/SoundCloud/);
+    expect(REFUSED_MESSAGE).not.toMatch(/try again in|wait/i);
   });
 
   it("reset() forgets the cache and the last update", async () => {

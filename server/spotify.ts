@@ -14,6 +14,7 @@
  */
 import {
   SPOTIFY_PLAYLIST_MAX_SONGS,
+  type AudioSource,
   type SpotifyPlaylist,
   type SpotifyPlaylistTrack,
   type SpotifyTrack,
@@ -606,12 +607,18 @@ export async function fetchSpotifyPlaylist(
 }
 
 /**
- * What to search YouTube for: the main artist, the cleaned-up title, and
- * "audio" — which brings the artist's "Official Audio" uploads (the plain
- * studio recording, no video intro) up in YouTube's results.
+ * What to search for: the main artist, the cleaned-up title, and — on YouTube
+ * — "audio", which brings the artist's "Official Audio" uploads (the plain
+ * studio recording, no video intro) up in its results. SoundCloud's tracks are
+ * audio anyway, and the extra word would only narrow its search.
  */
-export function spotifySearchQuery(track: Pick<SpotifyTrack, "title" | "artists">): string {
-  return [track.artists[0], cleanTrackTitle(track.title), "audio"].filter(Boolean).join(" ");
+export function spotifySearchQuery(
+  track: Pick<SpotifyTrack, "title" | "artists">,
+  source: AudioSource = "youtube",
+): string {
+  return [track.artists[0], cleanTrackTitle(track.title), source === "youtube" && "audio"]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** How long a download waits for Spotify's song details before tagging the file without them. */

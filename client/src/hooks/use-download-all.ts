@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { DownloadFormat } from "@shared/routes";
 import {
   SAME_LENGTH_SECONDS,
+  type AudioSource,
   type PlaylistSource,
   type SearchResult,
   type SpotifyPlaylistTrack,
@@ -16,7 +17,8 @@ export type SongStatus =
   | { state: "waiting" }
   | { state: "finding" }
   | { state: "saving"; bytes: number }
-  | { state: "saved"; file: string }
+  /** `source`: where it came from, when that wasn't YouTube. */
+  | { state: "saved"; file: string; source?: AudioSource }
   /** No upload is surely the same recording, so none was downloaded: pick one yourself. */
   | { state: "check"; reason: string }
   | { state: "failed"; reason: string };
@@ -60,7 +62,8 @@ const FOLDER_PROBLEMS = [403, 404, 409, 507];
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : "Something went wrong.");
 
-type SongResult = { status: SongStatus; problem?: boolean };
+/** How a song went; `limited`: YouTube refused it (it's limiting the computer). */
+type SongResult = { status: SongStatus; problem?: boolean; limited?: boolean };
 
 /** What "Download all" asks the app for: a song's search, and a save into the folder. */
 export type DownloadAllCalls = {
@@ -70,12 +73,13 @@ export type DownloadAllCalls = {
 
 const appCalls: DownloadAllCalls = { search: searchSongs, save: saveOnServer };
 
-/** Saves one upload into the folder. Rejects only if stopped. */
+/** Saves one upload (from `source`) into the folder. Rejects only if stopped. */
 async function saveVideo(
   request: Parameters<typeof saveOnServer>[0],
   signal: AbortSignal,
   report: (status: SongStatus) => void,
   { save }: DownloadAllCalls,
+  source: AudioSource = "youtube",
 ): Promise<SongResult> {
   report({ state: "saving", bytes: 0 });
   try {
@@ -83,20 +87,30 @@ async function saveVideo(
       signal,
       onProgress: (bytes) => report({ state: "saving", bytes }),
     });
-    return { status: { state: "saved", file: saved.fileName } };
+    return {
+      status: {
+        state: "saved",
+        file: saved.fileName,
+        ...(source !== "youtube" ? { source } : {}),
+      },
+    };
   } catch (err) {
     if (signal.aborted) throw err;
     return {
       status: { state: "failed", reason: messageOf(err) },
       problem: err instanceof ApiError && FOLDER_PROBLEMS.includes(err.status),
+      limited: err instanceof ApiError && err.limited,
     };
   }
 }
 
 /**
  * One song: a YouTube playlist's video is saved as it is. A Spotify song is
- * looked for like its Spotify link would be, and the best match saved into the
- * folder if it's surely the song. Rejects only if stopped.
+ * looked for like its Spotify link would be (the app goes to SoundCloud by
+ * itself when YouTube's search can't answer), and the best match saved into
+ * the folder if it's surely the song. When YouTube refuses that save, the
+ * song is looked for on SoundCloud alone, at once, and a SoundCloud match
+ * that's surely the song is saved instead. Rejects only if stopped.
  */
 async function downloadSong(
   song: SpotifyPlaylistTrack,
@@ -125,12 +139,32 @@ async function downloadSong(
   if (!match)
     return { status: { state: "check", reason: checkReason(found.results, songSeconds) } };
 
-  return saveVideo(
-    { url: match.url, format, name: spotifyFileName(found.spotify ?? song), spotifyId: song.id },
-    signal,
-    report,
-    calls,
+  const name = spotifyFileName(found.spotify ?? song);
+  const saveMatch = (upload: SearchResult) =>
+    saveVideo(
+      { url: upload.url, format, name, spotifyId: song.id },
+      signal,
+      report,
+      calls,
+      upload.source,
+    );
+  const saved = await saveMatch(match);
+  if (!saved.limited || (match.source ?? "youtube") !== "youtube") return saved;
+
+  // YouTube refused the save: switch to SoundCloud for this song, once.
+  report({ state: "finding" });
+  let again;
+  try {
+    again = await calls.search(song.url, signal, { soundCloudOnly: true });
+  } catch (err) {
+    if (signal.aborted) throw err;
+    return saved;
+  }
+  const fallback = confidentMatch(
+    again.results.filter((result) => result.source === "soundcloud"),
+    again.spotify?.duration ?? songSeconds,
   );
+  return fallback ? saveMatch(fallback) : saved;
 }
 
 export type DownloadAllRun = {

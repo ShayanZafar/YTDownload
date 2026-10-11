@@ -1,5 +1,10 @@
-import { BadgeCheck, Check, Play, Timer, X } from "lucide-react";
-import { SAME_LENGTH_SECONDS, type SearchResult, type SpotifyTrack } from "@shared/schema";
+import { BadgeCheck, Check, Cloud, Play, Timer, X } from "lucide-react";
+import {
+  SAME_LENGTH_SECONDS,
+  type AudioSource,
+  type SearchResult,
+  type SpotifyTrack,
+} from "@shared/schema";
 import { extractVideoId } from "@shared/youtube-link";
 import { VideoPreview } from "@/components/video-preview";
 import { formatDuration } from "@/lib/format";
@@ -11,6 +16,12 @@ type SearchResultsProps = {
   /** The Spotify song searched for, when the search was its link. */
   spotify?: SpotifyTrack;
   searchedFor?: string;
+  /** Where the results are from: YouTube, or SoundCloud. */
+  source?: AudioSource;
+  /** The search asked SoundCloud alone (rather than SoundCloud standing in for YouTube). */
+  soundCloudOnly?: boolean;
+  /** Runs the same search on SoundCloud alone — offered over YouTube's results. */
+  onSearchSoundCloud?: () => void;
   /** The video in the preview card. */
   selectedUrl?: string;
   /** The result whose video is playing in the list. */
@@ -22,14 +33,21 @@ type SearchResultsProps = {
 };
 
 /**
- * The song search's YouTube results (or a Spotify song's matches): click one
- * to choose it, or its thumbnail to watch or listen to it right in the list.
+ * The song search's results (or a Spotify song's matches) — YouTube's, or
+ * SoundCloud's when YouTube couldn't answer or you asked SoundCloud (each
+ * marked "SoundCloud"): click one to choose it, or a YouTube video's
+ * thumbnail to watch or listen to it right in the list. Over YouTube's
+ * results, **Search SoundCloud** looks there instead — for a song YouTube
+ * won't hand over while it's limiting this computer.
  */
 export function SearchResults({
   isSearching,
   results,
   spotify,
   searchedFor,
+  source,
+  soundCloudOnly = false,
+  onSearchSoundCloud,
   selectedUrl,
   previewing,
   onTogglePreview,
@@ -37,14 +55,18 @@ export function SearchResults({
   onPick,
   onClose,
 }: SearchResultsProps) {
+  // SoundCloud's results: asked for, or standing in for YouTube's (its search
+  // failed or found nothing — YouTube may be limiting this computer).
+  const fromSoundCloud =
+    source === "soundcloud" || (results?.some((result) => result.source === "soundcloud") ?? false);
   return (
     <section aria-label="Search results" className="max-w-3xl mx-auto w-full space-y-4">
       <div className="flex items-center justify-between gap-4 px-2">
         <h2 className="text-xl font-display font-semibold truncate">
           {isSearching
-            ? "Searching YouTube..."
+            ? "Searching..."
             : spotify
-              ? "YouTube matches"
+              ? `${fromSoundCloud ? "SoundCloud" : "YouTube"} matches`
               : `Results for “${searchedFor}”`}
         </h2>
         <div className="flex shrink-0 items-center gap-3">
@@ -52,8 +74,23 @@ export function SearchResults({
             <p className="hidden sm:block text-xs text-muted-foreground">
               {spotify
                 ? "Same length as the Spotify song first"
-                : "Official uploads (artist or label) first"}
+                : fromSoundCloud
+                  ? soundCloudOnly
+                    ? "From SoundCloud"
+                    : "From SoundCloud: YouTube couldn't answer"
+                  : "Official uploads (artist or label) first"}
             </p>
+          )}
+          {!isSearching && !fromSoundCloud && onSearchSoundCloud && (
+            <button
+              type="button"
+              onClick={onSearchSoundCloud}
+              title="Look for this on SoundCloud instead — when YouTube won't hand a song over"
+              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            >
+              <Cloud className="w-4 h-4" />
+              <span>Search SoundCloud</span>
+            </button>
           )}
           {/* Done with the results (e.g. after downloading): hide them. The
               chosen video stays in the preview card above. */}
@@ -131,17 +168,23 @@ export function SearchResults({
                     aria-pressed={isPreviewing}
                     aria-label={`${isPreviewing ? "Close preview of" : "Preview"} ${result.title}`}
                     title={
-                      isPreviewing ? "Close the preview" : "Watch or listen before downloading"
+                      videoId === null
+                        ? undefined
+                        : isPreviewing
+                          ? "Close the preview"
+                          : "Watch or listen before downloading"
                     }
                     className="group shrink-0 self-center py-3 pl-4"
                   >
                     <div className="relative w-24 sm:w-28 aspect-video overflow-hidden rounded-lg bg-secondary">
-                      <img
-                        src={result.thumbnail}
-                        alt=""
-                        loading="lazy"
-                        className="w-full h-full object-cover"
-                      />
+                      {result.thumbnail && (
+                        <img
+                          src={result.thumbnail}
+                          alt=""
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
                       {videoId !== null && (
                         <span
                           className={cn(
@@ -173,6 +216,7 @@ export function SearchResults({
                       result.title,
                       result.channel && `by ${result.channel}`,
                       result.official && "official upload",
+                      result.source === "soundcloud" && "on SoundCloud",
                       sameLength && "same length as the Spotify song",
                       result.duration != null && formatDuration(result.duration),
                     ]
@@ -193,6 +237,15 @@ export function SearchResults({
                           >
                             <BadgeCheck className="w-3 h-3" />
                             Official
+                          </span>
+                        )}
+                        {result.source === "soundcloud" && (
+                          <span
+                            title="On SoundCloud"
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground"
+                          >
+                            <Cloud className="w-3 h-3" />
+                            SoundCloud
                           </span>
                         )}
                         {sameLength && (
@@ -235,7 +288,7 @@ export function SearchResults({
       ) : (
         <div className="text-center py-10 px-4 rounded-3xl border border-dashed border-border/60 bg-secondary/20">
           <p className="text-sm font-medium text-foreground">
-            {spotify ? "No YouTube uploads of this song found" : "No songs found"}
+            {spotify ? "No uploads of this song found" : "No songs found"}
           </p>
           <p className="text-sm text-muted-foreground mt-1">
             Try the artist and song title, or paste a YouTube or Spotify link.

@@ -1,8 +1,9 @@
 /**
  * How the outside sources the app depends on have been answering: every
- * attempt against YouTube (through yt-dlp) and Spotify is recorded here, and
- * the last 24 hours are summed up in `data/source-health.json` (or wherever
- * SOURCE_HEALTH_FILE points) and at `GET /api/health/sources`, so that
+ * attempt against YouTube and SoundCloud (through yt-dlp) and Spotify is
+ * recorded here, and the last 24 hours are summed up in
+ * `data/source-health.json` (or wherever SOURCE_HEALTH_FILE points) and at
+ * `GET /api/health/sources`, so that
  * someone — or a tool watching the app — can tell "YouTube is limiting this
  * computer" from "the app is broken" without reading logs.
  *
@@ -22,6 +23,7 @@ import { retryWhenBusy } from "./retry-when-busy";
  */
 export const SOURCES = {
   youtube: { role: "primary", for: "audio", name: "YouTube" },
+  soundcloud: { role: "fallback", for: "audio", name: "SoundCloud" },
   spotify: { role: "primary", for: "song details", name: "Spotify" },
   "spotify-oembed": { role: "fallback", for: "song details", name: "Spotify oEmbed" },
 } as const satisfies Record<string, { role: "primary" | "fallback"; for: string; name: string }>;

@@ -116,18 +116,18 @@ const COVER_WAIT_MS = 10_000;
 
 /**
  * The cover for a download of this video: the Spotify album cover when the
- * song's Spotify details have one, otherwise the video's thumbnail — or
- * undefined if neither comes within COVER_WAIT_MS. Never fails.
+ * song's Spotify details have one, otherwise the video's thumbnail (if it's a
+ * video) — or undefined if neither comes within COVER_WAIT_MS. Never fails.
  */
 export function coverFor(
-  videoId: string,
+  videoId: string | undefined,
   spotify?: Promise<{ coverUrl?: string } | undefined>,
 ): Promise<Buffer | undefined> {
   const find = async () => {
     const url = (await spotify)?.coverUrl;
     return (
       (url ? await fetchCover({ kind: "spotify", url }) : undefined) ??
-      (await fetchCover({ kind: "youtube", videoId }))
+      (videoId ? await fetchCover({ kind: "youtube", videoId }) : undefined)
     );
   };
   let timer: NodeJS.Timeout | undefined;
