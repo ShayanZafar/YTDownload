@@ -10,6 +10,7 @@
 import { spawn } from "child_process";
 import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
 import { YT_DLP_PATH } from "./audio";
+import { searchCacheKey, youtubeGuard } from "./youtube-limits";
 
 /** How many results to ask YouTube for; ranking then keeps the best MAX_RESULTS. */
 const FETCH_COUNT = 12;
@@ -232,10 +233,26 @@ export function runYtDlpJson(args: string[], timeoutMs = SEARCH_TIMEOUT_MS): Pro
   });
 }
 
+export type SearchOptions = Omit<RankOptions, "limit"> & {
+  /** Is the browser still waiting? (A search is retried after a yt-dlp update only if so.) */
+  stillWanted?: () => boolean;
+};
+
+/**
+ * The ranked results for a query. Through `youtubeGuard` (youtube-limits.ts):
+ * a recent search is answered from its cache, and while YouTube is limiting
+ * this computer it throws `YouTubeLimited` instead of asking again.
+ */
 export async function searchYouTube(
   query: string,
-  options: Omit<RankOptions, "limit"> = {},
+  { stillWanted, ...options }: SearchOptions = {},
 ): Promise<SearchResult[]> {
-  const info = (await runYtDlpJson(ytDlpSearchArgs(query))) as { entries?: RawSearchEntry[] };
-  return rankResults(query, info.entries ?? [], options);
+  return youtubeGuard.run({
+    key: searchCacheKey(query, options.targetDuration),
+    attempt: async () => {
+      const info = (await runYtDlpJson(ytDlpSearchArgs(query))) as { entries?: RawSearchEntry[] };
+      return rankResults(query, info.entries ?? [], options);
+    },
+    stillWanted,
+  });
 }

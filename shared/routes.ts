@@ -37,7 +37,19 @@ export const errorSchemas = {
   internal: z.object({
     message: z.string(),
   }),
+  /**
+   * `429`: the source (YouTube) is limiting this computer, so the app isn't
+   * asking it anything for a while. Try again after `retryAfterSeconds` (also
+   * sent as a `Retry-After` header).
+   */
+  rateLimited: z.object({
+    message: z.string(),
+    retryAfterSeconds: z.number(),
+    source: z.string(),
+  }),
 };
+
+export type RateLimitedError = z.infer<typeof errorSchemas.rateLimited>;
 
 export const api = {
   downloads: {
@@ -104,6 +116,7 @@ export const api = {
           url: z.string(),
         }),
         400: errorSchemas.validation,
+        429: errorSchemas.rateLimited,
         500: errorSchemas.internal,
       },
     },
@@ -125,6 +138,7 @@ export const api = {
         }),
         400: errorSchemas.validation,
         404: errorSchemas.notFound,
+        429: errorSchemas.rateLimited,
         500: errorSchemas.internal,
         502: errorSchemas.internal,
       },
@@ -217,6 +231,7 @@ export const api = {
         200: spotifyPlaylistSchema,
         400: errorSchemas.validation,
         404: errorSchemas.notFound,
+        429: errorSchemas.rateLimited,
         502: errorSchemas.internal,
       },
     },

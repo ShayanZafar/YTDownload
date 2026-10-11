@@ -45,6 +45,7 @@ import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import { songsInFolder, type AudioFile } from "./library";
 import { writePlaylistFile } from "./playlist-file";
 import { convertedForBrowser, findMusicFile, listMusic, readCover } from "./music";
+import { YouTubeLimited, sendLimited, videoCacheKey, youtubeGuard } from "./youtube-limits";
 import { sourceHealth } from "./source-health";
 
 type YtDlpInfo = ThumbnailLike & { title?: string };
@@ -102,6 +103,19 @@ function sendAudioFile(res: Response, file: string, type: string) {
 function validationError(error: z.ZodError) {
   const [issue] = error.issues;
   return { message: issue.message, field: issue.path.join(".") };
+}
+
+/**
+ * Is the browser still waiting for this response? Not once it has hung up
+ * (the tab closed, the search changed): a yt-dlp call is tried again after
+ * a yt-dlp update only for someone still waiting (see youtube-limits.ts).
+ */
+function stillWanted(res: Response): () => boolean {
+  let gone = false;
+  res.on("close", () => {
+    if (!res.writableFinished) gone = true;
+  });
+  return () => !gone;
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
@@ -344,6 +358,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.set("Cache-Control", "no-store").json(sourceHealth.report());
   });
 
+  // The yt-dlp calls below go through youtubeGuard (youtube-limits.ts): a
+  // recent answer comes from its cache; while YouTube is limiting this
+  // computer the answer is a 429 saying how long to wait, and yt-dlp isn't run.
   app.post(api.video.info.path, async (req, res) => {
     try {
       const input = api.video.info.input.parse(req.body);
@@ -355,10 +372,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const canonical = `https://www.youtube.com/watch?v=${videoId}`;
 
-      const info = (await youtubedl(canonical, {
-        dumpSingleJson: true,
-        skipDownload: true,
-        ...YT_DLP_BASE_FLAGS,
+      const info = (await youtubeGuard.run({
+        key: videoCacheKey(videoId),
+        attempt: () =>
+          youtubedl(canonical, {
+            dumpSingleJson: true,
+            skipDownload: true,
+            ...YT_DLP_BASE_FLAGS,
+          }),
+        stillWanted: stillWanted(res),
       })) as YtDlpInfo;
 
       res.status(200).json({
@@ -373,6 +395,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           field: err.issues[0].path.join("."),
         });
       }
+      if (err instanceof YouTubeLimited) return sendLimited(res, err);
       res.status(500).json({ message: ytDlpFailure(err) });
     }
   });
@@ -385,10 +408,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: query.error.issues[0].message, field: "q" });
     }
     const { q } = query.data;
+    const wanted = stillWanted(res);
     try {
       const spotifyLink = await readSpotifyLink(q);
       if (!spotifyLink) {
-        return res.json({ results: await searchYouTube(q) });
+        return res.json({ results: await searchYouTube(q, { stillWanted: wanted }) });
       }
       if (spotifyLink.kind !== "track") {
         return res.status(400).json({ message: spotifyLinkError(spotifyLink), field: "q" });
@@ -396,12 +420,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const spotify = await fetchSpotifyTrack(spotifyLink.id);
       const results = await searchYouTube(spotifySearchQuery(spotify), {
         targetDuration: spotify.duration,
+        stillWanted: wanted,
       });
       res.json({ results, spotify });
     } catch (err) {
       if (err instanceof SpotifyError) {
         return res.status(err.status).json({ message: err.message });
       }
+      if (err instanceof YouTubeLimited) return sendLimited(res, err);
       console.error("Search failed:", err);
       res.status(500).json({ message: err instanceof Error ? err.message : "Search failed" });
     }
@@ -456,11 +482,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const query = api.youtube.playlist.query.safeParse(req.query);
     if (!query.success) return res.status(400).json(validationError(query.error));
     try {
-      res.json(await fetchYouTubePlaylist(query.data.link));
+      res.json(await fetchYouTubePlaylist(query.data.link, { stillWanted: stillWanted(res) }));
     } catch (err) {
       if (err instanceof YouTubePlaylistError) {
         return res.status(err.status).json({ message: err.message });
       }
+      if (err instanceof YouTubeLimited) return sendLimited(res, err);
       console.error("Reading the YouTube playlist failed:", err);
       res.status(500).json({ message: err instanceof Error ? err.message : "Couldn't read it" });
     }
@@ -503,8 +530,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const cover = coverFor(videoId, songTags);
 
       // Metadata first, so a video that can't be downloaded fails with a clean
-      // error before a streaming response is opened.
-      const info = await fetchAudioInfo(canonical);
+      // error before a streaming response is opened. (Through the guard: a 429
+      // while YouTube is limiting this computer, rather than asking it again.)
+      const info = await youtubeGuard.run({
+        attempt: () => fetchAudioInfo(canonical),
+        stillWanted: () => !clientGone,
+      });
       const tags = { ...info, ...(await songTags), spotifyId };
 
       // Cancelled while we were looking up the video: don't start any work.
@@ -533,12 +564,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const { ok, reason } = await pipeline.finished;
       if (clientGone) return;
+      // Recorded for the source-health report; a 429 to send if YouTube was
+      // limiting us (the cooldown has started either way).
+      const limited = youtubeGuard.pipelineEnded(ok, reason);
 
       if (!res.headersSent) {
         // Failed before producing any audio (e.g. YouTube refused the stream).
+        res.removeHeader("Content-Disposition");
+        if (limited) {
+          console.error(`Download refused by YouTube before any audio was sent: ${reason}`);
+          return sendLimited(res, limited);
+        }
         const why = reason || "YouTube sent no audio";
         console.error(`Download failed before any audio was sent: ${why}`);
-        res.removeHeader("Content-Disposition");
         return res.status(502).type("text/plain").send(`Couldn't download the audio: ${why}`);
       }
 
@@ -557,8 +595,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       res.end();
     } catch (err) {
-      console.error(err);
       stopPipeline?.();
+      if (err instanceof YouTubeLimited && !res.headersSent) {
+        res.removeHeader("Content-Disposition");
+        return sendLimited(res, err);
+      }
+      console.error(err);
       if (!res.headersSent) {
         res.removeHeader("Content-Disposition");
         res

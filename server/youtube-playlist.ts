@@ -6,6 +6,7 @@
 import type { SpotifyPlaylist, SpotifyPlaylistTrack } from "@shared/schema";
 import { extractPlaylistId } from "@shared/youtube-link";
 import { runYtDlpJson } from "./search";
+import { YouTubeLimited, playlistCacheKey, youtubeGuard } from "./youtube-limits";
 
 /** The most videos listed: more takes YouTube many seconds, and is more than anyone picks from. */
 export const YOUTUBE_PLAYLIST_LIMIT = 500;
@@ -152,13 +153,26 @@ export function playlistFailure(message: string): YouTubePlaylistError {
   return new YouTubePlaylistError(502, `Couldn't read the playlist from YouTube: ${reason}`);
 }
 
-/** The videos in a public YouTube playlist (the first 500). */
-export async function fetchYouTubePlaylist(link: string): Promise<SpotifyPlaylist> {
+/**
+ * The videos in a public YouTube playlist (the first 500). Through
+ * `youtubeGuard` (youtube-limits.ts): a playlist listed lately comes from its
+ * cache, and while YouTube is limiting this computer it throws
+ * `YouTubeLimited` instead of asking again.
+ */
+export async function fetchYouTubePlaylist(
+  link: string,
+  { stillWanted }: { stillWanted?: () => boolean } = {},
+): Promise<SpotifyPlaylist> {
   const id = youtubePlaylistIdOf(link);
   let raw: unknown;
   try {
-    raw = await runYtDlpJson(ytDlpPlaylistArgs(id), PLAYLIST_TIMEOUT_MS);
+    raw = await youtubeGuard.run({
+      key: playlistCacheKey(id),
+      attempt: () => runYtDlpJson(ytDlpPlaylistArgs(id), PLAYLIST_TIMEOUT_MS),
+      stillWanted,
+    });
   } catch (err) {
+    if (err instanceof YouTubeLimited) throw err;
     throw playlistFailure(err instanceof Error ? err.message : String(err));
   }
   return parsePlaylistJson(raw, id);

@@ -22,6 +22,7 @@ import { retryWhenBusy } from "./retry-when-busy";
 import { settings } from "./settings";
 import { spotifySongTags } from "./spotify";
 import { storage } from "./storage";
+import { YouTubeLimited, sendLimited, youtubeGuard } from "./youtube-limits";
 import { extractVideoId } from "./youtube-url";
 
 /** How often progress is reported while the audio arrives. */
@@ -84,8 +85,14 @@ export async function saveIntoFolder(req: Request, res: Response) {
     const cover = coverFor(videoId, songTags);
     let info;
     try {
-      info = await fetchAudioInfo(canonical);
+      // Through the guard: a 429 while YouTube is limiting this computer,
+      // rather than asking it again.
+      info = await youtubeGuard.run({
+        attempt: () => fetchAudioInfo(canonical),
+        stillWanted: () => !clientGone,
+      });
     } catch (err) {
+      if (err instanceof YouTubeLimited) throw err;
       throw new DownloadError(`Couldn't download the audio: ${(err as Error).message}`, {
         cause: err,
       });
@@ -135,6 +142,9 @@ export async function saveIntoFolder(req: Request, res: Response) {
     await part.closed;
     if (clientGone) return; // the .part file is removed below
     if (writeError) throw folderError(writeError, folder, "write");
+    // Recorded for the source-health report; a 429 if YouTube was limiting us.
+    const limited = youtubeGuard.pipelineEnded(ok, reason);
+    if (limited) throw limited;
     if (!ok || bytes === 0) {
       throw new DownloadError(`Couldn't download the audio: ${reason || "YouTube sent no audio"}`);
     }
@@ -186,12 +196,18 @@ function send(res: Response, event: SaveEvent) {
 
 /** A JSON error response if nothing's been sent yet, otherwise an "error" line. */
 function reportFailure(res: Response, err: unknown) {
-  const status = err instanceof FolderError ? err.status : err instanceof DownloadError ? 502 : 500;
+  const status =
+    err instanceof FolderError || err instanceof YouTubeLimited
+      ? err.status
+      : err instanceof DownloadError
+        ? 502
+        : 500;
   const message = err instanceof Error ? err.message : "Couldn't save the audio.";
   if (status >= 500) console.error(`Saving into the folder failed: ${message}`);
   if (res.writableEnded || res.destroyed) return;
   if (!res.headersSent) {
-    res.status(status).json({ message });
+    if (err instanceof YouTubeLimited) sendLimited(res, err);
+    else res.status(status).json({ message });
     return;
   }
   send(res, { type: "error", message });
