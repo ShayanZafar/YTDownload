@@ -60,7 +60,10 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   public embed page `open.spotify.com/embed/track/<id>` (`__NEXT_DATA__`, no account or API key),
   then a YouTube search ranked with `targetDuration` (same length ±`SAME_LENGTH_SECONDS` first).
   Playlists and albums (`/api/spotify/playlist?link=`): the songs from `embed/playlist|album/<id>`
-  (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there → `maybeMore`).
+  (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there), and past 100 the
+  rest from the Web API with the embed page's anonymous pass (`readEmbedAccessToken()`,
+  `fetchMorePlaylistSongs()`, ≤`SPOTIFY_PLAYLIST_MAX_SONGS`; Spotify's own playlists answer 404 and
+  stay at 100 → `maybeMore`)
   `spotify.link` short links: `resolveShortLink()` asks Spotify's short-link host where it leads
   (redirects followed only between `spotify.link`/`spotify.app.link`); `GET /api/spotify/link`
   tells the page where one leads, so it can search or open the playlist panel
@@ -255,7 +258,10 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   If Spotify links break, check the embed page's `__NEXT_DATA__` shape first (`parseEmbedPage()`,
   `parsePlaylistPage()`); the cloud workspace can't reach Spotify. No sign-in on purpose: since Feb
   2026 Spotify's Web API Development Mode needs the app owner to have Premium, and the app must stay
-  free — so only public playlists, first 100 songs.
+  free — so only public playlists. Past a playlist's first 100 songs the app pages
+  `api.spotify.com/v1/playlists/<validated id>/tracks` with the embed page's anonymous pass (the
+  owner's choice: an app's own key can't read other people's playlists since Feb 2026); keep that
+  pass server-side, and any failure falls back to the first 100.
 - "Save to" folder: download links stay real `<a href download>` elements — `startDownload()` only
   calls `preventDefault()` (and `POST /api/video/save` instead) when a folder is set — so the default
   path and its tests are unchanged. Anything that reads or writes the user's disk must sit behind

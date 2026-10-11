@@ -69,7 +69,7 @@ export function useSongSearch() {
 }
 
 /**
- * The songs in a Spotify playlist or album (the first 100 of a playlist), or
+ * The songs in a Spotify playlist or album (up to 1,000 songs of a playlist), or
  * the videos in a YouTube playlist (the first 500), for the playlist panel.
  * `link` is null while no playlist is open.
  */

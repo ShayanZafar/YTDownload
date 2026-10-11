@@ -18,11 +18,12 @@ import {
   Square,
   X,
 } from "lucide-react";
-import type {
-  PlaylistSource,
-  SongsInFolder,
-  SpotifyPlaylist,
-  SpotifyPlaylistTrack,
+import {
+  SPOTIFY_PLAYLIST_MAX_SONGS,
+  type PlaylistSource,
+  type SongsInFolder,
+  type SpotifyPlaylist,
+  type SpotifyPlaylistTrack,
 } from "@shared/schema";
 import type { SongStatus } from "@/hooks/use-download-all";
 import { formatBytes, formatDuration } from "@/lib/format";
@@ -662,7 +663,11 @@ export function SpotifyPlaylistPanel({
           <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
             {isYouTube
               ? "The app lists the first 500 videos of a playlist. For a later one, copy its link on YouTube and paste it in the box."
-              : "Spotify shares only the first 100 songs of a playlist. For a later one, copy its link in Spotify (Share → Copy Song Link) and paste it in the search box."}
+              : `${
+                  playlist.tracks.length > 100
+                    ? `This is as far as the app got (it lists at most ${SPOTIFY_PLAYLIST_MAX_SONGS.toLocaleString("en")} songs of a playlist).`
+                    : "Spotify shared only the first 100 songs of this playlist (it does that for its own playlists, like its mixes and editorial lists)."
+                } For a later one, copy its link in Spotify (Share → Copy Song Link) and paste it in the search box.`}
           </p>
         )}
         {playlist && !folder && canChooseFolder && tracks.length > 0 && (

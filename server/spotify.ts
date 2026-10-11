@@ -5,10 +5,19 @@
  * find the same recording on YouTube: search for "artist title", then prefer
  * uploads with the same length (see `targetDuration` in search.ts).
  *
- * The embed player for a playlist or album lists its songs the same way (the
- * first 100 of a playlist), which is what the playlist panel shows.
+ * The embed player for a playlist or album lists its songs the same way, which
+ * is what the playlist panel shows. It lists only the first 100 of a playlist;
+ * for the rest, `fetchMorePlaylistSongs()` pages through Spotify's Web API with
+ * the anonymous pass the embed page itself carries (the owner agreed to this
+ * unofficial route). Spotify answers that only for playlists people made — its
+ * own (editorial, mixes) stay at 100 — and anything that fails keeps the 100.
  */
-import type { SpotifyPlaylist, SpotifyPlaylistTrack, SpotifyTrack } from "@shared/schema";
+import {
+  SPOTIFY_PLAYLIST_MAX_SONGS,
+  type SpotifyPlaylist,
+  type SpotifyPlaylistTrack,
+  type SpotifyTrack,
+} from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
 
 export { cleanTrackTitle };
@@ -16,6 +25,10 @@ export { cleanTrackTitle };
 const SPOTIFY_ID_RE = /^[A-Za-z0-9]{22}$/;
 /** The most songs Spotify's embed page lists for a playlist. */
 export const PLAYLIST_EMBED_LIMIT = 100;
+/** The most songs the app lists of a playlist (paging past the embed page's 100). */
+export const PLAYLIST_MAX_SONGS = SPOTIFY_PLAYLIST_MAX_SONGS;
+/** Songs per Web API page (Spotify's maximum). */
+const PLAYLIST_PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = 10_000;
 // Spotify serves the same page to any browser; a browser-like User-Agent just
 // avoids being treated as an unknown bot.
@@ -220,18 +233,40 @@ type EmbedTrackItem = {
  * Spotify says it doesn't exist.
  */
 function readEmbedEntity(html: string, what: string): EmbedEntity | undefined {
-  const match = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
-  let data: {
-    props?: { pageProps?: { status?: unknown; state?: { data?: { entity?: unknown } } } };
-  };
-  try {
-    data = JSON.parse(match?.[1] ?? "");
-  } catch {
+  const pageProps = readPageProps(html);
+  if (!pageProps) {
     throw new SpotifyError(502, `Couldn't read the ${what} from Spotify (its page has changed).`);
   }
-  const pageProps = data.props?.pageProps;
-  if (pageProps?.status === 404) return undefined;
-  return (pageProps?.state?.data?.entity as EmbedEntity | undefined) ?? {};
+  if (pageProps.status === 404) return undefined;
+  return (pageProps.state?.data?.entity as EmbedEntity | undefined) ?? {};
+}
+
+type EmbedPageProps = {
+  status?: unknown;
+  state?: {
+    data?: { entity?: unknown };
+    settings?: { session?: { accessToken?: unknown; isAnonymous?: unknown } };
+  };
+};
+
+function readPageProps(html: string): EmbedPageProps | undefined {
+  const match = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+  try {
+    const data = JSON.parse(match?.[1] ?? "") as { props?: { pageProps?: EmbedPageProps } };
+    return data.props?.pageProps;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The anonymous pass Spotify's embed player carries (no account behind it), or
+ * undefined. It's only ever sent to api.spotify.com, never to the browser.
+ */
+export function readEmbedAccessToken(html: string): string | undefined {
+  const session = readPageProps(html)?.state?.settings?.session;
+  const token = session?.accessToken;
+  return typeof token === "string" && /^[\w-]{20,1000}$/.test(token) ? token : undefined;
 }
 
 /** Reads the song details out of Spotify's embed page. */
@@ -369,7 +404,106 @@ export function parsePlaylistPage(
   };
 }
 
-/** The songs in a public playlist or album, from Spotify's public embed page. */
+type ApiPlaylistPage = { total?: unknown; items?: unknown };
+type ApiPlaylistItem = {
+  is_local?: unknown;
+  track?: {
+    type?: unknown;
+    id?: unknown;
+    name?: unknown;
+    duration_ms?: unknown;
+    explicit?: unknown;
+    artists?: unknown;
+  } | null;
+};
+
+/**
+ * Reads one page of a playlist from Spotify's Web API: its songs (in the
+ * playlist panel's shape), how many entries the page had (songs or not, for
+ * the next page's offset), and how many the playlist has in all.
+ */
+export function parsePlaylistItemsPage(json: unknown): {
+  tracks: SpotifyPlaylistTrack[];
+  count: number;
+  total: number;
+} {
+  const page = (json ?? {}) as ApiPlaylistPage;
+  const items = (Array.isArray(page.items) ? page.items : []) as ApiPlaylistItem[];
+  const tracks = items.flatMap((entry): SpotifyPlaylistTrack[] => {
+    const track = entry?.track;
+    // Songs only, as on the embed page: no episodes, local files or removed songs.
+    if (!track || entry.is_local === true || track.type !== "track") return [];
+    const id = typeof track.id === "string" && SPOTIFY_ID_RE.test(track.id) ? track.id : "";
+    const title = typeof track.name === "string" ? track.name.trim() : "";
+    if (!id || !title) return [];
+    const artists = (Array.isArray(track.artists) ? track.artists : [])
+      .map((artist: { name?: unknown }) =>
+        typeof artist?.name === "string" ? artist.name.trim() : "",
+      )
+      .filter(Boolean)
+      .join(", ");
+    return [
+      {
+        id,
+        url: `https://open.spotify.com/track/${id}`,
+        title,
+        artists,
+        duration:
+          typeof track.duration_ms === "number" && track.duration_ms > 0
+            ? Math.round(track.duration_ms / 1000)
+            : null,
+        explicit: track.explicit === true,
+      },
+    ];
+  });
+  return {
+    tracks,
+    count: items.length,
+    total: typeof page.total === "number" && page.total >= 0 ? page.total : 0,
+  };
+}
+
+/**
+ * The songs of a playlist after the embed page's first 100, a page at a time
+ * from Spotify's Web API with the embed page's anonymous pass — up to
+ * `PLAYLIST_MAX_SONGS` in all. `complete` is false if Spotify wouldn't share
+ * them all (its own playlists answer 404) or the list was cut at the limit;
+ * a failed page keeps what came before it.
+ */
+export async function fetchMorePlaylistSongs(
+  id: string,
+  token: string,
+): Promise<{ tracks: SpotifyPlaylistTrack[]; complete: boolean }> {
+  const tracks: SpotifyPlaylistTrack[] = [];
+  let offset = PLAYLIST_EMBED_LIMIT;
+  while (offset < PLAYLIST_MAX_SONGS) {
+    const params = new URLSearchParams({
+      offset: String(offset),
+      limit: String(Math.min(PLAYLIST_PAGE_SIZE, PLAYLIST_MAX_SONGS - offset)),
+      fields: "total,items(is_local,track(type,id,name,duration_ms,explicit,artists(name)))",
+    });
+    let page: ReturnType<typeof parsePlaylistItemsPage>;
+    try {
+      const res = await fetch(`https://api.spotify.com/v1/playlists/${id}/tracks?${params}`, {
+        headers: { Authorization: `Bearer ${token}`, "User-Agent": USER_AGENT },
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (!res.ok) return { tracks, complete: false };
+      page = parsePlaylistItemsPage(await res.json());
+    } catch {
+      return { tracks, complete: false };
+    }
+    tracks.push(...page.tracks);
+    offset += page.count;
+    if (page.count === 0 || offset >= page.total) return { tracks, complete: true };
+  }
+  return { tracks, complete: false };
+}
+
+/**
+ * The songs in a public playlist or album: Spotify's public embed page, and
+ * for a playlist of more than 100 songs, the rest from its Web API.
+ */
 export async function fetchSpotifyPlaylist(
   kind: "playlist" | "album",
   id: string,
@@ -378,7 +512,15 @@ export async function fetchSpotifyPlaylist(
     throw new SpotifyError(400, "That isn't a valid Spotify playlist link.");
   }
   const html = await fetchEmbedPage(`${kind}/${id}`, notFoundMessage(kind));
-  return parsePlaylistPage(html, kind, id);
+  const playlist = parsePlaylistPage(html, kind, id);
+  const token = playlist.maybeMore ? readEmbedAccessToken(html) : undefined;
+  if (!token) return playlist;
+  const more = await fetchMorePlaylistSongs(id, token);
+  return {
+    ...playlist,
+    tracks: [...playlist.tracks, ...more.tracks],
+    maybeMore: !more.complete,
+  };
 }
 
 /**
