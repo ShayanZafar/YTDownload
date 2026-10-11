@@ -106,6 +106,12 @@ jobs:
                 echo "The review left $findings comment(s): left for a person."
                 exit 0
               fi
+              # The review's summary comment must say so too (a change in its wording stops merges, never allows one).
+              verdict=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" --jq '[.[] | select(.user.login == "claude[bot]") | .body | select(test("No issues found"; "i"))] | length')
+              if [ "$verdict" = "0" ]; then
+                echo "The review did not post a \"No issues found\" verdict: left for a person."
+                exit 0
+              fi
               ;;
           esac
 
