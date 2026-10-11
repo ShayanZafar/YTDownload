@@ -6,6 +6,8 @@ import {
   FolderOpen,
   FolderSearch,
   ListMusic,
+  ListEnd,
+  ListStart,
   Loader2,
   Pause,
   Play,
@@ -131,6 +133,18 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   const playFrom = (track: PlayerTrack) => {
     if (player.current?.key === track.key) return player.toggle();
     player.play(playable, Math.max(0, playable.indexOf(track)));
+  };
+
+  // Play next / Add to queue: after the current song, or at the end.
+  const enqueue = (track: PlayerTrack, where: "next" | "last") => {
+    const playing = player.current !== null;
+    player.enqueue([track], where);
+    // It plays now, or Up next shows it.
+    if (!playing || player.upNextOpen) return;
+    toast({
+      title: where === "next" ? "Plays next" : "Added to the queue",
+      description: `“${track.title}”${track.artist ? ` by ${track.artist}` : ""}`,
+    });
   };
 
   const onPicked = (event: ChangeEvent<HTMLInputElement>) => {
@@ -373,7 +387,10 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
               const ok = canPlayHere(track);
               const byline = [track.artist, track.album].filter(Boolean).join(" · ");
               return (
-                <li key={track.key}>
+                <li
+                  key={track.key}
+                  className={cn("flex items-center", isCurrent && "bg-primary/5")}
+                >
                   <button
                     type="button"
                     onClick={() => playFrom(track)}
@@ -389,8 +406,9 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                       .join(", ")}
                     title={track.fileName}
                     className={cn(
-                      "group flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
-                      isCurrent ? "bg-primary/5" : "enabled:hover:bg-secondary/40",
+                      "group flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                      ok ? "pr-2" : "pr-4",
+                      !isCurrent && "enabled:hover:bg-secondary/40",
                     )}
                   >
                     <span className="flex w-6 shrink-0 justify-end text-xs tabular-nums text-muted-foreground">
@@ -440,6 +458,27 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                         />
                       ))}
                   </button>
+                  {ok && (
+                    <span className="flex shrink-0 items-center pr-2">
+                      {(
+                        [
+                          ["next", ListStart, "Play next"],
+                          ["last", ListEnd, "Add to queue"],
+                        ] as const
+                      ).map(([where, Icon, label]) => (
+                        <button
+                          key={where}
+                          type="button"
+                          onClick={() => enqueue(track, where)}
+                          aria-label={`${label}: “${track.title}”`}
+                          title={label}
+                          className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors"
+                        >
+                          <Icon className="h-4 w-4" />
+                        </button>
+                      ))}
+                    </span>
+                  )}
                 </li>
               );
             })}

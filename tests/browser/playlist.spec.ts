@@ -121,6 +121,64 @@ test.describe("a YouTube playlist", () => {
     await expect(panel).toHaveCount(0);
   });
 
+  test("playlists opened before are listed under the box, to open again in a click", async ({
+    page,
+  }) => {
+    const OTHER = "PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI";
+    await page.route("**/api/youtube/playlist?*", async (route) => {
+      const link = new URL(route.request().url()).searchParams.get("link") ?? "";
+      await route.fulfill({
+        json: link.includes(OTHER)
+          ? {
+              ...PLAYLIST,
+              id: OTHER,
+              url: `https://www.youtube.com/playlist?list=${OTHER}`,
+              name: "Chill",
+              tracks: PLAYLIST.tracks.slice(0, 1),
+            }
+          : PLAYLIST,
+      });
+    });
+
+    await page.goto("/");
+    const box = page.getByLabel("YouTube link", { exact: true });
+    await box.fill(LINK);
+    await box.press("Enter");
+    const panel = page.getByRole("region", { name: /youtube playlist/i });
+    await expect(panel.getByRole("heading", { name: "Road Trip" })).toBeVisible();
+    const box2 = page.getByLabel("Playlist link", { exact: true });
+    await box2.fill(`https://www.youtube.com/playlist?list=${OTHER}`);
+    await box2.press("Enter");
+    await expect(panel.getByRole("heading", { name: "Chill" })).toBeVisible();
+
+    // Newest first; the open one is marked.
+    const recent = page.getByRole("navigation", { name: "Recent playlists" });
+    const chill = recent.getByRole("button", { name: /^Chill, YouTube playlist, 1 song$/ });
+    const roadTrip = recent.getByRole("button", { name: /^Road Trip, YouTube playlist, 3 songs$/ });
+    await expect(recent.getByRole("listitem").first()).toContainText("Chill");
+    await expect(chill).toHaveAttribute("aria-current", "true");
+
+    await roadTrip.click();
+    await expect(panel.getByRole("heading", { name: "Road Trip" })).toBeVisible();
+    await expect(roadTrip).toHaveAttribute("aria-current", "true");
+    await expect(recent.getByRole("listitem").first()).toContainText("Road Trip");
+
+    // Closed, it's still listed — and the list is remembered.
+    await panel.getByRole("button", { name: "Close the YouTube playlist" }).click();
+    await expect(panel).toHaveCount(0);
+    await page.reload();
+    await expect(chill).toBeVisible();
+    await chill.click();
+    await expect(panel.getByRole("heading", { name: "Chill" })).toBeVisible();
+
+    // × takes one off the list.
+    await recent.getByRole("button", { name: "Take “Road Trip” off the recent playlists" }).click();
+    await expect(roadTrip).toHaveCount(0);
+    await page.reload();
+    await expect(chill).toBeVisible();
+    await expect(roadTrip).toHaveCount(0);
+  });
+
   test("with a Save to folder, shows what's in it, and Download saves the rest as they are", async ({
     page,
     request,

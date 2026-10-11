@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  ListMusic,
   Loader2,
   Music,
   Pause,
@@ -14,7 +15,9 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
+import { UpNext } from "@/components/up-next";
 import { usePlayer, usePlayerTime } from "@/hooks/use-player";
+import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +44,14 @@ export function PlayerBar() {
   const { time, duration } = usePlayerTime();
   const [coverFailed, setCoverFailed] = useState(false);
   const [showVolume] = useState(hasFinePointer);
-  const { current, status, cover } = player;
+  const { current, status, cover, upNextOpen, setUpNextOpen } = player;
+  const closeUpNext = useCallback(() => setUpNextOpen(false), [setUpNextOpen]);
+  // A note in the corner would cover Up next, which shows what it said anyway.
+  const { dismiss } = useToast();
+  const toggleUpNext = () => {
+    if (!upNextOpen) dismiss();
+    setUpNextOpen(!upNextOpen);
+  };
 
   // A folder song without a cover answers with nothing: show the note instead.
   useEffect(() => setCoverFailed(false), [cover]);
@@ -77,6 +87,7 @@ export function PlayerBar() {
         aria-label="Music player"
         className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.15)] backdrop-blur-xl"
       >
+        {upNextOpen && <UpNext onClose={closeUpNext} />}
         <div className="mx-auto max-w-5xl px-3 sm:px-6">
           <div className="flex items-center gap-2 pt-2 text-[11px] tabular-nums text-muted-foreground sm:gap-3">
             <span className="w-10 text-right">
@@ -220,6 +231,21 @@ export function PlayerBar() {
               </div>
             )}
 
+            <button
+              type="button"
+              onClick={toggleUpNext}
+              aria-expanded={upNextOpen}
+              aria-controls="player-up-next"
+              aria-label="Up next"
+              title={
+                player.upNext.length > 0
+                  ? `Up next: ${player.upNext.length.toLocaleString()} ${player.upNext.length === 1 ? "song" : "songs"}`
+                  : "Up next"
+              }
+              className={cn(iconButton, upNextOpen && "text-primary")}
+            >
+              <ListMusic className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={player.close}

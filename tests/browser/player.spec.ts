@@ -137,7 +137,7 @@ test.describe("Music player (browser)", () => {
     // The tags are read in the browser; a song it can't play is marked.
     const testTone = library.getByRole("button", { name: /^Play “Test Tone”, by Sine Wave/ });
     await expect(testTone).toBeVisible();
-    const studioMaster = library.getByRole("button", { name: /“Studio Master”/ });
+    const studioMaster = library.getByRole("button", { name: /^Play “Studio Master”/ });
     if (await playsAiff(page)) {
       await expect(studioMaster).toBeEnabled();
     } else {
@@ -163,6 +163,48 @@ test.describe("Music player (browser)", () => {
     // Picked songs can be cleared.
     await library.getByRole("button", { name: "Clear the opened songs" }).click();
     await expect(testTone).toBeHidden();
+  });
+
+  test("Up next lists the songs to come; Play next and Add to queue line songs up", async ({
+    page,
+    request,
+  }) => {
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    const player = page.getByRole("region", { name: "Music player" });
+    const upNext = page.getByRole("region", { name: "Up next" });
+
+    // Nothing playing: Play next starts the song.
+    await library.getByRole("button", { name: "Play next: “Test Tone”" }).click(START_SONG);
+    await expect(player.getByTestId("player-title")).toHaveText("Test Tone");
+    await player.getByRole("button", { name: "Up next" }).click();
+    await expect(upNext.getByText(/Nothing after this song/)).toBeVisible();
+
+    // Add to queue puts it after the song playing (Up next shows it, so no note pops up).
+    await library.getByRole("button", { name: "Add to queue: “Studio Master”" }).click();
+    const queued = upNext.getByRole("button", { name: /^Play “Studio Master” now/ });
+    await expect(queued).toBeVisible();
+    await expect(player.getByRole("button", { name: "Next song" })).toBeEnabled();
+
+    // Removed again: nothing comes next.
+    await upNext.getByRole("button", { name: "Remove “Studio Master” from the queue" }).click();
+    await expect(queued).toBeHidden();
+    await expect(player.getByRole("button", { name: "Next song" })).toBeDisabled();
+
+    // Clicking a song in Up next plays it now.
+    await library.getByRole("button", { name: "Play next: “Studio Master”" }).click();
+    await queued.click(START_SONG);
+    await expect(player.getByTestId("player-title")).toHaveText("Studio Master");
+    await expect(upNext.getByText(/Nothing after this song/)).toBeVisible();
+
+    // Esc closes it. With it closed, a note says the song was added.
+    await page.keyboard.press("Escape");
+    await expect(upNext).toBeHidden();
+    await library.getByRole("button", { name: "Add to queue: “Test Tone”" }).click();
+    await expect(page.getByText("Added to the queue", { exact: true })).toBeVisible();
+    await expect(player.getByRole("button", { name: "Next song" })).toBeEnabled();
+    await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
   });
 
   test("the folder's songs can be filtered and put in order", async ({ page, request }) => {

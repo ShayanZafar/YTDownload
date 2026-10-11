@@ -10,6 +10,7 @@ import { SearchResults } from "@/components/search-results";
 import { RecentExtractions } from "@/components/recent-extractions";
 import { SaveToSetting } from "@/components/save-to-setting";
 import { FolderPicker } from "@/components/folder-picker";
+import { RecentPlaylists } from "@/components/recent-playlists";
 import { SpotifyPlaylistPanel } from "@/components/spotify-playlist";
 import { MusicLibrary } from "@/components/music-library";
 import {
@@ -28,6 +29,7 @@ import { MUSIC_KEY, useFolderMusic } from "@/hooks/use-folder-music";
 import { downloadAllToast, useDownloadAll } from "@/hooks/use-download-all";
 import { useClipboardLink } from "@/hooks/use-clipboard-link";
 import { usePlayer } from "@/hooks/use-player";
+import { useRecentPlaylists } from "@/hooks/use-recent-playlists";
 import { asLink, isSpotifyLink, isSpotifyShortLink, playlistSourceOf } from "@/lib/format";
 import {
   canReadClipboard,
@@ -45,6 +47,7 @@ import {
   type SaveRequest,
 } from "@/lib/save-to-folder";
 import { folderTrack, playlistQueue } from "@/lib/music";
+import { recentPlaylistOf } from "@/lib/recent-playlists";
 import { queryClient } from "@/lib/queryClient";
 import { api, buildDownloadUrl } from "@shared/routes";
 import { spotifyFileName } from "@shared/spotify-names";
@@ -90,6 +93,14 @@ export default function Home() {
   const [playlistLink, setPlaylistLink] = useStoredValue("spotify-playlist");
   const playlist = usePlaylist(playlistLink);
   const playlistSource = (playlistLink !== null && playlistSourceOf(playlistLink)) || "spotify";
+  // The playlists opened lately, to open again with a click.
+  const recentPlaylists = useRecentPlaylists();
+  const { remember: rememberPlaylist } = recentPlaylists;
+  useEffect(() => {
+    if (playlistLink !== null && playlist.data) {
+      rememberPlaylist(recentPlaylistOf(playlistLink, playlist.data));
+    }
+  }, [playlistLink, playlist.data, rememberPlaylist]);
   // The playlist song being looked for on YouTube.
   const [pendingTrackId, setPendingTrackId] = useState<string>();
   // With a "Save to" folder: which of the playlist's songs are in it already.
@@ -545,6 +556,15 @@ export default function Home() {
           inputRef={inputRef}
         />
 
+        {mode === "playlist" && (
+          <RecentPlaylists
+            playlists={recentPlaylists.list}
+            openLink={playlistLink}
+            onOpen={openPlaylist}
+            onForget={recentPlaylists.forget}
+          />
+        )}
+
         {/* Where downloads go — visible before a video is opened, and used by Redownload too. */}
         <div className="w-full mt-4!">
           <SaveToSetting
@@ -597,6 +617,16 @@ export default function Home() {
               { shuffle },
             )
           }
+          onQueue={() => {
+            const playing = player.current !== null;
+            player.enqueue(playlistInFolder, "last");
+            if (playing && !player.upNextOpen) {
+              toast({
+                title: "Added to the queue",
+                description: `${playlistInFolder.length} ${playlistInFolder.length === 1 ? "song" : "songs"} from “${playlist.data?.name ?? "the playlist"}”, at the end.`,
+              });
+            }
+          }}
           onSavePlaylistFile={() => playlist.data && writePlaylistFile(playlist.data)}
           savingPlaylistFile={isSavingPlaylistFile}
           onStop={downloadAll.stop}

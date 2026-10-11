@@ -201,3 +201,79 @@ export function previousPosition(position: number, length: number, repeat: Repea
 
 /** Previous restarts the song once it has played this long (seconds), like most players. */
 export const RESTART_AFTER_SECONDS = 3;
+
+// --- The queue ----------------------------------------------------------------------
+
+/** The player's songs: each song once, and the order they play in. */
+export type Queue = {
+  tracks: PlayerTrack[];
+  /** The tracks' places in play order: as listed, or shuffled. */
+  order: number[];
+  /** Where in `order` the current song is. */
+  position: number;
+};
+
+export const EMPTY_QUEUE: Queue = { tracks: [], order: [], position: 0 };
+
+/** The song playing (or paused), if any. */
+export const currentOf = (queue: Queue): PlayerTrack | undefined =>
+  queue.tracks[queue.order[queue.position]];
+
+/** The songs after the current one, in play order, with their places in it. */
+export function upNext(queue: Queue): { track: PlayerTrack; position: number }[] {
+  return queue.order
+    .slice(queue.position + 1)
+    .map((index, i) => ({ track: queue.tracks[index], position: queue.position + 1 + i }));
+}
+
+/** The queue without the song at `position` in play order (never the current song). */
+export function queueWithout(queue: Queue, position: number): Queue {
+  const index = queue.order[position];
+  if (position === queue.position || index === undefined) return queue;
+  return {
+    tracks: queue.tracks.filter((_, i) => i !== index),
+    order: queue.order.filter((_, p) => p !== position).map((i) => (i > index ? i - 1 : i)),
+    position: position < queue.position ? queue.position - 1 : queue.position,
+  };
+}
+
+/** The queue with nothing after the current song. */
+export function queueUntilCurrent(queue: Queue): Queue {
+  let q = queue;
+  for (let p = q.order.length - 1; p > q.position; p--) q = queueWithout(q, p);
+  return q;
+}
+
+/**
+ * The queue with `songs` added: right after the current song ("next", in
+ * the order given) or at the end ("last"). A song already in the queue moves
+ * there instead of playing twice; the current song stays where it is. The
+ * songs go in the listed order at the same place too, so turning shuffle off
+ * keeps them where they were put.
+ */
+export function queueWith(
+  queue: Queue,
+  songs: readonly PlayerTrack[],
+  where: "next" | "last",
+): Queue {
+  let q = queue;
+  let added = 0;
+  for (const song of songs) {
+    const current = currentOf(q);
+    if (current?.key === song.key) continue;
+    const already = q.tracks.findIndex((track) => track.key === song.key);
+    if (already !== -1) q = queueWithout(q, q.order.indexOf(already));
+    const at = where === "next" ? Math.min(q.position + 1 + added, q.order.length) : q.order.length;
+    // In the listed songs, right after the one it follows in play order.
+    const index = at === 0 ? 0 : q.order[at - 1] + 1;
+    const order = q.order.map((i) => (i >= index ? i + 1 : i));
+    order.splice(at, 0, index);
+    q = {
+      tracks: [...q.tracks.slice(0, index), song, ...q.tracks.slice(index)],
+      order,
+      position: q.position,
+    };
+    added += 1;
+  }
+  return q;
+}

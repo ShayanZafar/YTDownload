@@ -9,15 +9,22 @@ import {
 } from "react";
 import { readDeviceCover } from "@/lib/device-music";
 import {
+  EMPTY_QUEUE,
   RESTART_AFTER_SECONDS,
+  currentOf,
   folderSongCoverUrl,
   folderSongFlacUrl,
   folderSongUrl,
   nextPosition,
   previousPosition,
+  queueUntilCurrent,
+  queueWith,
+  queueWithout,
   repeatModes,
   shuffledOrder,
+  upNext,
   type PlayerTrack,
+  type Queue,
   type Repeat,
 } from "@/lib/music";
 
@@ -36,14 +43,6 @@ import {
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused";
 
-type Queue = {
-  tracks: PlayerTrack[];
-  /** The tracks' places in play order: as listed, or shuffled. */
-  order: number[];
-  /** Where in `order` the current song is. */
-  position: number;
-};
-
 export type Player = {
   current: PlayerTrack | null;
   status: PlayerStatus;
@@ -58,8 +57,24 @@ export type Player = {
   volume: number;
   muted: boolean;
   hasNext: boolean;
+  /** The songs after the current one, in play order, with their places in it (for `jump`, `remove`). */
+  upNext: { track: PlayerTrack; position: number }[];
   /** Plays `tracks` from `index` on — shuffled, if shuffle is on (or `shuffle` says so). */
   play: (tracks: PlayerTrack[], index: number, options?: { shuffle?: boolean }) => void;
+  /**
+   * Adds songs right after the current one, or at the end. With nothing
+   * playing, they start playing (so call it inside the click).
+   */
+  enqueue: (tracks: readonly PlayerTrack[], where: "next" | "last") => void;
+  /** Plays the song at this place in the play order (from `upNext`). */
+  jump: (position: number) => void;
+  /** Takes the song at this place in the play order out of the queue. */
+  remove: (position: number) => void;
+  /** Takes every song after the current one out of the queue. */
+  clearUpNext: () => void;
+  /** Is the Up next list open (above the player bar)? It shows what's added, so no note is needed. */
+  upNextOpen: boolean;
+  setUpNextOpen: (open: boolean) => void;
   toggle: () => void;
   next: () => void;
   previous: () => void;
@@ -80,7 +95,6 @@ const TimeContext = createContext<{ time: number; duration: number | null }>({
   duration: null,
 });
 
-const EMPTY: Queue = { tracks: [], order: [], position: 0 };
 // After a song fails, wait this long before moving on, so the reason can be read.
 const SKIP_AFTER_FAILURE_MS = 2000;
 
@@ -126,7 +140,7 @@ function kindOf(track: PlayerTrack): string {
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [queue, setQueueState] = useState<Queue>(EMPTY);
+  const [queue, setQueueState] = useState<Queue>(EMPTY_QUEUE);
   const [status, setStatus] = useState<PlayerStatus>("idle");
   const [time, setTime] = useState(0);
   const [duration, setDuration] = useState<number | null>(null);
@@ -143,6 +157,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     return Number.isFinite(saved) && saved >= 0 && saved <= 1 ? saved : 1;
   });
   const [muted, setMuted] = useState(false);
+  const [upNextOpen, setUpNextOpen] = useState(false);
 
   // The latest values, for the audio element's events and the media keys.
   const latest = useRef({ queue, shuffle, repeat });
@@ -153,7 +168,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const failuresInARow = useRef(0);
   const skipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const current = queue.tracks[queue.order[queue.position]] ?? null;
+  const current = currentOf(queue) ?? null;
 
   const actions = useMemo(() => {
     const audio = () => audioRef.current;
@@ -161,10 +176,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       latest.current = { ...latest.current, queue: next };
       setQueueState(next);
     };
-    const currentTrack = () => {
-      const { tracks, order, position } = latest.current.queue;
-      return tracks[order[position]] as PlayerTrack | undefined;
-    };
+    const currentTrack = () => currentOf(latest.current.queue);
     const letGoOfObjectUrl = () => {
       if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
       objectUrl.current = null;
@@ -286,7 +298,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       letGoOfObjectUrl();
       loaded.current = null;
       failuresInARow.current = 0;
-      setQueue(EMPTY);
+      setQueue(EMPTY_QUEUE);
+      setUpNextOpen(false);
       setStatus("idle");
       setError(null);
       setConverting(false);
@@ -294,23 +307,38 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setDuration(null);
     };
 
+    const play = (tracks: PlayerTrack[], index: number, options: { shuffle?: boolean } = {}) => {
+      if (!tracks[index]) return;
+      const shuffled = options.shuffle ?? latest.current.shuffle;
+      if (options.shuffle !== undefined && options.shuffle !== latest.current.shuffle) {
+        latest.current = { ...latest.current, shuffle: shuffled };
+        setShuffleState(shuffled);
+        store("player-shuffle", shuffled ? "on" : "off");
+      }
+      failuresInARow.current = 0;
+      setQueue({
+        tracks,
+        order: shuffled ? shuffledOrder(tracks.length, index) : tracks.map((_, i) => i),
+        position: shuffled ? 0 : index,
+      });
+      load(tracks[index]);
+    };
+
     return {
-      play: (tracks: PlayerTrack[], index: number, options: { shuffle?: boolean } = {}) => {
-        if (!tracks[index]) return;
-        const shuffled = options.shuffle ?? latest.current.shuffle;
-        if (options.shuffle !== undefined && options.shuffle !== latest.current.shuffle) {
-          latest.current = { ...latest.current, shuffle: shuffled };
-          setShuffleState(shuffled);
-          store("player-shuffle", shuffled ? "on" : "off");
-        }
-        failuresInARow.current = 0;
-        setQueue({
-          tracks,
-          order: shuffled ? shuffledOrder(tracks.length, index) : tracks.map((_, i) => i),
-          position: shuffled ? 0 : index,
-        });
-        load(tracks[index]);
+      play,
+      enqueue: (tracks: readonly PlayerTrack[], where: "next" | "last") => {
+        if (tracks.length === 0) return;
+        const { queue: q } = latest.current;
+        // Nothing to add them to: they play, in the order given.
+        if (!currentOf(q)) return play([...tracks], 0, { shuffle: false });
+        setQueue(queueWith(q, tracks, where));
       },
+      jump: (position: number) => {
+        failuresInARow.current = 0;
+        goTo(position);
+      },
+      remove: (position: number) => setQueue(queueWithout(latest.current.queue, position)),
+      clearUpNext: () => setQueue(queueUntilCurrent(latest.current.queue)),
       toggle: () => {
         const element = audio();
         const track = currentTrack();
@@ -513,7 +541,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       volume,
       muted,
       hasNext: nextPosition(queue.position, queue.order.length, repeat, { skip: true }) !== null,
+      upNext: upNext(queue),
       play: actions.play,
+      enqueue: actions.enqueue,
+      jump: actions.jump,
+      remove: actions.remove,
+      clearUpNext: actions.clearUpNext,
+      upNextOpen,
+      setUpNextOpen,
       toggle: actions.toggle,
       next: actions.next,
       previous: actions.previous,
@@ -525,7 +560,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       refresh: actions.refresh,
       close: actions.close,
     }),
-    [current, status, converting, error, cover, shuffle, repeat, volume, muted, queue, actions],
+    [
+      current,
+      status,
+      converting,
+      error,
+      cover,
+      shuffle,
+      repeat,
+      volume,
+      muted,
+      queue,
+      upNextOpen,
+      actions,
+    ],
   );
   const timeValue = useMemo(() => ({ time, duration }), [time, duration]);
 

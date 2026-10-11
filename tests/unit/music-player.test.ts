@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AUDIO_FILE_ACCEPT,
+  EMPTY_QUEUE,
+  currentOf,
   deviceTrack,
   filterTracks,
   folderSongCoverUrl,
@@ -11,9 +13,14 @@ import {
   nextPosition,
   playlistQueue,
   previousPosition,
+  queueUntilCurrent,
+  queueWith,
+  queueWithout,
   shuffledOrder,
   sortTracks,
+  upNext,
   type PlayerTrack,
+  type Queue,
 } from "../../client/src/lib/music";
 
 const folderSong = (title: string, extra: Partial<Parameters<typeof folderTrack>[0]> = {}) =>
@@ -176,5 +183,75 @@ describe("playlistQueue", () => {
     };
     expect(playlistQueue(songs, found, [one, two, three])).toEqual([two, one]);
     expect(playlistQueue(songs, {}, [one, two, three])).toEqual([]);
+  });
+});
+
+describe("the queue", () => {
+  const [a, b, c, d, e] = ["A", "B", "C", "D", "E"].map((title) => folderSong(title));
+  /** The titles in play order, the current one in brackets. */
+  const playOrder = (q: Queue) =>
+    q.order
+      .map((i, p) => (p === q.position ? `[${q.tracks[i].title}]` : q.tracks[i].title))
+      .join(" ");
+  const inOrder: Queue = { tracks: [a, b, c], order: [0, 1, 2], position: 1 };
+  // Shuffled: B, C, A — B is playing.
+  const shuffled: Queue = { tracks: [a, b, c], order: [1, 2, 0], position: 0 };
+
+  it("lists the songs after the current one, with their places in the play order", () => {
+    expect(currentOf(inOrder)).toBe(b);
+    expect(upNext(inOrder)).toEqual([{ track: c, position: 2 }]);
+    expect(upNext(shuffled).map(({ track, position }) => [track.title, position])).toEqual([
+      ["C", 1],
+      ["A", 2],
+    ]);
+    expect(upNext(EMPTY_QUEUE)).toEqual([]);
+    expect(currentOf(EMPTY_QUEUE)).toBeUndefined();
+  });
+
+  it("puts songs right after the current one, in the order given", () => {
+    const q = queueWith(inOrder, [d, e], "next");
+    expect(playOrder(q)).toBe("A [B] D E C");
+    // Shuffle off stays in this order: the songs are listed where they play.
+    expect(q.order).toEqual([0, 1, 2, 3, 4]);
+    expect(playOrder(queueWith(shuffled, [d], "next"))).toBe("[B] D C A");
+  });
+
+  it("adds songs at the end", () => {
+    expect(playOrder(queueWith(inOrder, [d, e], "last"))).toBe("A [B] C D E");
+    expect(playOrder(queueWith(shuffled, [d], "last"))).toBe("[B] C A D");
+  });
+
+  it("moves a song that's in the queue already instead of adding it twice", () => {
+    expect(playOrder(queueWith(inOrder, [a], "next"))).toBe("[B] A C");
+    expect(playOrder(queueWith(inOrder, [c], "next"))).toBe("A [B] C");
+    expect(playOrder(queueWith(queueWith(inOrder, [d], "next"), [c], "next"))).toBe("A [B] C D");
+    expect(playOrder(queueWith(shuffled, [c], "last"))).toBe("[B] A C");
+    // The current song stays where it is.
+    expect(queueWith(inOrder, [b], "next")).toEqual(inOrder);
+    const q = queueWith(inOrder, [a, d, a], "last");
+    expect(q.tracks).toHaveLength(4);
+    expect(playOrder(q)).toBe("[B] C D A");
+  });
+
+  it("takes a song out, but never the current one", () => {
+    expect(playOrder(queueWithout(inOrder, 2))).toBe("A [B]");
+    const earlier = queueWithout(inOrder, 0);
+    expect(playOrder(earlier)).toBe("[B] C");
+    expect(currentOf(earlier)).toBe(b);
+    expect(playOrder(queueWithout(shuffled, 1))).toBe("[B] A");
+    expect(queueWithout(inOrder, 1)).toEqual(inOrder);
+    expect(queueWithout(inOrder, 7)).toEqual(inOrder);
+  });
+
+  it("clears what's after the current song", () => {
+    expect(playOrder(queueUntilCurrent(inOrder))).toBe("A [B]");
+    expect(playOrder(queueUntilCurrent(shuffled))).toBe("[B]");
+    expect(queueUntilCurrent(shuffled).tracks).toEqual([b]);
+  });
+
+  it("starts a queue with nothing in it", () => {
+    const q = queueWith(EMPTY_QUEUE, [d, e], "next");
+    expect(playOrder(q)).toBe("[D] E");
+    expect(playOrder(queueWith(EMPTY_QUEUE, [d, e], "last"))).toBe("[D] E");
   });
 });
