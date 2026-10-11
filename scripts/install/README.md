@@ -21,17 +21,18 @@ This build: [`{{SHORT_SHA}}`](https://github.com/{{REPO}}/commit/{{SHA}}), {{DAT
    git clone --depth 1 --branch install https://github.com/{{REPO}}.git "$HOME\YouTube Audio Extractor"
    ```
 
-3. **Double-click `Start.cmd`** in that folder. The first start installs what the app needs, yt-dlp and ffmpeg among them, which takes a minute or two; after that it starts in a few seconds. It opens in your browser at http://localhost:5000. Keep its window open while you use the app.
+3. **Double-click `Start.cmd`** in that folder (on macOS, `Start.command`; on Linux, run `./Start.sh` in a terminal). The first start installs what the app needs, yt-dlp and ffmpeg among them, which takes a minute or two; after that it starts in a few seconds. It opens in your browser at http://localhost:5000. Keep its window open while you use the app.
 
 ## Using it
 
-| File                         | What it does                                                                                                                            |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `Start.cmd`                  | Starts the app and opens it in your browser (or just opens the page, if it's running).                                                  |
-| `Stop.cmd`                   | Stops the app.                                                                                                                          |
-| `Update.cmd`                 | Gets the newest build. Your download history, settings and `.env` stay; a running app is stopped and started again.                     |
-| `scripts\windows\`           | The rest: `update-yt-dlp.cmd` when YouTube downloads stop working, `autostart-on.cmd` and `autostart-off.cmd` to start it with Windows. |
-| `.env` (copy `.env.example`) | Settings, like the port, or `HOST=0.0.0.0` to let your phone use the app.                                                               |
+| File                                              | What it does                                                                                                                            |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `Start.cmd`                                       | Starts the app and opens it in your browser (or just opens the page, if it's running).                                                  |
+| `Stop.cmd`                                        | Stops the app.                                                                                                                          |
+| `Update.cmd`                                      | Gets the newest build. Your download history, settings and `.env` stay; a running app is stopped and started again.                     |
+| `Start.command`, `Stop.command`, `Update.command` | The same three for macOS (double-click in Finder); `Start.sh`, `Stop.sh`, `Update.sh` for Linux (run in a terminal).                    |
+| `scripts\windows\`                                | The rest: `update-yt-dlp.cmd` when YouTube downloads stop working, `autostart-on.cmd` and `autostart-off.cmd` to start it with Windows. |
+| `.env` (copy `.env.example`)                      | Settings, like the port, or `HOST=0.0.0.0` to let your phone use the app.                                                               |
 
 Your phone uses the app running on this PC — see [Using it from your phone](https://github.com/{{REPO}}/blob/main/docs/run/README.md#using-it-from-your-phone).
 

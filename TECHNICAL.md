@@ -81,6 +81,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── make-icons.ts          # The app's icons, drawn by Chrome (npx tsx scripts/make-icons.ts)
 │   ├── yt-dlp.mjs             # After npm install: yt-dlp's standalone build on macOS/Linux; npm run update-yt-dlp
 │   ├── install/               # The install branch's README, .gitignore and Start/Stop/Update shortcuts
+│   ├── unix/                  # The same for macOS and Linux: app.sh (POSIX sh) + start/stop/update wrappers and .command files
 │   └── windows/               # Double-click helpers: start, stop, update, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
 ├── .github/
 │   ├── workflows/
@@ -612,7 +613,7 @@ When YouTube downloads stop working, `npm run update-yt-dlp` gets the newest yt-
 
 The app runs natively on Windows — no WSL or Git Bash needed. The npm scripts are cross-platform (`cross-env`), the server reads `.env` itself, and the Windows build of yt-dlp is a standalone `.exe`, so **Python is not required**.
 
-To just use the app, double-click `scripts\windows\start.cmd`: it checks for Node.js, runs the install below when needed (the first time, or when `package-lock.json` has changed since), starts `npm run dev` and opens the browser. `stop.cmd`, `update-yt-dlp.cmd` and `autostart-on.cmd`/`autostart-off.cmd` sit next to it — see [Running the app](docs/run/README.md). The logic is in `scripts/windows/app.ps1`, written for Windows PowerShell 5.1 and kept plain ASCII (5.1 reads a script without a byte-order mark in the system code page); `.gitattributes` keeps the `.cmd` and `.ps1` files' Windows line endings.
+To just use the app, double-click `scripts\windows\start.cmd` (on macOS `scripts/unix/start.command`, on Linux `scripts/unix/start.sh`): it checks for Node.js, runs the install below when needed (the first time, or when `package-lock.json` has changed since), starts `npm run dev` and opens the browser. `stop.cmd`, `update-yt-dlp.cmd` and `autostart-on.cmd`/`autostart-off.cmd` sit next to it — see [Running the app](docs/run/README.md). The logic is in `scripts/windows/app.ps1`, written for Windows PowerShell 5.1 and kept plain ASCII (5.1 reads a script without a byte-order mark in the system code page); `.gitattributes` keeps the `.cmd` and `.ps1` files' Windows line endings.
 
 ### Prerequisites — install once
 
@@ -647,7 +648,7 @@ npm start                        # serves dist/ on http://localhost:5000
 
 - **Port 5000 is in use.** Set `PORT=5001` (or any free port) in `.env`. Find what's holding 5000 with `Get-NetTCPConnection -LocalPort 5000`.
 - **Reaching it from your phone or another PC.** The server only listens on this computer by default. Set `HOST=0.0.0.0` in `.env` (Windows Firewall will ask to allow Node) and open `http://<your PC's IP>:5000`. To use a host name instead of the IP (e.g. a Tailscale name), add it to `ALLOWED_HOSTS`.
-- **Downloads stop working after a while.** YouTube changes things regularly; run `npm run update-yt-dlp` (or `scripts\windows\update-yt-dlp.cmd`) to get the newest yt-dlp.
+- **Downloads stop working after a while.** YouTube changes things regularly; run `npm run update-yt-dlp` (or `scripts\windows\update-yt-dlp.cmd`, `scripts/unix/update-yt-dlp.sh`) to get the newest yt-dlp.
 - **`npm install` skips dev dependencies** (e.g. `'tsx' is not recognized`). `NODE_ENV=production` is set in that terminal — clear it (`Remove-Item Env:NODE_ENV`) and reinstall.
 - **Long file paths in `node_modules`.** If `npm install` fails with `ENAMETOOLONG`, enable Windows long-path support: `New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force` (elevated PowerShell, then reboot).
 - **Keep the project path free of spaces** (e.g. `C:\Code\...`, not `C:\My Projects\...`). The yt-dlp wrapper falls back to running through a shell when its path contains spaces, which is more fragile.
@@ -860,7 +861,7 @@ The Express server serves the static client from `dist/public` and the API from 
 
 `.github/workflows/install.yml` builds the app on GitHub after every push to `main` (or by hand, from the Actions tab) and publishes the result to the `install` branch, which PCs install from (`git clone --depth 1 --branch install …`) and update from (`Update.cmd`) — see [Running the app](docs/run/README.md#installing-the-ready-to-run-app).
 
-- **What's in it:** `dist/`; `package.json` and `package-lock.json`, for `npm ci --omit=dev`, which installs the packages the server runs with — and downloads yt-dlp and ffmpeg, so each PC gets its own and the branch stays small; the Windows scripts, `.env.example` and `.gitattributes` (CRLF for the scripts); and from `scripts/install/` a README (with the build's commit filled in), a `.gitignore` (`node_modules/`, `data/`, `.env`) and `Start.cmd`, `Stop.cmd` and `Update.cmd`, which run the scripts in `scripts\windows`.
+- **What's in it:** `dist/`; `package.json` and `package-lock.json`, for `npm ci --omit=dev`, which installs the packages the server runs with — and downloads yt-dlp and ffmpeg, so each PC gets its own and the branch stays small; the Windows scripts, `.env.example` and `.gitattributes` (CRLF for the scripts); and from `scripts/install/` a README (with the build's commit filled in), a `.gitignore` (`node_modules/`, `data/`, `.env`) and `Start.cmd`, `Stop.cmd` and `Update.cmd`, which run the scripts in `scripts\windows` (with `Start/Stop/Update.command` for macOS and `Start/Stop/Update.sh` for Linux, which run `scripts/unix/app.sh`).
 - **One commit:** each build replaces the one before (a fresh commit, force-pushed), so the branch never grows. `Update.cmd` therefore fetches the branch and resets to it (`git fetch --depth 1 origin install`, `git reset --hard FETCH_HEAD`) instead of `git pull`; `node_modules/`, `data/` and `.env` aren't tracked, so they stay. A batch file being run is read a line at a time, and `Update.cmd` replaces the shortcuts while it runs, so each one does its work in a single line.
 - **Two kinds of copy:** the scripts tell them apart by `server\index.ts`. A ready-to-run build (no source) installs with `npm ci --omit=dev` and runs `npm start` — `node dist/index.cjs`, which has `NODE_ENV=production` built in; a copy of the source installs everything and runs the development server.
 - **The build** skips yt-dlp's and ffmpeg's downloads (`npm ci --ignore-scripts`), which building doesn't need. The workflow doesn't run the tests: they're run before pushing to `main`.

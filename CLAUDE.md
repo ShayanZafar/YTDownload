@@ -136,7 +136,9 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   `lib/music.ts` has the pure parts (songs, sort/filter, play order; unit-tested)
 - `scripts/build.ts` — the production build (`npm run build`). `scripts/windows/` — double-click
   helpers for running the app (`start.cmd`, `stop.cmd`, `update.cmd`, `update-yt-dlp.cmd`,
-  `autostart-on/off.cmd`), all thin wrappers around `app.ps1`. Keep `app.ps1` Windows PowerShell
+  `autostart-on/off.cmd`), all thin wrappers around `app.ps1`; `scripts/unix/` is the same for
+  macOS and Linux (`app.sh`, POSIX sh, with `start/stop/update/update-yt-dlp.sh` wrappers and
+  `.command` files for Finder; `tests/unit/unix-scripts.test.ts` checks them). Keep `app.ps1` Windows PowerShell
   5.1-compatible and plain ASCII, with CRLF line endings (`.gitattributes`;
   `tests/unit/windows-scripts.test.ts` checks). `stop` only kills the app's own process tree: from
   the server's `node.exe` up through its launchers (npm, `cross-env`, `start.cmd`/`Start.cmd`), never
@@ -145,7 +147,7 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
   (`npm ci --omit=dev`, `npm start`)
 - `.github/workflows/install.yml` — after every push to `main`, builds the app on GitHub and
   force-pushes the ready-to-run result to the `install` branch as a single commit: `dist/`,
-  `package*.json`, the Windows scripts and `scripts/install/` (README with the build filled in,
+  `package*.json`, the Windows and Unix scripts and `scripts/install/` (README with the build filled in,
   `.gitignore`, `Start/Stop/Update.cmd` shortcuts — one line each, as `Update.cmd` replaces them
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
   (no history to merge). Never commit to `install` by hand
@@ -183,7 +185,7 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   than widening the list), then the unit tests and the music API test (no network). CI runs the same script on every push and pull
   request
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
-  `scripts\windows\start.cmd` does the same with install checks and opens the browser
+  `scripts\windows\start.cmd` (`scripts/unix/start.sh` on macOS and Linux) does the same with install checks and opens the browser
 - `npm run check` — type-check
 - `npx vitest run tests/unit` — fast unit tests
 - `npx vitest run tests/api` — end-to-end API tests (needs internet)

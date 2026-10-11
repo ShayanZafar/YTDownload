@@ -1,6 +1,6 @@
 # Running the app
 
-How to install, start and stop the YouTube Audio Extractor, start it with Windows, use it from your phone, and keep it working. The scripts are in [`scripts/windows/`](../../scripts/windows/).
+How to install, start and stop the YouTube Audio Extractor, start it with Windows, use it from your phone, and keep it working. The scripts are in [`scripts/windows/`](../../scripts/windows/) and, for macOS and Linux, [`scripts/unix/`](../../scripts/unix/).
 
 ## Quick start (Windows)
 
@@ -31,6 +31,15 @@ A PC can have the app two ways:
 
 Double-clicking `start.cmd` while the app is already running just opens the page again. For a desktop shortcut, right-click `start.cmd` (or `Start.cmd`), then **Send to** → **Desktop (create shortcut)** (on Windows 11, **Send to** is under **Show more options**).
 
+## Quick start (macOS and Linux)
+
+The same two ways, with the scripts in `scripts/unix/`. You need Node.js (the LTS version from [nodejs.org](https://nodejs.org), or `brew install node` on macOS, `sudo apt install nodejs npm` on Debian and Ubuntu) and Git.
+
+- **The ready-to-run app**: `git clone --depth 1 --branch install https://github.com/ShayanZafar/YTDownload.git "$HOME/YouTube Audio Extractor"`, then double-click `Start.command` in that folder on macOS, or run `./Start.sh` in it on Linux. `Stop` and `Update` work the same way.
+- **The source code**: double-click `scripts/unix/start.command` (macOS) or run `scripts/unix/start.sh` (Linux). The first time, it installs what the app needs, which takes a minute or two; then the app starts and opens at http://localhost:5000. Keep the window open while you use the app; Ctrl+C, or `scripts/unix/stop.sh`, stops it.
+
+Some Linux file managers open a double-clicked `.sh` file as text; run it from a terminal, or use the file manager's "Run" choice. There is no autostart script for macOS and Linux: `start.sh --no-browser` in a login item or a user service does the same as `autostart-on.cmd`.
+
 ## The scripts
 
 | Script              | What it does                                                                                                                                                                                                                                                                   |
@@ -42,7 +51,7 @@ Double-clicking `start.cmd` while the app is already running just opens the page
 | `autostart-on.cmd`  | Starts the app whenever you sign in to Windows (minimized, without opening the browser), so it's always there at http://localhost:5000.                                                                                                                                        |
 | `autostart-off.cmd` | Stops starting it with Windows.                                                                                                                                                                                                                                                |
 
-They're `.cmd` files so a double-click runs them whatever PowerShell's script setting is; the work is done by `app.ps1` next to them. They take the app's settings (like `PORT`) from its `.env` file, as the app does. In the ready-to-run app, `start.cmd` runs the built app; in a copy of the source code, the development server.
+They're `.cmd` files so a double-click runs them whatever PowerShell's script setting is; the work is done by `app.ps1` next to them. `scripts/unix/` has `start.sh`, `stop.sh`, `update.sh` and `update-yt-dlp.sh` for macOS and Linux, plus `start.command`, `stop.command` and `update.command` for a double-click in Finder; they do the same through `app.sh`. They take the app's settings (like `PORT`) from its `.env` file, as the app does. In the ready-to-run app, `start.cmd` runs the built app; in a copy of the source code, the development server.
 
 ## Starting it with Windows
 
@@ -50,7 +59,7 @@ They're `.cmd` files so a double-click runs them whatever PowerShell's script se
 
 ## Running it from a terminal
 
-The scripts run these commands for you on Windows. On macOS and Linux — where the app works the same, without the double-click scripts — type them yourself, with `npm` instead of `npm.cmd`.
+The scripts run these commands for you on Windows. On macOS and Linux — where `scripts/unix/` has the same scripts, or — type them yourself, with `npm` instead of `npm.cmd`.
 
 ```powershell
 cd C:\Code\YTDownload
@@ -99,8 +108,8 @@ The app treats requests through that address as another device's, even from the 
 
 ## Keeping it working
 
-- **YouTube downloads fail** ("Sign in to confirm you're not a bot", "HTTP Error 403", or "Video unavailable" for a video that plays fine on YouTube): run `update-yt-dlp.cmd` (on macOS and Linux, `npm run update-yt-dlp`).
-- **New versions of the app:** double-click `Update.cmd` in the ready-to-run app, or `scripts\windows\update.cmd` in a copy of the source code (it runs `git pull`). The next start installs any new packages by itself.
+- **YouTube downloads fail** ("Sign in to confirm you're not a bot", "HTTP Error 403", or "Video unavailable" for a video that plays fine on YouTube): run `update-yt-dlp.cmd` (on macOS and Linux, `scripts/unix/update-yt-dlp.sh`).
+- **New versions of the app:** double-click `Update.cmd` in the ready-to-run app, or `scripts\windows\update.cmd` (`scripts/unix/update.sh` on macOS and Linux) in a copy of the source code (it runs `git pull`). The next start installs any new packages by itself.
 
 ## Hosting it somewhere else
 

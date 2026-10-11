@@ -5,8 +5,9 @@
 #
 # The branch holds the built app (dist/), what npm needs to install the
 # packages it runs with (package.json, package-lock.json, and
-# scripts/yt-dlp.mjs, which runs after the install), the Windows scripts, and
-# scripts/install/'s README, .gitignore and Start/Stop/Update shortcuts.
+# scripts/yt-dlp.mjs, which runs after the install), the Windows and Unix scripts, and
+# scripts/install/'s README, .gitignore and Start/Stop/Update shortcuts (.cmd for Windows,
+# .command for macOS, .sh for Linux).
 # Not yt-dlp or ffmpeg: each PC downloads its own when it installs the
 # packages. Each build replaces the one before (the branch keeps a single
 # commit, so it stays small), which is why Update.cmd fetches it rather than
@@ -52,8 +53,11 @@ jobs:
           mkdir -p "$out/scripts"
           cp -R dist package.json package-lock.json .env.example .gitattributes "$out/"
           cp -R scripts/windows "$out/scripts/windows"
+          cp -R scripts/unix "$out/scripts/unix"
           cp scripts/yt-dlp.mjs "$out/scripts/"
           cp scripts/install/Start.cmd scripts/install/Stop.cmd scripts/install/Update.cmd scripts/install/.gitignore "$out/"
+          cp scripts/install/Start.command scripts/install/Stop.command scripts/install/Update.command "$out/"
+          cp scripts/install/Start.sh scripts/install/Stop.sh scripts/install/Update.sh "$out/"
           # The README, with this build's details filled in.
           node -e '
             const fs = require("fs");

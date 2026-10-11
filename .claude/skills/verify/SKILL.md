@@ -1,7 +1,10 @@
 ---
 name: verify
-description: Run YTDownload's one check (prettier, eslint, tsc, unit tests and the music API test) and report only failures. Claude runs this before each commit; type /verify to run it yourself.
+disable-model-invocation: true
+description: Run YTDownload's one check (prettier, eslint, tsc, unit tests and the music API test) and report only failures. A commit hook runs it before each commit; type /verify to run it yourself.
 ---
+
+A commit hook runs this same check before every `git commit` and blocks the commit when it fails, so there is no need to run it before committing; run it directly while working, to check a step.
 
 From the repo root, run the project's check and show only the end of the output:
 
