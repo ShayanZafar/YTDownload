@@ -1,11 +1,14 @@
 # Claude reviews each pull request once, when it's opened or marked ready, and
 # posts findings as inline comments. It runs on the Claude subscription through
 # the CLAUDE_CODE_OAUTH_TOKEN secret (created with `claude setup-token`).
-# Drafts and pull requests from forks are skipped. The review runs on Sonnet 5.5,
-# a different model from the one that usually writes the code, so their blind
-# spots don't line up. To review again after a
-# push, re-run the workflow from the Actions tab, or add `synchronize` to the
-# types below (that reviews every push, which costs more plan usage).
+# Drafts and pull requests from forks are skipped, and so are Dependabot's:
+# GitHub gives Dependabot-triggered runs no repository secrets, so the review
+# could not sign in anyway (the Tests/verify workflow still checks them). If the
+# secret is missing or empty, the job logs a warning and finishes green instead
+# of failing. The review runs on Sonnet 5.5, a different model from the one that
+# usually writes the code, so their blind spots don't line up. To review again
+# after a push, re-run the workflow from the Actions tab, or add `synchronize`
+# to the types below (that reviews every push, which costs more plan usage).
 name: Claude Code Review
 
 on:
@@ -14,7 +17,10 @@ on:
 
 jobs:
   review:
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event.pull_request.draft == false
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -25,12 +31,22 @@ jobs:
       pull-requests: read
       issues: read
       id-token: write
+    env:
+      # `secrets` can't be read in a job-level `if`, so the steps check this copy.
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
+      - name: Skip without a token
+        if: env.CLAUDE_CODE_OAUTH_TOKEN == ''
+        run: |
+          echo "::warning::The CLAUDE_CODE_OAUTH_TOKEN secret is not set, so the review was skipped. Run 'claude setup-token' and 'gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${{ github.repository }}'."
+
       - uses: actions/checkout@v7
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         with:
           fetch-depth: 1
 
       - uses: anthropics/claude-code-action@v1
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"

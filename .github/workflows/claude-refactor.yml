@@ -3,7 +3,8 @@
 # behavior-preserving cleanups with npm run verify passing, and opens a pull
 # request. The Claude Code Review workflow then reviews that PR like any other,
 # and nothing merges without you. Runs on the Claude subscription through the
-# CLAUDE_CODE_OAUTH_TOKEN secret. Run it any time from the Actions tab.
+# CLAUDE_CODE_OAUTH_TOKEN secret; if the secret is missing or empty, the job
+# logs a warning and finishes green. Run it any time from the Actions tab.
 name: Claude Refactor
 
 on:
@@ -28,20 +29,31 @@ jobs:
     env:
       # youtube-dl-exec's installer looks for Python, which the app doesn't use.
       YOUTUBE_DL_SKIP_PYTHON_CHECK: "1"
+      # `secrets` can't be read in a job-level `if`, so the steps check this copy.
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
+      - name: Skip without a token
+        if: env.CLAUDE_CODE_OAUTH_TOKEN == ''
+        run: |
+          echo "::warning::The CLAUDE_CODE_OAUTH_TOKEN secret is not set, so the refactor was skipped. Run 'claude setup-token' and 'gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${{ github.repository }}'."
+
       - uses: actions/checkout@v7
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         with:
           fetch-depth: 0
 
       - uses: actions/setup-node@v7
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         with:
           node-version: 24
           cache: npm
 
       - name: Install
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         run: npm ci
 
       - uses: anthropics/claude-code-action@v1
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: "/refactor"

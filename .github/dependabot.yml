@@ -14,6 +14,12 @@ updates:
       npm-dependencies:
         patterns: ["*"]
     open-pull-requests-limit: 3
+    ignore:
+      # typescript-eslint only supports the TypeScript majors it was built for
+      # (its peer range failed npm ci on TypeScript 7). Bump TypeScript by hand
+      # once typescript-eslint catches up; minors and patches still arrive here.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
