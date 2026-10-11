@@ -23,6 +23,12 @@ export function historyFilePath(): string {
 export interface IStorage {
   getDownloads(): Promise<Download[]>;
   createDownload(download: InsertDownload): Promise<Download>;
+  /** Takes an entry out; undefined if there's no such entry. */
+  removeDownload(id: number): Promise<Download | undefined>;
+  /** Empties the history; answers with what it held. */
+  clearDownloads(): Promise<Download[]>;
+  /** Puts entries back in date order (Undo); answers with the ones put back. */
+  restoreDownloads(entries: Download[]): Promise<Download[]>;
 }
 
 const historySchema = z.array(downloadSchema);
@@ -65,9 +71,7 @@ export class FileStorage implements IStorage {
   }
 
   createDownload(insert: InsertDownload): Promise<Download> {
-    const run = async () => {
-      const file = this.file();
-      const entries = await readHistory(file);
+    return this.change((entries) => {
       const entry: Download = {
         id: entries.reduce((max, e) => Math.max(max, e.id), 0) + 1,
         url: insert.url,
@@ -75,8 +79,58 @@ export class FileStorage implements IStorage {
         downloadedAt: new Date().toISOString(),
         ...(insert.spotifyId ? { spotifyId: insert.spotifyId } : {}),
       };
-      await writeHistory(file, [entry, ...entries].slice(0, MAX_HISTORY));
-      return entry;
+      return { entries: [entry, ...entries], result: entry };
+    });
+  }
+
+  removeDownload(id: number): Promise<Download | undefined> {
+    return this.change((entries) => {
+      const entry = entries.find((e) => e.id === id);
+      return { entries: entry ? entries.filter((e) => e !== entry) : undefined, result: entry };
+    });
+  }
+
+  clearDownloads(): Promise<Download[]> {
+    return this.change((entries) => ({
+      entries: entries.length > 0 ? [] : undefined,
+      result: entries,
+    }));
+  }
+
+  restoreDownloads(restored: Download[]): Promise<Download[]> {
+    return this.change((entries) => {
+      // An entry is the download of that video at that moment (its id can change).
+      const same = (a: Download, b: Download) =>
+        a.url === b.url && a.downloadedAt === b.downloadedAt;
+      const ids = new Set(entries.map((e) => e.id));
+      let nextId = Math.max(0, ...entries.map((e) => e.id), ...restored.map((e) => e.id)) + 1;
+      const back: Download[] = [];
+      for (const entry of restored) {
+        // Already there (Undo pressed twice): not added again.
+        if (entries.some((e) => same(e, entry)) || back.some((e) => same(e, entry))) continue;
+        // Its id was given to a download made since: it gets a new one.
+        const id = ids.has(entry.id) ? nextId++ : entry.id;
+        ids.add(id);
+        back.push({ ...entry, id });
+      }
+      if (back.length === 0) return { entries: undefined, result: [] };
+      const time = (e: Download) => Date.parse(e.downloadedAt) || 0;
+      // Newest first, as always (and the newer id first between two from the same moment).
+      const merged = [...entries, ...back].sort((a, b) => time(b) - time(a) || b.id - a.id);
+      return { entries: merged, result: back };
+    });
+  }
+
+  /**
+   * Reads the history, changes it and writes it back (unless `entries` comes
+   * back undefined: nothing to write), one change at a time.
+   */
+  private change<T>(edit: (entries: Download[]) => { entries: Download[] | undefined; result: T }) {
+    const run = async () => {
+      const file = this.file();
+      const { entries, result } = edit(await readHistory(file));
+      if (entries) await writeHistory(file, entries.slice(0, MAX_HISTORY));
+      return result;
     };
     const result = this.queue.then(run, run);
     this.queue = result.catch(() => {});

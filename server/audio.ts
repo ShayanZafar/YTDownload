@@ -13,10 +13,15 @@
  * Set FFMPEG_BIN to use a different ffmpeg.
  */
 import { spawn, type ChildProcess } from "child_process";
-import type { Readable } from "stream";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
+import { Transform, type Readable } from "stream";
 import ffmpegStatic from "ffmpeg-static";
 import youtubedl from "youtube-dl-exec";
 import type { DownloadFormat } from "@shared/routes";
+import { retryWhenBusy } from "./retry-when-busy";
+import { ffmetadataValue, flacPictureBlock, id3v2Tag, type SongTags } from "./tags";
 
 // Flags shared by every yt-dlp call.
 // `jsRuntimes: "node"` — since late 2025 yt-dlp needs a JavaScript runtime to
@@ -55,18 +60,31 @@ const ytDlpModule = youtubedl as unknown as {
 export const YT_DLP_PATH = ytDlpModule.constants.YOUTUBE_DL_PATH;
 export const FFMPEG_PATH = ffmpegStatic; // null only on platforms ffmpeg-static doesn't cover
 
-export type AudioMetadata = {
-  title: string;
-  artist?: string;
-  /**
-   * The Spotify song this is, written into the file's tags so the playlist
-   * panel recognises the file in the "Save to" folder, even after a rename.
-   */
-  spotifyId?: string;
+/**
+ * A download's tags: title, artist, album, date, track number, and the
+ * Spotify song it is (`spotifyId`), written into the file so the playlist
+ * panel recognises it in the "Save to" folder, even after a rename.
+ */
+export type AudioMetadata = SongTags;
+
+/**
+ * What a download produces: the file extension, its MIME type, the ffmpeg
+ * arguments, and for an MP3, the tag that goes in front of ffmpeg's audio.
+ */
+export type AudioOutput = {
+  ext: string;
+  contentType: string;
+  ffmpegArgs: string[];
+  prefix?: Buffer;
 };
 
-/** What a download produces: the file extension, its MIME type, and the ffmpeg arguments. */
-export type AudioOutput = { ext: string; contentType: string; ffmpegArgs: string[] };
+/**
+ * The download's cover (a JPEG), and the files ffmpeg reads it from where the
+ * cover can't go on its command line: a Matroska attachment (`file`), and an
+ * Opus file's METADATA_BLOCK_PICTURE comment (`tagsFile`, ffmpeg's metadata
+ * file — a cover is far longer than a Windows command line allows).
+ */
+export type CoverFiles = { jpeg: Buffer; file?: string; tagsFile?: string };
 
 type Container = { ext: string; contentType: string; muxerArgs: string[] };
 
@@ -79,12 +97,20 @@ export function ytDlpAudioArgs(videoUrl: string, format: string = AUDIO_FORMAT):
 }
 
 // Read audio on stdin, drop whatever tags the source container carried, and
-// write our own title/artist (and the Spotify song, if it's one: an ID3
-// "TXXX:spotify_id" frame, or a SPOTIFY_ID comment in Ogg and Matroska).
-function ffmpegInputAndTags({ title, artist, spotifyId }: AudioMetadata): string[] {
-  const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn"];
-  args.push("-map_metadata", "-1", "-metadata", `title=${title}`);
+// write our own: title, artist, album, date, track number, and the Spotify
+// song if it's one (a SPOTIFY_ID comment in Ogg and Matroska). An Opus file's
+// cover comes from ffmpeg's metadata file, read as a second input.
+function ffmpegInputAndTags(
+  { title, artist, album, date, track, spotifyId }: AudioMetadata,
+  tagsFile?: string,
+): string[] {
+  const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0"];
+  if (tagsFile) args.push("-f", "ffmetadata", "-i", tagsFile, "-map", "0:a");
+  args.push("-vn", "-map_metadata", tagsFile ? "1" : "-1", "-metadata", `title=${title}`);
   if (artist) args.push("-metadata", `artist=${artist}`);
+  if (album) args.push("-metadata", `album=${album}`);
+  if (date) args.push("-metadata", `date=${date}`);
+  if (track) args.push("-metadata", `track=${track}`);
   if (spotifyId) args.push("-metadata", `spotify_id=${spotifyId}`);
   return args;
 }
@@ -92,15 +118,16 @@ function ffmpegInputAndTags({ title, artist, spotifyId }: AudioMetadata): string
 /** The Spotify song's link, the way it's written into a file's comment. */
 export const spotifySongLink = (id: string) => `https://open.spotify.com/track/${id}`;
 
-/** ffmpeg arguments that convert any audio on stdin to a tagged 320 kbps MP3 on stdout. */
-export function ffmpegMp3Args(meta: AudioMetadata): string[] {
+/**
+ * ffmpeg arguments that convert any audio on stdin to a 320 kbps MP3 on
+ * stdout, without tags: the app writes the MP3's tag itself (`id3v2Tag()`),
+ * since ffmpeg can't stream one with a cover.
+ */
+export function ffmpegMp3Args(): string[] {
   return [
-    ...ffmpegInputAndTags(meta),
+    ...["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-map_metadata", "-1"],
     ...["-c:a", "libmp3lame", "-b:a", MP3_BITRATE, "-compression_level", LAME_QUALITY],
-    // ID3v2.3 rather than ffmpeg's default v2.4: Windows Explorer and many
-    // car/phone players only read v2.3 tags.
-    ...["-id3v2_version", "3"],
-    ...["-f", "mp3", "pipe:1"],
+    ...["-write_id3v2", "0", "-f", "mp3", "pipe:1"],
   ];
 }
 
@@ -139,9 +166,15 @@ export function audioOutput(
   format: DownloadFormat,
   meta: AudioMetadata,
   sourceAcodec?: string,
+  cover?: CoverFiles,
 ): AudioOutput {
   if (format === "mp3") {
-    return { ext: "mp3", contentType: "audio/mpeg", ffmpegArgs: ffmpegMp3Args(meta) };
+    return {
+      ext: "mp3",
+      contentType: "audio/mpeg",
+      ffmpegArgs: ffmpegMp3Args(),
+      prefix: id3v2Tag(meta, cover?.jpeg),
+    };
   }
   const { ext, contentType, muxerArgs } = originalContainer(sourceAcodec);
   // An .m4a can't hold a tag of our own, so the Spotify song goes in its comment.
@@ -149,18 +182,67 @@ export function audioOutput(
     ext === "m4a" && meta.spotifyId
       ? ["-metadata", `comment=${spotifySongLink(meta.spotifyId)}`]
       : [];
+  // Matroska keeps a cover as an attached file named "cover.jpg". (A streamed
+  // .m4a can't hold one: its header is written before any picture arrives.)
+  const attachment =
+    ext === "mka" && cover?.file
+      ? [
+          ...["-attach", cover.file],
+          ...["-metadata:s:t:0", "mimetype=image/jpeg", "-metadata:s:t:0", "filename=cover.jpg"],
+        ]
+      : [];
   return {
     ext,
     contentType,
     ffmpegArgs: [
-      ...ffmpegInputAndTags(meta),
+      ...ffmpegInputAndTags(meta, ext === "opus" ? cover?.tagsFile : undefined),
       ...songComment,
+      ...attachment,
       "-c:a",
       "copy",
       ...muxerArgs,
       "pipe:1",
     ],
   };
+}
+
+/** A download's output, and a way to delete the cover files made for it once ffmpeg is done. */
+export type PreparedOutput = AudioOutput & { cleanup: () => Promise<void> };
+
+/**
+ * `audioOutput()` with a cover: for the containers that need it, the cover is
+ * written into a temp folder for ffmpeg to read (deleted by `cleanup()`).
+ */
+export async function prepareAudioOutput(
+  format: DownloadFormat,
+  meta: AudioMetadata,
+  sourceAcodec?: string,
+  cover?: Buffer,
+): Promise<PreparedOutput> {
+  const ext = format === "mp3" ? "mp3" : originalContainer(sourceAcodec).ext;
+  if (!cover || (ext !== "opus" && ext !== "mka")) {
+    const files = cover ? { jpeg: cover } : undefined;
+    return { ...audioOutput(format, meta, sourceAcodec, files), cleanup: async () => {} };
+  }
+  // Named unlike the tests' temp files, so `npm run clean` leaves it alone.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "ytdownload-cover-"));
+  const cleanup = () =>
+    retryWhenBusy(() => fs.rm(dir, { recursive: true, force: true })).catch(() => {});
+  try {
+    const files: CoverFiles = { jpeg: cover };
+    if (ext === "opus") {
+      files.tagsFile = path.join(dir, "tags.txt");
+      const picture = ffmetadataValue(flacPictureBlock(cover));
+      await fs.writeFile(files.tagsFile, `;FFMETADATA1\nMETADATA_BLOCK_PICTURE=${picture}\n`);
+    } else {
+      files.file = path.join(dir, "cover.jpg");
+      await fs.writeFile(files.file, cover);
+    }
+    return { ...audioOutput(format, meta, sourceAcodec, files), cleanup };
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
 }
 
 export function spawnYtDlpAudio(videoUrl: string, format?: string) {
@@ -194,6 +276,9 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     channel?: string;
     format_id?: string;
     acodec?: string;
+    album?: string;
+    release_year?: number;
+    release_date?: string;
   };
   try {
     info = (await youtubedl(videoUrl, {
@@ -208,9 +293,27 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
   return {
     title: info.title ?? "audio",
     artist: info.uploader ?? info.channel,
+    // YouTube Music's uploads say which album the song is from, and when it came out.
+    ...youtubeAlbumTags(info),
     formatId: info.format_id,
     acodec: info.acodec,
   };
+}
+
+/** The album and release date yt-dlp found for a video (YouTube Music uploads have them). */
+export function youtubeAlbumTags(info: {
+  album?: unknown;
+  release_year?: unknown;
+  release_date?: unknown;
+}): Pick<AudioMetadata, "album" | "date"> {
+  const tags: Pick<AudioMetadata, "album" | "date"> = {};
+  if (typeof info.album === "string" && info.album.trim()) tags.album = info.album.trim();
+  const date = typeof info.release_date === "string" ? info.release_date : "";
+  if (/^\d{8}$/.test(date)) tags.date = `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)}`;
+  else if (typeof info.release_year === "number" && info.release_year > 1000) {
+    tags.date = String(info.release_year);
+  }
+  return tags;
 }
 
 export type AudioPipeline = {
@@ -233,6 +336,7 @@ export function startAudioPipeline(
   videoUrl: string,
   formatId: string | undefined,
   ffmpegArgs: string[],
+  prefix?: Buffer,
 ): AudioPipeline {
   // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.
   const ffmpeg = spawnFfmpeg(ffmpegArgs);
@@ -275,7 +379,23 @@ export function startAudioPipeline(
     return { ok, reason };
   });
 
-  return { audio: ffmpeg.stdout, stop, finished };
+  return { audio: prefix ? withPrefix(ffmpeg.stdout, prefix) : ffmpeg.stdout, stop, finished };
+}
+
+/**
+ * The audio with `prefix` (an MP3's tag) in front of it, sent together with
+ * the first chunk of audio: the routes treat the first data as the sign that
+ * the download has really started, so nothing may come before it.
+ */
+export function withPrefix(audio: Readable, prefix: Buffer): Readable {
+  let first = true;
+  const out = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      done(null, first ? Buffer.concat([prefix, chunk]) : chunk);
+      first = false;
+    },
+  });
+  return audio.pipe(out);
 }
 
 const isRunning = (p: ChildProcess) => p.exitCode === null && p.signalCode === null;

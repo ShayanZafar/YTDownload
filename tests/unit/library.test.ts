@@ -298,7 +298,9 @@ describe("files the app saves for a Spotify song", () => {
     const output = audioOutput(format, meta, acodec);
     const file = path.join(root, "saved", `${name}.${output.ext}`);
     await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, await ffmpeg(output.ffmpegArgs, input));
+    // An MP3's tag is written by the app, in front of ffmpeg's audio.
+    const audio = await ffmpeg(output.ffmpegArgs, input);
+    await fs.writeFile(file, output.prefix ? Buffer.concat([output.prefix, audio]) : audio);
     return path.basename(file);
   };
 

@@ -19,6 +19,8 @@ declare module "http" {
 
 app.use(
   express.json({
+    // Undo after clearing the history sends the whole history back (≤1,000 entries).
+    limit: "1mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },

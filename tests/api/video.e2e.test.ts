@@ -396,15 +396,28 @@ describe("YouTube → MP3 end-to-end (API)", () => {
     expect((await historyFor(TEST_VIDEO_URL)).length).toBe(before);
   });
 
-  it("tags a Spotify song's download with Spotify's title and artists, and the song's id", async () => {
+  it("tags a Spotify song's download with Spotify's title, artists, album and cover, and the song's id", async () => {
     const res = await download({ url: TEST_VIDEO_URL, spotifyId: "4u7EnebtmKWzUH433cf5Qv" });
     expect(res.status).toBe(200);
     const { common, native } = await parseBuffer(res.body as Buffer, { mimeType: "audio/mpeg" });
     expect(common).toMatchObject({ title: "Bohemian Rhapsody", artist: "Queen" });
+    expect(common.album).toBeTruthy();
+    expect(common.year).toBeGreaterThan(1970);
+    expect(common.track.no).toBeGreaterThan(0);
+    expect(common.picture?.[0]?.format).toBe("image/jpeg");
     expect(native["ID3v2.3"]).toContainEqual({
       id: "TXXX:spotify_id",
       value: "4u7EnebtmKWzUH433cf5Qv",
     });
+  });
+
+  it("gives any download the video's thumbnail as its cover, cut square", async () => {
+    const res = await download({ url: TEST_VIDEO_URL });
+    expect(res.status).toBe(200);
+    const { common } = await parseBuffer(res.body as Buffer, { mimeType: "audio/mpeg" });
+    const cover = common.picture?.[0];
+    expect(cover?.format).toBe("image/jpeg");
+    expect(cover?.type).toBe("Cover (front)");
   });
 });
 

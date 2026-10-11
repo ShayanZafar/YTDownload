@@ -4,7 +4,13 @@ import path from "path";
 import { api } from "@shared/routes";
 import { safeFileName } from "@shared/filename";
 import type { SaveEvent } from "@shared/schema";
-import { audioOutput, fetchAudioInfo, startAudioPipeline } from "./audio";
+import {
+  fetchAudioInfo,
+  prepareAudioOutput,
+  startAudioPipeline,
+  type PreparedOutput,
+} from "./audio";
+import { coverFor } from "./cover";
 import {
   FolderError,
   assertWritableFolder,
@@ -48,6 +54,8 @@ export async function saveIntoFolder(req: Request, res: Response) {
     stop?.();
   });
 
+  // The cover files made for this save, deleted once it's over.
+  let output: PreparedOutput | undefined;
   // The unfinished file, while there is one to clean up.
   let part: { path: string; stream: WriteStream; closed: Promise<void> } | undefined;
   try {
@@ -72,6 +80,8 @@ export async function saveIntoFolder(req: Request, res: Response) {
     // A Spotify song is tagged with Spotify's title and artists (looked up
     // while YouTube is asked about the video).
     const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
+    // And its cover: Spotify's album cover, or the video's thumbnail.
+    const cover = coverFor(videoId, songTags);
     let info;
     try {
       info = await fetchAudioInfo(canonical);
@@ -84,7 +94,8 @@ export async function saveIntoFolder(req: Request, res: Response) {
     // Cancelled while we were looking up the video: don't start any work.
     if (clientGone) return;
 
-    const output = audioOutput(format, tags, info.acodec);
+    output = await prepareAudioOutput(format, tags, info.acodec, await cover);
+    if (clientGone) return;
     const fileName = `${safeFileName(name || info.title)}.${output.ext}`;
     const created = await createNewFile(folder, `${fileName}.part`);
     part = {
@@ -97,7 +108,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
       stop?.();
     });
 
-    const pipeline = startAudioPipeline(canonical, info.formatId, output.ffmpegArgs);
+    const pipeline = startAudioPipeline(canonical, info.formatId, output.ffmpegArgs, output.prefix);
     stop = pipeline.stop;
     if (clientGone) pipeline.stop(); // cancelled while the file was being made
 
@@ -141,6 +152,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
     if (!clientGone) reportFailure(res, err);
   } finally {
     if (part) await discard(part);
+    void output?.cleanup();
   }
 }
 

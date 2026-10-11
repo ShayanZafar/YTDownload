@@ -10,7 +10,7 @@
     "check": "tsc",
     "coverage": "vitest run tests/unit --coverage.enabled --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=html --coverage.reportsDirectory=reports/coverage --coverage.include=client/src/**/*.ts --coverage.include=client/src/**/*.tsx --coverage.include=server/**/*.ts --coverage.include=shared/**/*.ts --coverage.exclude=client/src/components/ui/**",
     "licenses": "tsx scripts/licenses.ts",
-    "verify": "prettier --check . && eslint . && tsc && npm run licenses && vitest run tests/unit tests/api/music.e2e.test.ts",
+    "verify": "prettier --check . && eslint . && tsc && npm run licenses && vitest run tests/unit tests/api/music.e2e.test.ts tests/api/history.e2e.test.ts",
     "clean": "tsx scripts/clean.ts",
     "postinstall": "node scripts/yt-dlp.mjs",
     "update-yt-dlp": "node scripts/yt-dlp.mjs --update"

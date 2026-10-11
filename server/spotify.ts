@@ -535,17 +535,103 @@ export function spotifySearchQuery(track: Pick<SpotifyTrack, "title" | "artists"
 /** How long a download waits for Spotify's song details before tagging the file without them. */
 const SONG_TAGS_TIMEOUT_MS = 5_000;
 
+/** What a song's own Spotify page says about its album (all of it optional). */
+export type SpotifyAlbumDetails = {
+  album?: string;
+  /** The song's number on the album. */
+  track?: number;
+  /** "1987-11-12" (or just a year). */
+  date?: string;
+  /** The album cover, 640×640. */
+  coverUrl?: string;
+};
+
+const HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: "\u00a0",
+};
+
+/** Text from an HTML attribute, with its character references turned back into characters. */
+export function decodeHtml(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, ref: string) => {
+    if (ref[0] !== "#") return HTML_ENTITIES[ref.toLowerCase()] ?? whole;
+    const code =
+      ref[1] === "x" || ref[1] === "X" ? parseInt(ref.slice(2), 16) : Number(ref.slice(1));
+    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+  });
+}
+
+/**
+ * Reads the album details out of a song's Spotify page (open.spotify.com/track/…),
+ * from the tags it carries for link previews: "music:album:track",
+ * "music:release_date", the cover ("og:image") and the description, which
+ * reads "Artist · Album · Song · 1987".
+ */
+export function parseTrackPage(html: string): SpotifyAlbumDetails {
+  const meta = new Map<string, string>();
+  for (const [tag] of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const key = /\b(?:property|name)="([^"]+)"/i.exec(tag)?.[1];
+    const content = /\bcontent="([^"]*)"/i.exec(tag)?.[1];
+    if (key && content !== undefined && !meta.has(key)) meta.set(key, decodeHtml(content).trim());
+  }
+  const details: SpotifyAlbumDetails = {};
+
+  const parts = (meta.get("og:description") ?? "").split(" · ");
+  // The album is what's between the artists and "Song · year".
+  if (parts.length >= 4 && parts.at(-2) === "Song") {
+    const album = parts.slice(1, -2).join(" · ").trim();
+    if (album) details.album = album;
+  }
+  const track = Number(meta.get("music:album:track"));
+  if (Number.isInteger(track) && track > 0 && track < 1000) details.track = track;
+  const date = meta.get("music:release_date") ?? "";
+  if (/^\d{4}(?:-\d{2}-\d{2})?$/.test(date)) details.date = date;
+  const cover = meta.get("og:image") ?? "";
+  if (/^https:\/\/i\.scdn\.co\/image\/[a-f0-9]+$/.test(cover)) details.coverUrl = cover;
+  return details;
+}
+
+/**
+ * A song's album details from its Spotify page. Spotify sends that page's
+ * details only to tools that fetch it like a link preview does (a browser
+ * gets a page that fills itself in with scripts), hence the curl User-Agent,
+ * as for short links. The id is validated, so nothing else can be fetched.
+ */
+export async function fetchSpotifyAlbumDetails(id: string): Promise<SpotifyAlbumDetails> {
+  if (!SPOTIFY_ID_RE.test(id)) return {};
+  try {
+    const res = await fetch(`https://open.spotify.com/track/${id}`, {
+      headers: { "User-Agent": SHORT_LINK_USER_AGENT, "Accept-Language": "en" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    return res.ok ? parseTrackPage(await res.text()) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** What a download of a Spotify song is tagged with. */
+export type SpotifySongTags = { title: string; artist: string } & SpotifyAlbumDetails;
+
 /**
  * Tags for a download of a Spotify song: Spotify's title and artists (cleaner
- * than a YouTube video's "Artist - Song (Official Video)"), or undefined if
- * Spotify doesn't answer in time — the file is then tagged from YouTube, as
- * any other download.
+ * than a YouTube video's "Artist - Song (Official Video)"), and, from the
+ * song's own page, its album, track number, release date and cover. Undefined
+ * if Spotify doesn't answer in time — the file is then tagged from YouTube,
+ * as any other download.
  */
-export async function spotifySongTags(
-  id: string,
-): Promise<{ title: string; artist: string } | undefined> {
-  const tags = fetchSpotifyTrack(id).then(
-    (track) => ({ title: cleanTrackTitle(track.title), artist: track.artists.join(", ") }),
+export async function spotifySongTags(id: string): Promise<SpotifySongTags | undefined> {
+  const tags = Promise.all([fetchSpotifyTrack(id), fetchSpotifyAlbumDetails(id)]).then(
+    ([track, album]): SpotifySongTags => ({
+      title: cleanTrackTitle(track.title),
+      artist: track.artists.join(", "),
+      ...album,
+      coverUrl: album.coverUrl ?? track.thumbnail ?? undefined,
+    }),
     () => undefined,
   );
   let timer: NodeJS.Timeout | undefined;

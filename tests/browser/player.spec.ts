@@ -209,6 +209,66 @@ test.describe("Music player (browser)", () => {
     await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
   });
 
+  test("shows the song's lyrics, following along, and plays from a line clicked", async ({
+    page,
+    request,
+  }) => {
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    // Made-up lyrics (the app gets them from LRCLIB): timed for Test Tone, none for the other.
+    const asked: Record<string, string>[] = [];
+    await page.route("**/api/lyrics?*", (route) => {
+      const params = Object.fromEntries(new URL(route.request().url()).searchParams);
+      asked.push(params);
+      const synced = Array.from({ length: 10 }, (_, i) => ({ time: i * 2, text: `Line ${i + 1}` }));
+      return route.fulfill({
+        json: {
+          lyrics:
+            params.title === "Test Tone"
+              ? {
+                  synced,
+                  plain: null,
+                  instrumental: false,
+                  track: "Test Tone",
+                  artist: "Sine Wave",
+                }
+              : null,
+        },
+      });
+    });
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    const player = page.getByRole("region", { name: "Music player" });
+    const lyrics = page.getByRole("region", { name: "Lyrics" });
+
+    await library
+      .getByRole("button", { name: /^Play “Test Tone”, by Sine Wave/ })
+      .click(START_SONG);
+    await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+    await player.getByRole("button", { name: "Lyrics" }).click();
+    await expect(lyrics.getByRole("button", { name: "Line 1", exact: true })).toBeVisible();
+    expect(asked[0]).toEqual({ title: "Test Tone", artist: "Sine Wave", duration: "20" });
+
+    // The line being sung is marked, and moves on with the song.
+    const current = lyrics.locator("[aria-current=true]");
+    await expect(current).toHaveText(/^Line [1-3]$/, { timeout: 10_000 });
+    // Clicking a line plays from there.
+    await lyrics.getByRole("button", { name: "Line 6", exact: true }).click();
+    await expect.poll(async () => (await audio(page)).time).toBeGreaterThanOrEqual(10);
+    await expect(current).toHaveText(/^Line (6|7)$/);
+
+    // Up next opens in its place; a song without lyrics says so.
+    await player.getByRole("button", { name: "Up next" }).click();
+    await expect(lyrics).toBeHidden();
+    await page.keyboard.press("Escape");
+    await player.getByRole("button", { name: "Next song" }).click(START_SONG);
+    await expect(player.getByTestId("player-title")).toHaveText("Studio Master");
+    await player.getByRole("button", { name: "Lyrics" }).click();
+    await expect(lyrics.getByText("No lyrics found for this song.")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(lyrics).toBeHidden();
+    await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
+  });
+
   test("keyboard shortcuts work anywhere on the page, except while typing", async ({
     page,
     request,

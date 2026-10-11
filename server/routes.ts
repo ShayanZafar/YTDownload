@@ -22,13 +22,16 @@ import {
 } from "./spotify";
 import {
   YT_DLP_BASE_FLAGS,
-  audioOutput,
+  prepareAudioOutput,
+  type PreparedOutput,
   fetchAudioInfo,
   startAudioPipeline,
   ytDlpFailure,
 } from "./audio";
+import { coverFor } from "./cover";
 import { settings } from "./settings";
-import { isLocalRequest, localOnly } from "./local-only";
+import { isLocalRequest, localOnly, sameOriginOnly } from "./local-only";
+import { LyricsError, findLyrics } from "./lyrics";
 import {
   FolderError,
   assertWritableFolder,
@@ -281,6 +284,59 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // Managing the history (Recent Extractions): any device using the app may,
+  // as long as it's the app's own page asking. The downloaded files stay.
+  app.delete(api.downloads.remove.path, sameOriginOnly(), async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(404).json({ message: "No such download" });
+    try {
+      const removed = await storage.removeDownload(id);
+      if (!removed) return res.status(404).json({ message: "That download isn't in the history." });
+      res.json(removed);
+    } catch {
+      res.status(500).json({ message: "Couldn't change the history" });
+    }
+  });
+
+  app.delete(api.downloads.clear.path, sameOriginOnly(), async (_req, res) => {
+    try {
+      res.json(await storage.clearDownloads());
+    } catch {
+      res.status(500).json({ message: "Couldn't clear the history" });
+    }
+  });
+
+  app.post(api.downloads.restore.path, sameOriginOnly(), async (req, res) => {
+    const input = api.downloads.restore.input.safeParse(req.body);
+    if (!input.success) {
+      const [issue] = input.error.issues;
+      return res.status(400).json({ message: issue.message, field: issue.path.join(".") });
+    }
+    try {
+      res.json(await storage.restoreDownloads(input.data.entries));
+    } catch {
+      res.status(500).json({ message: "Couldn't put the downloads back" });
+    }
+  });
+
+  // A song's lyrics for the music player, from LRCLIB. Only the title, artist
+  // and length are sent there; the song itself never leaves its device.
+  app.get(api.lyrics.get.path, async (req, res) => {
+    const query = api.lyrics.get.query.safeParse(req.query);
+    if (!query.success) {
+      const [issue] = query.error.issues;
+      return res.status(400).json({ message: issue.message, field: issue.path.join(".") });
+    }
+    try {
+      res.json({ lyrics: await findLyrics(query.data) });
+    } catch (err) {
+      if (!(err instanceof LyricsError)) console.error("Looking up lyrics failed:", err);
+      res.status(502).json({
+        message: err instanceof LyricsError ? err.message : "Couldn't look up the lyrics.",
+      });
+    }
+  });
+
   app.post(api.video.info.path, async (req, res) => {
     try {
       const input = api.video.info.input.parse(req.body);
@@ -412,6 +468,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // it must stop us from starting processes that would then block forever.
     let clientGone = false;
     let stopPipeline: (() => void) | undefined;
+    // The cover files made for this download, deleted once it's over.
+    let output: PreparedOutput | undefined;
     res.on("close", () => {
       if (res.writableFinished) return; // normal completion
       clientGone = true;
@@ -434,6 +492,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // A Spotify song is tagged with Spotify's title and artists (looked up
       // while YouTube is asked about the video).
       const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
+      // And its cover: Spotify's album cover, or the video's thumbnail.
+      const cover = coverFor(videoId, songTags);
 
       // Metadata first, so a video that can't be downloaded fails with a clean
       // error before a streaming response is opened.
@@ -445,7 +505,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // These only go out with the first chunk of audio, so a failure before
       // then can still be turned into a proper error response (see below).
-      const output = audioOutput(format, tags, info.acodec);
+      output = await prepareAudioOutput(format, tags, info.acodec, await cover);
+      if (clientGone) return;
       // Saved as the name chosen on the page, or the video's title. res.attachment
       // writes both a plain filename and a UTF-8 one (filename*), so accents and
       // non-Latin titles survive.
@@ -454,7 +515,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // yt-dlp is pinned to the stream the metadata pass picked, so the container
       // chosen for "original" always matches the audio that arrives.
-      const pipeline = startAudioPipeline(canonical, info.formatId, output.ffmpegArgs);
+      const pipeline = startAudioPipeline(
+        canonical,
+        info.formatId,
+        output.ffmpegArgs,
+        output.prefix,
+      );
       stopPipeline = pipeline.stop;
       pipeline.audio.pipe(res, { end: false });
 
@@ -495,6 +561,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       } else {
         res.end();
       }
+    } finally {
+      // ffmpeg has read the cover by now (or never will): it's no longer needed.
+      void output?.cleanup();
     }
   });
 

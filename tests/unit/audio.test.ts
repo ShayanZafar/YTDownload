@@ -38,7 +38,9 @@ describe("audioOutput", () => {
   it("mp3 → a converted .mp3", () => {
     const out = audioOutput("mp3", meta, "opus");
     expect(out).toMatchObject({ ext: "mp3", contentType: "audio/mpeg" });
-    expect(out.ffmpegArgs).toEqual(ffmpegMp3Args(meta));
+    expect(out.ffmpegArgs).toEqual(ffmpegMp3Args());
+    // The tags go in the ID3v2.3 tag the app writes in front (tests/unit/cover-art.test.ts).
+    expect(out.prefix?.toString("latin1")).toContain("Someone");
   });
 
   it("original + Opus → Ogg Opus (.opus), audio copied without re-encoding", () => {
@@ -66,8 +68,10 @@ describe("audioOutput", () => {
 
   it("tags a Spotify song's file with its id — in an .m4a's comment, which can't hold a tag of its own", () => {
     const song = { ...meta, spotifyId: "4u7EnebtmKWzUH433cf5Qv" };
+    expect(audioOutput("mp3", song, "opus").prefix?.toString("latin1")).toContain(
+      "spotify_id\u00004u7EnebtmKWzUH433cf5Qv",
+    );
     for (const [format, acodec] of [
-      ["mp3", "opus"],
       ["original", "opus"],
       ["original", "vorbis"],
     ] as const) {
@@ -122,7 +126,7 @@ describe("buildDownloadUrl", () => {
 
 describe("ffmpegMp3Args", () => {
   it("reads stdin and writes a 320 kbps constant-bitrate MP3 to stdout", () => {
-    const args = ffmpegMp3Args({ title: "Song" });
+    const args = ffmpegMp3Args();
     expect(args[args.indexOf("-i") + 1]).toBe("pipe:0");
     expect(args[args.indexOf("-c:a") + 1]).toBe("libmp3lame");
     expect(MP3_BITRATE).toBe("320k");
@@ -131,19 +135,27 @@ describe("ffmpegMp3Args", () => {
     expect(args.slice(-3)).toEqual(["-f", "mp3", "pipe:1"]);
   });
 
-  it("writes ID3v2.3 title and artist tags, keeping Unicode intact", () => {
-    const args = ffmpegMp3Args({ title: "Café – Ünïcödé ♪", artist: "Someone" });
+  it("writes no tag of its own: the app puts its ID3v2.3 tag in front (it can't stream one with a cover)", () => {
+    const args = ffmpegMp3Args();
+    expect(args[args.indexOf("-write_id3v2") + 1]).toBe("0");
+    expect(args[args.indexOf("-map_metadata") + 1]).toBe("-1");
+    expect(args.some((a) => a.startsWith("title="))).toBe(false);
+  });
+});
+
+describe("tags of the original audio", () => {
+  it("keep Unicode intact and leave out the artist when there isn't one", () => {
+    const args = audioOutput("original", { title: "Café – Ünïcödé ♪" }, "opus").ffmpegArgs;
     expect(args).toContain("title=Café – Ünïcödé ♪");
-    expect(args).toContain("artist=Someone");
-    expect(args[args.indexOf("-id3v2_version") + 1]).toBe("3");
+    expect(args.some((a) => a.startsWith("artist="))).toBe(false);
   });
 
-  it("omits the artist tag when there isn't one", () => {
-    expect(ffmpegMp3Args({ title: "Song" }).some((a) => a.startsWith("artist="))).toBe(false);
-  });
-
-  it("passes titles as a single argument (no shell quoting involved)", () => {
-    const args = ffmpegMp3Args({ title: 'a "quoted" & piped | title' });
+  it("are passed as single arguments (no shell quoting involved)", () => {
+    const args = audioOutput(
+      "original",
+      { title: 'a "quoted" & piped | title' },
+      "opus",
+    ).ffmpegArgs;
     expect(args).toContain('title=a "quoted" & piped | title');
   });
 });

@@ -16,28 +16,31 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 
 ## Key Features
 
-| Feature               | Description                                                                                                                             |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Instant video preview | Title and thumbnail load before you commit to downloading.                                                                              |
-| Paste from clipboard  | A **Paste** button in the box — and in Chrome and Edge, a YouTube or Spotify link you've copied shows up under the box, ready to open.  |
-| Song search           | Search YouTube by artist and title; official uploads first, live/cover/remix versions last unless you ask.                              |
-| Spotify song links    | Paste a Spotify song link to get the same recording from YouTube, matched by artist, title and length.                                  |
-| Spotify playlists     | Paste a playlist or album link to list its songs; see which are already in your folder and download the rest in one go. No account.     |
-| Play a playlist       | With a Save to folder, play a playlist's songs you have in its order, or save it as a playlist file (.m3u8) for VLC and other players.  |
-| YouTube playlists     | Paste a playlist link to list its videos (the first 500); with a folder, see which you have and save the rest in one go.                |
-| High-quality audio    | Pulls the best available audio stream from the source video.                                                                            |
-| MP3 download          | Real MP3 files (320 kbps) named after the video, with title and artist tags that music players show.                                    |
-| Original audio option | A toggle to get YouTube's own audio stream instead — not converted, smaller (usually `.opus`). Great in VLC.                            |
-| Save to a folder      | Pick a folder once in the app's folder browser and downloads go straight into it instead of the browser's downloads folder.             |
-| Any browser           | Every feature works in Chrome, Edge, Firefox and Safari.                                                                                |
-| Download history      | A persistent list of your last 1,000 extractions with one-click redownload — searchable, with suggestions as you type and date filters. |
-| Music player          | Plays your Save to folder, or a phone's own songs: shuffle, repeat, seeking, media keys. WMA and the like are converted losslessly.     |
-| Up next               | See the songs coming up, play one now or take it out; **Play next** and **Add to queue** line up songs without stopping the music.      |
-| Carries on            | Open the app again and the player is where you left it: the same song, paused at the same place, with the rest of the queue.            |
-| Keyboard shortcuts    | Space or K plays and pauses, ← → and J L seek, Shift+N / Shift+P skip, M mutes, ? lists them — anywhere on the page.                    |
-| Recent playlists      | The playlists you've opened are listed under the box in Playlist mode: open one again in a click, no need to find its link.             |
-| Friendly errors       | Clear messages when a URL is invalid, the video can't be fetched, or the network fails.                                                 |
-| Responsive design     | Works on desktop and mobile, with a polished hero section, animated result card, and history grid.                                      |
+| Feature               | Description                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Instant video preview | Title and thumbnail load before you commit to downloading.                                                                                 |
+| Paste from clipboard  | A **Paste** button in the box — and in Chrome and Edge, a YouTube or Spotify link you've copied shows up under the box, ready to open.     |
+| Song search           | Search YouTube by artist and title; official uploads first, live/cover/remix versions last unless you ask.                                 |
+| Spotify song links    | Paste a Spotify song link to get the same recording from YouTube, matched by artist, title and length.                                     |
+| Spotify playlists     | Paste a playlist or album link to list its songs; see which are already in your folder and download the rest in one go. No account.        |
+| Play a playlist       | With a Save to folder, play a playlist's songs you have in its order, or save it as a playlist file (.m3u8) for VLC and other players.     |
+| YouTube playlists     | Paste a playlist link to list its videos (the first 500); with a folder, see which you have and save the rest in one go.                   |
+| High-quality audio    | Pulls the best available audio stream from the source video.                                                                               |
+| MP3 download          | Real MP3 files (320 kbps) named after the video, with title and artist tags that music players show.                                       |
+| Cover art             | Every download has a cover — the album's from Spotify, or the video's thumbnail cut square — plus album, year and track for Spotify songs. |
+| Original audio option | A toggle to get YouTube's own audio stream instead — not converted, smaller (usually `.opus`). Great in VLC.                               |
+| Save to a folder      | Pick a folder once in the app's folder browser and downloads go straight into it instead of the browser's downloads folder.                |
+| Any browser           | Every feature works in Chrome, Edge, Firefox and Safari.                                                                                   |
+| Download history      | A persistent list of your last 1,000 extractions with one-click redownload — searchable, with suggestions as you type and date filters.    |
+| Tidy the history      | Take a song off Recent Extractions, or clear the whole list, with Undo. The downloaded files stay.                                         |
+| Music player          | Plays your Save to folder, or a phone's own songs: shuffle, repeat, seeking, media keys. WMA and the like are converted losslessly.        |
+| Up next               | See the songs coming up, play one now or take it out; **Play next** and **Add to queue** line up songs without stopping the music.         |
+| Carries on            | Open the app again and the player is where you left it: the same song, paused at the same place, with the rest of the queue.               |
+| Lyrics                | The player's **Lyrics** button shows the song's words, following along line by line where they're timed. Click a line to jump there.       |
+| Keyboard shortcuts    | Space or K plays and pauses, ← → and J L seek, Shift+N / Shift+P skip, M mutes, ? lists them — anywhere on the page.                       |
+| Recent playlists      | The playlists you've opened are listed under the box in Playlist mode: open one again in a click, no need to find its link.                |
+| Friendly errors       | Clear messages when a URL is invalid, the video can't be fetched, or the network fails.                                                    |
+| Responsive design     | Works on desktop and mobile, with a polished hero section, animated result card, and history grid.                                         |
 
 ## How To Use It
 
@@ -56,11 +59,13 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
    - Type in **Search your extractions**. The list narrows as you type — every word must match, in any order, and partial words count ("prog ocea" finds "Progression - Ocean Green"). Pasting a YouTube link finds past downloads of that video.
    - Matching songs are suggested below the box, each listed once (with "2×" if you downloaded it more than once). Pick one — click it, or use the arrow keys and Enter — to show exactly that song; **Show everything** undoes it.
    - Use **All**, **Past week**, **Past month** or **Older** (more than 30 days ago) to narrow by date. These combine with the search.
+   - Don't want a song in the list? Click its bin button to take it off. **Clear history** (top right of the list) empties the whole list, after asking. Either way a note says what was taken off, with **Undo** to put it back, and the downloaded files themselves stay where they are.
 7. **Your music**, just above Recent Extractions, is a music player for the songs you have:
    - On the computer running the app, it lists the songs in your **Save to** folder (subfolders too), newest first — each new download shows up there. Click a song to play the list from there, or use **Play all** and **Shuffle**; **Order** sorts by title or artist instead, and **Filter songs** finds one. No folder chosen yet? **Choose the Save to folder** opens the folder browser.
    - On your phone (or any other device using the app), tap **Choose songs** and pick songs stored on that device — the songs you downloaded there, say. They play right there: nothing is uploaded. A desktop browser can **Open a folder** instead. The page can't keep them, so pick them again next time. (On the computer running the app, **Open songs** plays other files the same way, next to the folder's.)
    - The player at the bottom of the page keeps playing while you search and download: play/pause, previous (or back to the start of the song), next, a seek bar, shuffle, repeat (all songs, or this one), volume, and **×** to stop. Your keyboard's media keys and Windows' media controls work too, as do a phone's lock-screen controls.
    - Keyboard shortcuts work anywhere on the page while a song is loaded (not while you type in a box): **Space** or **K** plays and pauses, **←** / **→** go back or forward 5 seconds and **J** / **L** 10 seconds, **Shift+P** / **Shift+N** play the previous or next song, **M** mutes, and **?** lists them. The buttons' tooltips show their keys too.
+   - **Lyrics** (the microphone button in the player) shows the words of the song playing. Where they're timed, the line being sung is highlighted and the list follows along; click a line to jump to that part of the song. They come from [LRCLIB](https://lrclib.net), a free lyrics library, so a song it doesn't know shows none. Only the song's name, artist and length are sent to look them up.
    - The player remembers where you left off. Close the tab or restart the PC, open the app again, and the player shows the same song, paused at the same place, with the rest of the queue: press Play to carry on. (Only for songs in your Save to folder; songs picked on a phone are gone once the page is. **×** forgets it.)
    - Each song in the list has **Play next** and **Add to queue** buttons beside it: the song plays right after the current one, or after everything already lined up, without stopping what's playing. The player's **Up next** button shows the songs to come: click one to play it now, its **×** to take it out, or **Clear** to empty the list.
 
@@ -72,6 +77,7 @@ A clean, fast web app for converting YouTube videos into high-quality MP3 audio 
 - **Paste** and the copied-link suggestion read the clipboard, which browsers allow only on the computer running the app (http://localhost) or over https — not over plain http from your phone, where there's no **Paste** button (paste into the box as usual). Firefox and Safari ask every time, with a small **Paste** button of their own to click, so only Chrome and Edge offer a copied link under the box by themselves. Blocked it by mistake in Chrome or Edge? Allow **Clipboard** in the site's settings (the icon left of the address). What you copy stays in the browser unless you open it.
 - Spotify: song links work in the link or search box, and playlist or album links in **Playlist** — not artists or podcasts. The `spotify.link` short links the Spotify app shares on a phone work too: the app opens them to see where they lead. No Spotify account is needed, so only public playlists can be opened (in Spotify, a playlist's **…** menu has **Make public**), and the panel lists up to 1,000 songs of a playlist. Spotify's own playlists (its mixes and editorial lists) show only their first 100 songs; for a later song, paste its own link. Liked Songs isn't a playlist Spotify shares.
 - YouTube playlists: copy the playlist's own link (on the playlist's page, or its **Share** button) — a link to a video played in a playlist (`watch?v=…&list=…`) opens just that video. Only public and unlisted playlists open: not Watch later, Liked videos or the mixes YouTube makes up as you play. The app lists the first 500 videos of a playlist; private and deleted ones are left out. Its videos are saved as they are, named after the video, so the playlist panel recognises them in your folder by that name, or by their title and channel tags.
+- Every download gets a cover: for a Spotify song, the album's cover from Spotify (with the album, year and track number in the tags too), otherwise the video's thumbnail, cut to a square (for a YouTube Music upload, that's the album cover itself). A cover that can't be fetched within a few seconds is left out rather than holding up the download. With **Original audio**, `.opus` and `.mka` files get the cover too, but an `.m4a` can't (it's written as it streams).
 - Songs downloaded for a Spotify song are named "Artist - Title" and tagged with Spotify's title and artists and the song's Spotify id — so the playlist panel recognises them in your folder even if you rename them. For other files, it goes by their names and tags, so a file called just "Track 01.mp3" with no tags can't be recognised. It looks at up to 5,000 songs in a folder (and six folders deep).
 - Every YouTube upload of a song has the same audio quality ceiling for free (about 130 kbps Opus), so for music, the artist's or label's own upload — the ones marked **Official** — is usually the cleanest source.
 - The music player plays each file as it is — the browser decodes it itself, like VLC, so it sounds the same. Browsers don't play every kind of file: on the computer running the app, a song the browser can't play (WMA, APE, WavPack, AIFF in Chrome…) is converted to FLAC first — lossless, so nothing is lost — which takes a few seconds the first time (the app keeps up to 2 GB of conversions in your temp folder). On a phone, the songs never leave it, so one the phone's browser can't play is marked instead. The **Save to** folder's songs play only on the computer running the app, never on other devices on your network.
