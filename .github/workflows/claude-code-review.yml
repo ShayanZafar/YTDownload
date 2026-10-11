@@ -49,7 +49,12 @@ jobs:
         if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The monthly refactor pull request is opened by Claude's own GitHub App (claude[bot]);
+          # without this the action refuses to review it.
+          allowed_bots: "claude"
           plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
           plugins: "code-review@claude-code-plugins"
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
-          claude_args: '--model claude-sonnet-5-5 --allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # The code-review plugin reads the pull request with gh and posts its summary with
+          # `gh pr comment`; without these commands it stops after its first step.
+          claude_args: '--model claude-sonnet-5-5 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"'
