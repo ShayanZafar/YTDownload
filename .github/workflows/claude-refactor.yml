@@ -54,6 +54,11 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        env:
+          # A CI run ends with Claude's last message, so nothing may run in the background: on
+          # Oct 11, 2026 the review plugin started its checks as background subagents, the run
+          # ended before they reported back, and the review posted nothing.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: "/refactor"
@@ -62,3 +67,4 @@ jobs:
             --model claude-opus-5-5
             --max-turns 120
             --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm run verify),Bash(npm run check),Bash(npx *),Bash(git *),Bash(gh pr *),Bash(wc *),Bash(sort *),Bash(uniq *),Bash(head *),Bash(tail *),Bash(xargs *)"
+            --append-system-prompt "This is a non-interactive CI run that ends with your final message; nothing can resume it. Run every subagent and command in the foreground, wait for each result, and finish only when the work is complete."

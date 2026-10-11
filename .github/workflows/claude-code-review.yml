@@ -47,6 +47,11 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        env:
+          # A CI run ends with Claude's last message, so nothing may run in the background: on
+          # Oct 11, 2026 the review plugin started its checks as background subagents, the run
+          # ended before they reported back, and the review posted nothing.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The monthly refactor pull request is opened by Claude's own GitHub App (claude[bot]);
@@ -58,4 +63,4 @@ jobs:
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
           # The code-review plugin reads the pull request with gh and posts its summary with
           # `gh pr comment`; without these commands it stops after its first step.
-          claude_args: '--model claude-sonnet-5-5 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)"'
+          claude_args: '--model claude-sonnet-5-5 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)" --append-system-prompt "This is a non-interactive CI run that ends with your final message; nothing can resume it. Run every subagent and command in the foreground, wait for each result, and finish only when the work is complete."'
