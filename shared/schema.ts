@@ -60,6 +60,14 @@ export type SearchResult = z.infer<typeof searchResultSchema>;
  */
 export const SAME_LENGTH_SECONDS = 5;
 
+/**
+ * Where a song's details came from: Spotify's embed page (the usual; left
+ * out), or Spotify's oEmbed endpoint — the fallback when the embed page can't
+ * be read, which knows only the title and cover: no artists, no length.
+ */
+export const spotifyTrackSources = ["spotify", "spotify-oembed"] as const;
+export type SpotifyTrackSource = (typeof spotifyTrackSources)[number];
+
 /** A song read from a Spotify link, used to find the same recording on YouTube. */
 export const spotifyTrackSchema = z.object({
   id: z.string(),
@@ -70,6 +78,8 @@ export const spotifyTrackSchema = z.object({
   duration: z.number().nullable(),
   /** Cover art. */
   thumbnail: z.string().nullable(),
+  /** Present when the details came from a fallback (see `spotifyTrackSources`). */
+  source: z.enum(spotifyTrackSources).optional(),
 });
 
 export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;

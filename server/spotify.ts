@@ -19,6 +19,7 @@ import {
   type SpotifyTrack,
 } from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
+import { sourceHealth } from "./source-health";
 
 export { cleanTrackTitle };
 
@@ -30,6 +31,10 @@ export const PLAYLIST_MAX_SONGS = SPOTIFY_PLAYLIST_MAX_SONGS;
 /** Songs per Web API page (Spotify's maximum). */
 const PLAYLIST_PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = 10_000;
+/** After a 429, one more try — after Spotify's Retry-After, but never longer than this. */
+export const RETRY_AFTER_MAX_MS = 10_000;
+/** …and this long when Spotify doesn't say. */
+const RETRY_AFTER_DEFAULT_MS = 2_000;
 // Spotify serves the same page to any browser; a browser-like User-Agent just
 // avoids being treated as an unknown bot.
 const USER_AGENT =
@@ -308,34 +313,133 @@ export function parseEmbedPage(html: string, id: string): SpotifyTrack {
 }
 
 /**
+ * How long a 429 asks us to wait (its Retry-After header: seconds, or a
+ * date), in ms — RETRY_AFTER_DEFAULT_MS without one, never more than
+ * RETRY_AFTER_MAX_MS.
+ */
+export function retryAfterMs(header: string | null, now = Date.now()): number {
+  let ms = RETRY_AFTER_DEFAULT_MS;
+  if (header?.trim()) {
+    const seconds = Number(header);
+    const date = Number.isFinite(seconds) ? NaN : Date.parse(header);
+    if (Number.isFinite(seconds)) ms = seconds * 1000;
+    else if (Number.isFinite(date)) ms = date - now;
+  }
+  return Math.min(RETRY_AFTER_MAX_MS, Math.max(0, ms));
+}
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A request to Spotify, recorded for the source-health report, with one more
+ * try after a 429 (once Spotify's Retry-After is up). Throws for no answer at
+ * all (no connection, or too slow); an answer of any status is returned.
+ */
+async function fetchSpotify(
+  source: "spotify" | "spotify-oembed",
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    } catch (err) {
+      const reason =
+        err instanceof Error && err.name === "TimeoutError" ? "it took too long" : "no connection";
+      sourceHealth.record(source, false, { note: `Couldn't reach Spotify (${reason})` });
+      throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`);
+    }
+    // A 404 is Spotify answering (there's no such song): the source is fine.
+    if (res.ok || res.status === 404) {
+      sourceHealth.record(source, true);
+      return res;
+    }
+    sourceHealth.record(source, false, {
+      kind: res.status === 429 ? "throttled" : res.status === 403 ? "blocked" : "error",
+      note: `HTTP ${res.status}`,
+    });
+    if (res.status !== 429 || attempt > 1) return res;
+    await wait(retryAfterMs(res.headers.get("retry-after")));
+  }
+}
+
+/**
  * Fetches one of Spotify's embed pages. `path` is built only from a validated
  * kind and id, so this can't be made to fetch anything else.
  */
 async function fetchEmbedPage(path: string, notFound: string): Promise<string> {
-  let res: Response;
-  try {
-    res = await fetch(`https://open.spotify.com/embed/${path}`, {
-      headers: { "User-Agent": USER_AGENT, "Accept-Language": "en" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-  } catch (err) {
-    const reason =
-      err instanceof Error && err.name === "TimeoutError" ? "it took too long" : "no connection";
-    throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`);
-  }
+  const res = await fetchSpotify("spotify", `https://open.spotify.com/embed/${path}`, {
+    headers: { "User-Agent": USER_AGENT, "Accept-Language": "en" },
+  });
   if (res.status === 404) throw new SpotifyError(404, notFound);
   if (!res.ok) throw new SpotifyError(502, `Spotify answered with an error (HTTP ${res.status}).`);
   return res.text();
 }
 
-/** Looks a song up on Spotify's public embed page. */
+/** What Spotify's oEmbed endpoint says about a song: just its title and cover. */
+export function parseOembed(json: unknown, id: string): SpotifyTrack {
+  const data = (json ?? {}) as { title?: unknown; thumbnail_url?: unknown };
+  const title = typeof data.title === "string" ? data.title.trim() : "";
+  if (!title)
+    throw new SpotifyError(502, "Couldn't read the song from Spotify (its page has changed).");
+  return {
+    id,
+    url: `https://open.spotify.com/track/${id}`,
+    title,
+    artists: [],
+    duration: null,
+    thumbnail: typeof data.thumbnail_url === "string" ? data.thumbnail_url : null,
+    source: "spotify-oembed",
+  };
+}
+
+/**
+ * The fallback for a song when its embed page can't be read: Spotify's
+ * oEmbed endpoint (public, no key) knows the song's title and cover — not its
+ * artists or length, so the YouTube search goes by the title alone and
+ * "Download all" marks the song to check rather than guessing.
+ */
+export async function fetchOembedTrack(id: string): Promise<SpotifyTrack> {
+  if (!SPOTIFY_ID_RE.test(id)) throw new SpotifyError(400, "That isn't a valid Spotify song link.");
+  const params = new URLSearchParams({ url: `https://open.spotify.com/track/${id}` });
+  const res = await fetchSpotify("spotify-oembed", `https://open.spotify.com/oembed?${params}`, {
+    headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+  });
+  if (res.status === 404) {
+    throw new SpotifyError(404, "Spotify doesn't have that song — check the link.");
+  }
+  if (!res.ok) throw new SpotifyError(502, `Spotify answered with an error (HTTP ${res.status}).`);
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    throw new SpotifyError(502, "Couldn't read the song from Spotify (its page has changed).");
+  }
+  return parseOembed(json, id);
+}
+
+/**
+ * Looks a song up on Spotify's public embed page — and if that can't be read
+ * for any reason but "no such song", on its oEmbed endpoint instead
+ * (`fetchOembedTrack()`; the song then carries `source: "spotify-oembed"`).
+ */
 export async function fetchSpotifyTrack(id: string): Promise<SpotifyTrack> {
   if (!SPOTIFY_ID_RE.test(id)) throw new SpotifyError(400, "That isn't a valid Spotify song link.");
-  const html = await fetchEmbedPage(
-    `track/${id}`,
-    "Spotify doesn't have that song — check the link.",
-  );
-  return parseEmbedPage(html, id);
+  try {
+    const html = await fetchEmbedPage(
+      `track/${id}`,
+      "Spotify doesn't have that song — check the link.",
+    );
+    return parseEmbedPage(html, id);
+  } catch (err) {
+    if (err instanceof SpotifyError && err.status === 404) throw err;
+    try {
+      return await fetchOembedTrack(id);
+    } catch {
+      throw err; // the embed page's problem is the one worth reporting
+    }
+  }
 }
 
 const notFoundMessage = (kind: "playlist" | "album") =>
@@ -484,10 +588,11 @@ export async function fetchMorePlaylistSongs(
     });
     let page: ReturnType<typeof parsePlaylistItemsPage>;
     try {
-      const res = await fetch(`https://api.spotify.com/v1/playlists/${id}/tracks?${params}`, {
-        headers: { Authorization: `Bearer ${token}`, "User-Agent": USER_AGENT },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      });
+      const res = await fetchSpotify(
+        "spotify",
+        `https://api.spotify.com/v1/playlists/${id}/tracks?${params}`,
+        { headers: { Authorization: `Bearer ${token}`, "User-Agent": USER_AGENT } },
+      );
       if (!res.ok) return { tracks, complete: false };
       page = parsePlaylistItemsPage(await res.json());
     } catch {
@@ -615,7 +720,7 @@ export async function fetchSpotifyAlbumDetails(id: string): Promise<SpotifyAlbum
 }
 
 /** What a download of a Spotify song is tagged with. */
-export type SpotifySongTags = { title: string; artist: string } & SpotifyAlbumDetails;
+export type SpotifySongTags = { title: string; artist?: string } & SpotifyAlbumDetails;
 
 /**
  * Tags for a download of a Spotify song: Spotify's title and artists (cleaner
@@ -628,7 +733,8 @@ export async function spotifySongTags(id: string): Promise<SpotifySongTags | und
   const tags = Promise.all([fetchSpotifyTrack(id), fetchSpotifyAlbumDetails(id)]).then(
     ([track, album]): SpotifySongTags => ({
       title: cleanTrackTitle(track.title),
-      artist: track.artists.join(", "),
+      // The oEmbed fallback knows no artists: the file keeps YouTube's then.
+      ...(track.artists.length > 0 ? { artist: track.artists.join(", ") } : {}),
       ...album,
       coverUrl: album.coverUrl ?? track.thumbnail ?? undefined,
     }),
