@@ -81,24 +81,32 @@ describe("saveOnServer", () => {
     await expect(failure).rejects.toMatchObject({ status: 404, message: /doesn't exist/ });
   });
 
-  it("passes on how long to wait when YouTube is limiting the computer (a 429)", async () => {
+  it("says when YouTube refused the save (it's limiting the computer): a 502 that says so", async () => {
+    const message = "YouTube is limiting this computer right now. Try again in a few minutes.";
     const fetchImpl = vi.fn(
       async () =>
-        new Response(
-          JSON.stringify({
-            message: "YouTube is limiting this computer. Wait about 10 minutes, then try again.",
-            retryAfterSeconds: 540,
-            source: "youtube",
-          }),
-          { status: 429, headers: { "Content-Type": "application/json", "Retry-After": "540" } },
-        ),
+        new Response(JSON.stringify({ message, source: "youtube", limited: true }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        }),
     );
     const failure = saveOnServer(SONG, { fetchImpl });
     await expect(failure).rejects.toBeInstanceOf(ApiError);
-    await expect(failure).rejects.toMatchObject({
-      status: 429,
-      retryAfterSeconds: 540,
-      message: /limiting this computer/,
+    await expect(failure).rejects.toMatchObject({ status: 502, limited: true, message });
+  });
+
+  it("isn't limited for any other failure", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message: "Couldn't download the audio: gone" }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    await expect(saveOnServer(SONG, { fetchImpl })).rejects.toMatchObject({
+      status: 502,
+      limited: false,
+      message: "Couldn't download the audio: gone",
     });
   });
 

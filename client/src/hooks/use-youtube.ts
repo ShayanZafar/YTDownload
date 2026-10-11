@@ -34,8 +34,7 @@ export function useRecentDownloads(pollEveryMs: number | false = false) {
 /**
  * Song search: YouTube results for a text query, official uploads first. A
  * Spotify song link also returns the song it points to (`spotify`). A failure
- * is an `ApiError` with the app's message — a 429's says YouTube is limiting
- * the computer, with `retryAfterSeconds`.
+ * is an `ApiError` with the app's message (`limited` when YouTube refused).
  */
 export async function searchSongs(query: string, signal?: AbortSignal) {
   const res = await fetch(`${api.video.search.path}?${new URLSearchParams({ q: query })}`, {
@@ -102,7 +101,7 @@ export function useVideoInfo() {
         credentials: "include",
       });
 
-      // A 400, a 429 (YouTube is limiting this computer) or a 500 all say why.
+      // A 400, a 500 or a 502 (YouTube refused: it's limiting this computer) all say why.
       if (!res.ok) throw await errorFrom(res);
 
       const data = await res.json();

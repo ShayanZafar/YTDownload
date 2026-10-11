@@ -22,7 +22,7 @@ import { retryWhenBusy } from "./retry-when-busy";
 import { settings } from "./settings";
 import { spotifySongTags } from "./spotify";
 import { storage } from "./storage";
-import { YouTubeLimited, sendLimited, youtubeGuard } from "./youtube-limits";
+import { YouTubeRefused, sendRefused, youtubeGuard } from "./youtube-limits";
 import { extractVideoId } from "./youtube-url";
 
 /** How often progress is reported while the audio arrives. */
@@ -85,14 +85,11 @@ export async function saveIntoFolder(req: Request, res: Response) {
     const cover = coverFor(videoId, songTags);
     let info;
     try {
-      // Through the guard: a 429 while YouTube is limiting this computer,
-      // rather than asking it again.
-      info = await youtubeGuard.run({
-        attempt: () => fetchAudioInfo(canonical),
-        stillWanted: () => !clientGone,
-      });
+      // Through the guard: a refusal from YouTube is answered at once with a
+      // 502 that says so.
+      info = await youtubeGuard.run({ attempt: () => fetchAudioInfo(canonical) });
     } catch (err) {
-      if (err instanceof YouTubeLimited) throw err;
+      if (err instanceof YouTubeRefused) throw err;
       throw new DownloadError(`Couldn't download the audio: ${(err as Error).message}`, {
         cause: err,
       });
@@ -142,9 +139,9 @@ export async function saveIntoFolder(req: Request, res: Response) {
     await part.closed;
     if (clientGone) return; // the .part file is removed below
     if (writeError) throw folderError(writeError, folder, "write");
-    // Recorded for the source-health report; a 429 if YouTube was limiting us.
-    const limited = youtubeGuard.pipelineEnded(ok, reason);
-    if (limited) throw limited;
+    // Recorded for the source-health report; YouTube may have refused it.
+    const refused = youtubeGuard.pipelineEnded(ok, reason);
+    if (refused) throw refused;
     if (!ok || bytes === 0) {
       throw new DownloadError(`Couldn't download the audio: ${reason || "YouTube sent no audio"}`);
     }
@@ -197,7 +194,7 @@ function send(res: Response, event: SaveEvent) {
 /** A JSON error response if nothing's been sent yet, otherwise an "error" line. */
 function reportFailure(res: Response, err: unknown) {
   const status =
-    err instanceof FolderError || err instanceof YouTubeLimited
+    err instanceof FolderError || err instanceof YouTubeRefused
       ? err.status
       : err instanceof DownloadError
         ? 502
@@ -206,7 +203,7 @@ function reportFailure(res: Response, err: unknown) {
   if (status >= 500) console.error(`Saving into the folder failed: ${message}`);
   if (res.writableEnded || res.destroyed) return;
   if (!res.headersSent) {
-    if (err instanceof YouTubeLimited) sendLimited(res, err);
+    if (err instanceof YouTubeRefused) sendRefused(res);
     else res.status(status).json({ message });
     return;
   }

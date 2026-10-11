@@ -137,7 +137,8 @@ describe("ffmpegMp3Args", () => {
 
   it("writes no tag of its own: the app puts its ID3v2.3 tag in front (it can't stream one with a cover)", () => {
     const args = ffmpegMp3Args();
-    expect(args[args.indexOf("-write_id3v2") + 1]).toBe("0");
+    expect(args[args.indexOf("-id3v2_version") + 1]).toBe("0");
+    expect(args).not.toContain("-write_id3v2"); // not an mp3 muxer option: ffmpeg ignores it
     expect(args[args.indexOf("-map_metadata") + 1]).toBe("-1");
     expect(args.some((a) => a.startsWith("title="))).toBe(false);
   });

@@ -1,37 +1,37 @@
 /**
- * Keeping on YouTube's good side, and coping when we aren't.
+ * Coping with YouTube limiting this computer, without ever slowing the app down.
  *
- * YouTube limits computers that ask too much — "HTTP Error 429", or "Sign in
- * to confirm you're not a bot" — and yt-dlp stops understanding YouTube's
- * pages every few weeks until it's updated. So every yt-dlp call that isn't
- * an audio stream (search, video info, playlists, the metadata pass before a
- * download) goes through `youtubeGuard`:
+ * YouTube limits computers that ask too much ("HTTP Error 429", "Sign in to
+ * confirm you're not a bot", "This content isn't available, try again
+ * later"), and yt-dlp stops understanding YouTube's pages every few weeks
+ * until it's updated. Every yt-dlp call to YouTube that isn't an audio stream
+ * (search, video info, playlists, the look-up before a download) goes through
+ * `youtubeGuard`, and an audio stream reports how it ended:
  *
  *   - a cache answers repeats of the same search, video or playlist for a
- *     while, without asking YouTube again;
- *   - a cooldown: once YouTube has limited us, the app stops asking it for
- *     10 minutes and answers `429` with how long to wait (`YouTubeLimited`),
- *     so retries don't dig the hole deeper;
- *   - a gate lets only a couple of yt-dlp calls run at once (the rest wait
- *     their turn) — bursts are what YouTube's checks look for;
+ *     while, without asking YouTube again (it only makes answers faster);
+ *   - when YouTube refuses (throttled, or a bot check), the request is
+ *     answered at once with a 502 that says so (`YouTubeRefused`,
+ *     `sendRefused()`) — the app never waits, queues or turns a later request
+ *     away on its own account;
  *   - when a failure looks like an outdated yt-dlp (or a bot check, which an
- *     old yt-dlp often earns), the app updates yt-dlp itself (yt-dlp-update.ts:
- *     once an hour at most) and tries the call once more, if someone's still
- *     waiting for the answer;
+ *     old yt-dlp earns more often), yt-dlp is updated in the background
+ *     (yt-dlp-update.ts: once an hour at most). Nobody waits for it: the
+ *     request that failed fails at once, and later ones use the new yt-dlp;
  *   - every attempt is recorded for the source-health report (source-health.ts).
  *
- * The pieces are plain classes that take the time as an argument, so they're
- * unit-tested with a fake clock; `youtubeGuard` wires them to the real one.
+ * The pieces take the time as an argument, so they're unit-tested with a fake
+ * clock; `youtubeGuard` wires them to the real one.
  */
 import type { Response } from "express";
-import type { RateLimitedError } from "@shared/routes";
+import type { LimitedError } from "@shared/routes";
 import { ytDlpFailure } from "./audio";
 import { sourceHealth, type FailureKind, type SourceHealthStore } from "./source-health";
 import { YtDlpUpdater } from "./yt-dlp-update";
 
 /** What a yt-dlp failure means for us. */
 export type YtDlpErrorKind =
-  /** YouTube says to slow down (HTTP 429). */
+  /** YouTube says to slow down (HTTP 429, or "try again later": it's rate-limiting us). */
   | "throttled"
   /** YouTube wants a sign-in to prove we're not a bot: it's limiting this computer. */
   | "bot-check"
@@ -41,7 +41,9 @@ export type YtDlpErrorKind =
   | "unavailable"
   | "other";
 
-const THROTTLED_RE = /HTTP Error 429|Too Many Requests/i;
+// "This content isn't available, try again later" (and yt-dlp's note that the
+// session "has been rate-limited") is how YouTube rate-limits a computer now.
+const THROTTLED_RE = /HTTP Error 429|Too Many Requests|rate[- ]limited|try again later/i;
 // Straight or curly apostrophe in "you're".
 const BOT_CHECK_RE = /Sign in to confirm you['’]re not a bot|confirm you['’]re not a bot/i;
 // The signs of a yt-dlp that no longer understands YouTube's pages.
@@ -58,97 +60,41 @@ export function classifyYtDlpError(text: string): YtDlpErrorKind {
   return "other";
 }
 
-/** YouTube is limiting this computer: the kinds that start the cooldown. */
-export const isLimiting = (kind: YtDlpErrorKind) => kind === "throttled" || kind === "bot-check";
+/** YouTube is refusing this computer: throttled, or a bot check. */
+export const isRefusal = (kind: YtDlpErrorKind): kind is "throttled" | "bot-check" =>
+  kind === "throttled" || kind === "bot-check";
 
-/** The kinds an outdated yt-dlp earns: worth updating it over, and trying once more. */
+/** The kinds an outdated yt-dlp earns: worth updating it over, for the calls to come. */
 export const callsForUpdate = (kind: YtDlpErrorKind) => kind === "broken" || kind === "bot-check";
 
-/** How long the app leaves YouTube alone after it limited us. */
-export const COOLDOWN_MS = 10 * 60_000;
+/** What the app answers when YouTube refuses a request. */
+export const REFUSED_MESSAGE =
+  "YouTube is limiting this computer right now. Try again in a few minutes.";
 
-/** A period during which YouTube isn't asked anything. Times are ms since the epoch. */
-export class Cooldown {
-  private until = 0;
-
-  /** Starts (or extends) the cooldown: `ms` from `now`. */
-  start(now: number, ms = COOLDOWN_MS): void {
-    this.until = Math.max(this.until, now + ms);
-  }
-
-  remainingMs(now: number): number {
-    return Math.max(0, this.until - now);
-  }
-
-  clear(): void {
-    this.until = 0;
-  }
-}
-
-/** The message sent with a 429, and shown on the page. */
-export const LIMITED_MESSAGE =
-  "YouTube is limiting this computer. Wait about 10 minutes, then try again. If it keeps happening, update yt-dlp (Update, or npm run update-yt-dlp).";
-
-/** YouTube is limiting this computer: the request wasn't (or couldn't be) made. */
-export class YouTubeLimited extends Error {
-  readonly status = 429;
+/** YouTube refused this request: it's limiting this computer (throttled, or a bot check). */
+export class YouTubeRefused extends Error {
+  readonly status = 502;
   constructor(
-    readonly retryAfterSeconds: number,
+    readonly kind: "throttled" | "bot-check",
+    /** yt-dlp's own error line. */
+    readonly reason: string,
     options?: ErrorOptions,
   ) {
-    super(LIMITED_MESSAGE, options);
+    super(REFUSED_MESSAGE, options);
   }
 }
 
-/** The JSON a 429 carries. */
-export function limitedBody(limited: YouTubeLimited): RateLimitedError {
-  return {
-    message: limited.message,
-    retryAfterSeconds: limited.retryAfterSeconds,
-    source: "youtube",
-  };
+/** The JSON a refusal is answered with: the usual `{ message }`, plus where it came from. */
+export function refusedBody(): LimitedError {
+  return { message: REFUSED_MESSAGE, source: "youtube", limited: true };
 }
 
-/** Answers a request with the 429 (JSON, plus a Retry-After header). */
-export function sendLimited(res: Response, limited: YouTubeLimited) {
-  return res
-    .set("Retry-After", String(limited.retryAfterSeconds))
-    .status(limited.status)
-    .json(limitedBody(limited));
-}
-
-/** How many yt-dlp calls (other than audio streams) may run at once. */
-export const MAX_CONCURRENT = 2;
-
-export type Gate = {
-  /** Runs `task` once a slot is free (callers wait in order; nobody is turned away). */
-  <T>(task: () => Promise<T>): Promise<T>;
-  /** How many tasks are running, and how many are waiting (for tests and logs). */
-  readonly running: number;
-  readonly waiting: number;
-};
-
-/** A gate that lets at most `max` tasks run at the same time. */
-export function limitConcurrent(max = MAX_CONCURRENT): Gate {
-  let running = 0;
-  const queue: (() => void)[] = [];
-  const next = () => {
-    running--;
-    queue.shift()?.();
-  };
-  const gate = async <T>(task: () => Promise<T>): Promise<T> => {
-    if (running >= max) await new Promise<void>((resolve) => queue.push(resolve));
-    running++;
-    try {
-      return await task();
-    } finally {
-      next();
-    }
-  };
-  return Object.defineProperties(gate, {
-    running: { get: () => running },
-    waiting: { get: () => queue.length },
-  }) as Gate;
+/**
+ * Answers a request YouTube refused: a 502, straight away. Typed as JSON here,
+ * since a download has set its audio type before the stream was refused.
+ */
+export function sendRefused(res: Response) {
+  return res.status(502).type("application/json").json(refusedBody());
 }
 
 /** How long a cached answer stays fresh, and how many are kept. */
@@ -208,45 +154,26 @@ export function searchCacheKey(query: string, targetDuration?: number | null): s
 export const videoCacheKey = (videoId: string) => `video:${videoId}`;
 export const playlistCacheKey = (playlistId: string) => `playlist:${playlistId}`;
 
-/**
- * After a yt-dlp call failed and yt-dlp was (maybe) updated: is the call
- * worth making again? Only after an update that worked, and only if someone
- * is still waiting for the answer — not for a browser that has gone away.
- */
-export function shouldRetry(updated: boolean, stillWanted: () => boolean = () => true): boolean {
-  return updated && stillWanted();
-}
-
 export type GuardOptions = {
   health?: Pick<SourceHealthStore, "record">;
   now?: () => number;
-  cooldown?: Cooldown;
   cache?: TtlCache<unknown>;
-  gate?: Gate;
   updater?: YtDlpUpdater;
   /** The error line of a failed call (yt-dlp's own, when there is one). */
   failureText?: (err: unknown) => string;
   log?: (line: string) => void;
 };
 
-/** A yt-dlp call to run. */
+/** A yt-dlp call to YouTube. */
 export type GuardedCall<T> = {
   /** Cached under this key, if given. */
   key?: string;
   attempt: () => Promise<T>;
-  /** Is anyone still waiting for the answer? Asked before a retry (after an update). */
-  stillWanted?: () => boolean;
 };
 
-type Attempt<T> =
-  | { failed: false; result: T }
-  | { failed: true; error: unknown; text: string; kind: YtDlpErrorKind };
-
-/** The cache, cooldown, gate and self-update around yt-dlp calls (see the top of the file). */
+/** The cache, the self-update and the health records around yt-dlp's calls to YouTube. */
 export class YouTubeGuard {
-  readonly cooldown: Cooldown;
   readonly cache: TtlCache<unknown>;
-  readonly gate: Gate;
   readonly updater: YtDlpUpdater;
   private readonly health: Pick<SourceHealthStore, "record">;
   private readonly now: () => number;
@@ -256,119 +183,67 @@ export class YouTubeGuard {
   constructor({
     health = sourceHealth,
     now = Date.now,
-    cooldown = new Cooldown(),
     cache = new TtlCache<unknown>(),
-    gate = limitConcurrent(),
     updater = new YtDlpUpdater(),
     failureText = ytDlpFailure,
     log = console.warn,
   }: GuardOptions = {}) {
     this.health = health;
     this.now = now;
-    this.cooldown = cooldown;
     this.cache = cache;
-    this.gate = gate;
     this.updater = updater;
     this.failureText = failureText;
     this.log = log;
   }
 
-  /** The 429 to answer with while the cooldown lasts, or undefined. */
-  limited(): YouTubeLimited | undefined {
-    const remaining = this.cooldown.remainingMs(this.now());
-    return remaining > 0 ? new YouTubeLimited(Math.max(1, Math.ceil(remaining / 1000))) : undefined;
-  }
-
   /**
-   * Runs a yt-dlp call: a fresh cached answer first; during a cooldown, a
-   * `YouTubeLimited` without running anything; otherwise through the gate,
-   * with the self-update and one retry when the failure calls for it. The
-   * answer is cached, and every attempt is recorded.
+   * Runs a yt-dlp call to YouTube — always: nothing here turns a call away or
+   * makes it wait. A fresh cached answer comes first; a new answer is cached.
+   * Throws `YouTubeRefused` when YouTube refused, else the call's own error.
    */
-  async run<T>({ key, attempt, stillWanted }: GuardedCall<T>): Promise<T> {
+  async run<T>({ key, attempt }: GuardedCall<T>): Promise<T> {
     if (key !== undefined) {
       const cached = this.cache.get(key, this.now()) as T | undefined;
       if (cached !== undefined) return cached;
     }
-    const limited = this.limited();
-    if (limited) throw limited;
-    const result = await this.gate(async () => {
-      // The cooldown may have started while this call was waiting its turn.
-      const limitedNow = this.limited();
-      if (limitedNow) throw limitedNow;
-      return this.attemptWithUpdate(attempt, stillWanted);
-    });
+    let result: T;
+    try {
+      result = await attempt();
+    } catch (error) {
+      throw this.failed(error, this.failureText(error));
+    }
+    this.health.record("youtube", true);
     if (key !== undefined) this.cache.set(key, result, this.now());
     return result;
   }
 
-  private async attemptWithUpdate<T>(
-    attempt: () => Promise<T>,
-    stillWanted?: () => boolean,
-  ): Promise<T> {
-    const first = await this.tryOnce(attempt);
-    if (!first.failed) return first.result;
-    if (!callsForUpdate(first.kind)) throw this.failureError(first);
-    // An outdated yt-dlp earns both of these: update it (once an hour at
-    // most), and try once more — the same call, nothing else in between.
-    const updated = await this.updater.update(this.now(), first.text);
-    if (!shouldRetry(updated, stillWanted)) throw this.failureError(first);
-    const again = await this.tryOnce(attempt);
-    if (!again.failed) return again.result;
-    throw this.failureError(again);
-  }
-
-  private async tryOnce<T>(attempt: () => Promise<T>): Promise<Attempt<T>> {
-    try {
-      const result = await attempt();
-      this.health.record("youtube", true);
-      return { failed: false, result };
-    } catch (error) {
-      const text = this.failureText(error);
-      const kind = classifyYtDlpError(text);
-      this.recordFailure(kind, text);
-      return { failed: true, error, text, kind };
-    }
-  }
-
-  /** What to throw for a failure: the 429 once YouTube is limiting us (the cooldown starts), else the error itself. */
-  private failureError(failure: { error: unknown; text: string; kind: YtDlpErrorKind }): unknown {
-    if (!isLimiting(failure.kind)) return failure.error;
-    const limited = this.startCooldown(failure.text);
-    return new YouTubeLimited(limited.retryAfterSeconds, { cause: failure.error });
-  }
-
   /**
-   * An audio pipeline (yt-dlp → ffmpeg) has ended: records it; when the
-   * failure calls for a newer yt-dlp, updates it for the calls to come; and
-   * when YouTube was limiting us, starts the cooldown and gives the 429 to
-   * answer with — if the response hasn't started yet (the caller knows).
+   * An audio stream from YouTube (yt-dlp → ffmpeg) has ended: recorded like
+   * any call. Returns the `YouTubeRefused` to answer with when YouTube refused
+   * it — if the response hasn't started yet (the caller knows).
    */
-  pipelineEnded(ok: boolean, reason: string): YouTubeLimited | undefined {
+  pipelineEnded(ok: boolean, reason: string): YouTubeRefused | undefined {
     if (ok) {
       this.health.record("youtube", true);
       return undefined;
     }
-    const kind = classifyYtDlpError(reason);
-    this.recordFailure(kind, reason);
-    if (callsForUpdate(kind)) void this.updater.update(this.now(), reason);
-    return isLimiting(kind) ? this.startCooldown(reason) : undefined;
+    const failure = this.failed(new Error(reason), reason);
+    return failure instanceof YouTubeRefused ? failure : undefined;
   }
 
-  private startCooldown(reason: string): YouTubeLimited {
-    const now = this.now();
-    if (this.cooldown.remainingMs(now) === 0) {
-      this.log(
-        `YouTube is limiting this computer ("${reason}"): not asking it anything for ${Math.round(COOLDOWN_MS / 60_000)} minutes.`,
-      );
-    }
-    this.cooldown.start(now);
-    return new YouTubeLimited(Math.max(1, Math.ceil(this.cooldown.remainingMs(now) / 1000)));
+  /** Records a failure, starts a background update if it calls for one, and says what to throw. */
+  private failed(error: unknown, text: string): unknown {
+    const kind = classifyYtDlpError(text);
+    this.recordFailure(kind, text);
+    // An outdated yt-dlp: update it for the calls to come. Nobody waits for it.
+    if (callsForUpdate(kind)) void this.updater.update(this.now(), text);
+    if (!isRefusal(kind)) return error;
+    this.log(`YouTube is limiting this computer ("${text}").`);
+    return new YouTubeRefused(kind, text, { cause: error });
   }
 
-  /** Forgets the cooldown, the cache and the last update (tests). */
+  /** Forgets the cache and the last update (tests). */
   reset(): void {
-    this.cooldown.clear();
     this.cache.clear();
     this.updater.forget();
   }

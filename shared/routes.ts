@@ -38,18 +38,21 @@ export const errorSchemas = {
     message: z.string(),
   }),
   /**
-   * `429`: the source (YouTube) is limiting this computer, so the app isn't
-   * asking it anything for a while. Try again after `retryAfterSeconds` (also
-   * sent as a `Retry-After` header).
+   * A `502` for a request YouTube refused because it's limiting this computer
+   * (throttled, or a bot check): the usual message, plus which source refused
+   * and `limited: true`. Answered at once — the app never waits it out.
    */
-  rateLimited: z.object({
+  limited: z.object({
     message: z.string(),
-    retryAfterSeconds: z.number(),
     source: z.string(),
+    limited: z.literal(true),
   }),
 };
 
-export type RateLimitedError = z.infer<typeof errorSchemas.rateLimited>;
+export type LimitedError = z.infer<typeof errorSchemas.limited>;
+
+/** A `502`: a source failed (`{ message }`), or YouTube refused (`limited`). */
+const upstreamError = z.union([errorSchemas.limited, errorSchemas.internal]);
 
 export const api = {
   downloads: {
@@ -116,8 +119,8 @@ export const api = {
           url: z.string(),
         }),
         400: errorSchemas.validation,
-        429: errorSchemas.rateLimited,
         500: errorSchemas.internal,
+        502: errorSchemas.limited,
       },
     },
     search: {
@@ -138,9 +141,8 @@ export const api = {
         }),
         400: errorSchemas.validation,
         404: errorSchemas.notFound,
-        429: errorSchemas.rateLimited,
         500: errorSchemas.internal,
-        502: errorSchemas.internal,
+        502: upstreamError,
       },
     },
     download: {
@@ -231,8 +233,7 @@ export const api = {
         200: spotifyPlaylistSchema,
         400: errorSchemas.validation,
         404: errorSchemas.notFound,
-        429: errorSchemas.rateLimited,
-        502: errorSchemas.internal,
+        502: upstreamError,
       },
     },
   },

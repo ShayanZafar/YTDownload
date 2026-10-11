@@ -114,8 +114,7 @@ function markFor(
       return {
         Icon: Clock,
         text: "Waiting",
-        // With a message: YouTube is limiting the computer, and the song waits that out.
-        detail: status.message ?? "waiting to download",
+        detail: "waiting to download",
         className: "text-muted-foreground",
       };
     case "finding":
@@ -267,10 +266,6 @@ export function SpotifyPlaylistPanel({
   const finished = Object.keys(statuses).map(statusOf);
   const toCheck = finished.filter((s) => s?.state === "check").length;
   const failed = finished.filter((s) => s?.state === "failed").length;
-  // The song being waited out while YouTube is limiting the computer, if one is.
-  const waitingMessage = Object.values(statuses).flatMap((s) =>
-    s.state === "waiting" && s.message ? [s.message] : [],
-  )[0];
   const where = folder ? `“${folderName(folder.path)}”` : "";
 
   return (
@@ -406,15 +401,9 @@ export function SpotifyPlaylistPanel({
                   role="status"
                   className="flex min-w-0 items-center gap-2 text-xs text-foreground"
                 >
-                  {waitingMessage ? (
-                    <Clock className="h-4 w-4 shrink-0" />
-                  ) : (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-                  )}
-                  <span className={waitingMessage ? "min-w-0" : "truncate"}>
-                    {waitingMessage
-                      ? `Waiting to download ${Math.min(progress.done + 1, progress.total)} of ${progress.total}: ${waitingMessage}`
-                      : `Downloading ${Math.min(progress.done + 1, progress.total)} of ${progress.total}…`}
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                  <span className="truncate">
+                    Downloading {Math.min(progress.done + 1, progress.total)} of {progress.total}…
                   </span>
                 </p>
                 <button

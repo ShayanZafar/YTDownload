@@ -277,7 +277,7 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - Downloads stream yt-dlp stdout → ffmpeg stdin → response: `bestaudio` (best free stream, usually
   Opus ~130 kbps; no Premium/cookies) → 320k CBR MP3, LAME `-q 2`. CBR is deliberate: a streamed
   VBR file has no seek header, so players show the wrong duration. The MP3's ID3v2.3 tag (with the
-  cover) is the app's own (`id3v2Tag()`, ffmpeg runs with `-write_id3v2 0`): ffmpeg writes a tag with
+  cover) is the app's own (`id3v2Tag()`, ffmpeg runs with `-id3v2_version 0`): ffmpeg writes a tag with
   a picture by seeking back to fix its size, which a stream can't — the tag said size 0. A streamed
   .m4a can't hold a cover (its header goes out before any picture), so it has none.
 - A download (or save) owns two child processes, started by `startAudioPipeline()` in `audio.ts`,

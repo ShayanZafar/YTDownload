@@ -1,16 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_WAIT_MS,
   checkReason,
   confidentMatch,
-  retryDelayMs,
-  wait,
-  waitingOutLimit,
+  downloadSongs,
+  type DownloadAllCalls,
   type SongStatus,
 } from "../../client/src/hooks/use-download-all";
 import { ApiError } from "../../client/src/lib/save-to-folder";
 import { spotifyFileName } from "../../shared/spotify-names";
-import type { SearchResult } from "../../shared/schema";
+import type { SearchResult, SpotifyPlaylistTrack } from "../../shared/schema";
 
 const result = (id: string, duration: number | null): SearchResult => ({
   id,
@@ -42,114 +40,114 @@ describe("confidentMatch", () => {
   });
 
   it("says why, for the song's “check” mark", () => {
-    expect(checkReason([], 354)).toMatch(/no youtube uploads/i);
+    expect(checkReason([], 354)).toMatch(/no uploads/i);
     expect(checkReason([result("aaaaaaaaaaa", 400)], 354)).toMatch(/same length/i);
     // Spotify's fallback knows a song's title, not its length: nothing to match by.
     expect(checkReason([result("aaaaaaaaaaa", 354)], null)).toMatch(/didn't say how long/i);
   });
 });
 
-describe("retryDelayMs", () => {
-  const LIMITED = "YouTube is limiting this computer. Wait about 10 minutes, then try again.";
-
-  it("is how long the app's 429 says to wait, at most 15 minutes", () => {
-    expect(retryDelayMs(new ApiError(LIMITED, 429, 600))).toBe(600_000);
-    expect(retryDelayMs(new ApiError(LIMITED, 429, 1))).toBe(1000);
-    expect(retryDelayMs(new ApiError(LIMITED, 429, 0))).toBe(0);
-    expect(retryDelayMs(new ApiError(LIMITED, 429, 3600))).toBe(MAX_WAIT_MS);
-  });
-
-  it("is nothing for any other failure", () => {
-    expect(retryDelayMs(new ApiError(LIMITED, 429))).toBeUndefined(); // no Retry-After
-    expect(retryDelayMs(new ApiError("Couldn't download the audio", 502, 600))).toBeUndefined();
-    expect(retryDelayMs(new Error("network"))).toBeUndefined();
-    expect(retryDelayMs(undefined)).toBeUndefined();
-  });
-});
-
-describe("waitingOutLimit", () => {
-  const limited = () => new ApiError("YouTube is limiting this computer.", 429, 2);
+describe("downloadSongs", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("waits as long as the 429 says, showing the song waiting, then tries once more", async () => {
+  const song = (id: string, duration: number | null = 354): SpotifyPlaylistTrack => ({
+    id,
+    url: `https://open.spotify.com/track/${id}`,
+    title: `Song ${id}`,
+    artists: "Someone",
+    duration,
+    explicit: false,
+  });
+  const A = song("AAAAAAAAAAAAAAAAAAAAAA");
+  const B = song("BBBBBBBBBBBBBBBBBBBBBB");
+  const C = song("CCCCCCCCCCCCCCCCCCCCCC", null); // its length isn't known
+
+  /** Stand-ins for the app: each song's search answer (or error), and saves that work. */
+  function app(answers: Record<string, SearchResult[] | Error>, failSave?: Error) {
+    const calls: DownloadAllCalls = {
+      search: vi.fn(async (query: string) => {
+        const answer = answers[query];
+        if (answer instanceof Error) throw answer;
+        return { results: answer ?? [] };
+      }),
+      save: vi.fn(async (request: { name?: string }) => {
+        if (failSave) throw failSave;
+        return {
+          type: "done" as const,
+          fileName: `${request.name}.mp3`,
+          folder: "/Music",
+          path: `/Music/${request.name}.mp3`,
+          bytes: 1,
+        };
+      }),
+    };
+    return calls;
+  }
+
+  const run = (queue: SpotifyPlaylistTrack[], calls: DownloadAllCalls) => {
+    const finished: [string, SongStatus][] = [];
+    const summary = downloadSongs(
+      queue,
+      {
+        source: "spotify",
+        format: "mp3",
+        signal: new AbortController().signal,
+        report: () => {},
+        finished: (s, status) => finished.push([s.id, status]),
+      },
+      calls,
+    );
+    return { summary, finished };
+  };
+
+  it("marks a song every source failed as failed, and moves straight on to the next", async () => {
+    // Fake timers: anything that waited (a back-off, a retry delay) would never finish.
     vi.useFakeTimers();
-    const reports: SongStatus[] = [];
-    let calls = 0;
-    const step = vi.fn(async () => {
-      if (calls++ === 0) throw limited();
-      return "found";
-    });
-    const result = waitingOutLimit(step, new AbortController().signal, (s) => reports.push(s), {
-      state: "finding",
-    });
-    await vi.advanceTimersByTimeAsync(1999);
-    expect(step).toHaveBeenCalledTimes(1);
-    expect(reports).toEqual([{ state: "waiting", message: "YouTube is limiting this computer." }]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(await result).toBe("found");
-    expect(step).toHaveBeenCalledTimes(2);
-    expect(reports).toEqual([
-      { state: "waiting", message: "YouTube is limiting this computer." },
-      { state: "finding" },
+    const bothFailed = new ApiError("Search failed: no connection.", 502);
+    const calls = app({ [A.url]: bothFailed, [B.url]: [result("bbbbbbbbbbb", 355)] });
+    const { summary, finished } = run([A, B], calls);
+    expect(await summary).toEqual({ saved: 1, check: 0, failed: 1, stopped: false });
+    expect(finished).toEqual([
+      [A.id, { state: "failed", reason: bothFailed.message }],
+      [B.id, { state: "saved", file: "Someone - Song BBBBBBBBBBBBBBBBBBBBBB.mp3" }],
     ]);
+    expect(calls.search).toHaveBeenCalledTimes(2); // A's search wasn't tried again
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("gives up after a second 429, with that answer", async () => {
+  it("moves on after a save YouTube refused, too", async () => {
     vi.useFakeTimers();
-    const step = vi.fn(async () => {
-      throw limited();
-    });
-    const result = waitingOutLimit(step, new AbortController().signal, () => {}, {
-      state: "finding",
-    });
-    const settled = result.catch((err: unknown) => err);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(await settled).toMatchObject({ status: 429, retryAfterSeconds: 2 });
-    expect(step).toHaveBeenCalledTimes(2);
+    const refused = new ApiError("YouTube is limiting this computer right now.", 502, true);
+    const calls = app({ [A.url]: [result("aaaaaaaaaaa", 354)], [B.url]: [] }, refused);
+    const { summary, finished } = run([A, B], calls);
+    expect(await summary).toEqual({ saved: 0, check: 1, failed: 1, stopped: false });
+    expect(finished[0]).toEqual([A.id, { state: "failed", reason: refused.message }]);
+    expect(finished[1]).toEqual([B.id, { state: "check", reason: checkReason([], 354) }]);
   });
 
-  it("passes any other failure straight through", async () => {
-    const step = vi.fn(async () => {
-      throw new ApiError("Couldn't download the audio", 502);
+  it("marks a song whose length isn't known “check”, rather than guess", async () => {
+    const calls = app({ [C.url]: [result("ccccccccccc", 200)] });
+    const { summary, finished } = run([C], calls);
+    expect(await summary).toMatchObject({ saved: 0, check: 1 });
+    expect(finished[0][1]).toEqual({
+      state: "check",
+      reason: checkReason([result("ccccccccccc", 200)], null),
     });
-    await expect(
-      waitingOutLimit(step, new AbortController().signal, () => {}, { state: "finding" }),
-    ).rejects.toThrow("Couldn't download the audio");
-    expect(step).toHaveBeenCalledTimes(1);
+    expect(calls.save).not.toHaveBeenCalled();
   });
 
-  it("ends the wait when stopped", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const step = vi.fn(async () => {
-      throw limited();
+  it("stops at a problem with the folder, which every other song would hit too", async () => {
+    const gone = new ApiError("That folder doesn't exist any more.", 404);
+    const calls = app({ [A.url]: [result("aaaaaaaaaaa", 354)], [B.url]: [result("b", 354)] }, gone);
+    const { summary, finished } = run([A, B], calls);
+    expect(await summary).toEqual({
+      saved: 0,
+      check: 0,
+      failed: 1,
+      stopped: true,
+      problem: gone.message,
     });
-    const result = waitingOutLimit(step, controller.signal, () => {}, { state: "finding" });
-    const settled = result.catch((err: unknown) => err);
-    await vi.advanceTimersByTimeAsync(500);
-    controller.abort(new DOMException("Stopped", "AbortError"));
-    expect(await settled).toMatchObject({ name: "AbortError" });
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(step).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("wait", () => {
-  afterEach(() => vi.useRealTimers());
-
-  it("resolves after the time, or rejects at once if already stopped", async () => {
-    vi.useFakeTimers();
-    let done = false;
-    const waited = wait(1000, new AbortController().signal).then(() => (done = true));
-    await vi.advanceTimersByTimeAsync(999);
-    expect(done).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await waited;
-    expect(done).toBe(true);
-
-    const stopped = new AbortController();
-    stopped.abort(new Error("already"));
-    await expect(wait(1000, stopped.signal)).rejects.toThrow("already");
+    expect(finished).toHaveLength(1);
   });
 });
 

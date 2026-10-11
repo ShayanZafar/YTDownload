@@ -31,10 +31,6 @@ export const PLAYLIST_MAX_SONGS = SPOTIFY_PLAYLIST_MAX_SONGS;
 /** Songs per Web API page (Spotify's maximum). */
 const PLAYLIST_PAGE_SIZE = 100;
 const FETCH_TIMEOUT_MS = 10_000;
-/** After a 429, one more try — after Spotify's Retry-After, but never longer than this. */
-export const RETRY_AFTER_MAX_MS = 10_000;
-/** …and this long when Spotify doesn't say. */
-const RETRY_AFTER_DEFAULT_MS = 2_000;
 // Spotify serves the same page to any browser; a browser-like User-Agent just
 // avoids being treated as an unknown bot.
 const USER_AGENT =
@@ -313,55 +309,35 @@ export function parseEmbedPage(html: string, id: string): SpotifyTrack {
 }
 
 /**
- * How long a 429 asks us to wait (its Retry-After header: seconds, or a
- * date), in ms — RETRY_AFTER_DEFAULT_MS without one, never more than
- * RETRY_AFTER_MAX_MS.
- */
-export function retryAfterMs(header: string | null, now = Date.now()): number {
-  let ms = RETRY_AFTER_DEFAULT_MS;
-  if (header?.trim()) {
-    const seconds = Number(header);
-    const date = Number.isFinite(seconds) ? NaN : Date.parse(header);
-    if (Number.isFinite(seconds)) ms = seconds * 1000;
-    else if (Number.isFinite(date)) ms = date - now;
-  }
-  return Math.min(RETRY_AFTER_MAX_MS, Math.max(0, ms));
-}
-
-const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/**
- * A request to Spotify, recorded for the source-health report, with one more
- * try after a 429 (once Spotify's Retry-After is up). Throws for no answer at
- * all (no connection, or too slow); an answer of any status is returned.
+ * A request to Spotify, recorded for the source-health report. Never retried
+ * and never delayed: a 429 (or any other refusal) is returned at once, and the
+ * caller moves on to its fallback. Throws for no answer at all (no
+ * connection, or too slow); an answer of any status is returned.
  */
 async function fetchSpotify(
   source: "spotify" | "spotify-oembed",
   url: string,
   init: RequestInit,
 ): Promise<Response> {
-  for (let attempt = 1; ; attempt++) {
-    let res: Response;
-    try {
-      res = await fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    } catch (err) {
-      const reason =
-        err instanceof Error && err.name === "TimeoutError" ? "it took too long" : "no connection";
-      sourceHealth.record(source, false, { note: `Couldn't reach Spotify (${reason})` });
-      throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`);
-    }
-    // A 404 is Spotify answering (there's no such song): the source is fine.
-    if (res.ok || res.status === 404) {
-      sourceHealth.record(source, true);
-      return res;
-    }
-    sourceHealth.record(source, false, {
-      kind: res.status === 429 ? "throttled" : res.status === 403 ? "blocked" : "error",
-      note: `HTTP ${res.status}`,
-    });
-    if (res.status !== 429 || attempt > 1) return res;
-    await wait(retryAfterMs(res.headers.get("retry-after")));
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    const reason =
+      err instanceof Error && err.name === "TimeoutError" ? "it took too long" : "no connection";
+    sourceHealth.record(source, false, { note: `Couldn't reach Spotify (${reason})` });
+    throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`);
   }
+  // A 404 is Spotify answering (there's no such song): the source is fine.
+  if (res.ok || res.status === 404) {
+    sourceHealth.record(source, true);
+    return res;
+  }
+  sourceHealth.record(source, false, {
+    kind: res.status === 429 ? "throttled" : res.status === 403 ? "blocked" : "error",
+    note: `HTTP ${res.status}`,
+  });
+  return res;
 }
 
 /**
@@ -421,8 +397,9 @@ export async function fetchOembedTrack(id: string): Promise<SpotifyTrack> {
 
 /**
  * Looks a song up on Spotify's public embed page — and if that can't be read
- * for any reason but "no such song", on its oEmbed endpoint instead
- * (`fetchOembedTrack()`; the song then carries `source: "spotify-oembed"`).
+ * for any reason but "no such song" (a 429, a 5xx, a timeout, a page it can't
+ * parse), on its oEmbed endpoint instead, at once (`fetchOembedTrack()`; the
+ * song then carries `source: "spotify-oembed"`).
  */
 export async function fetchSpotifyTrack(id: string): Promise<SpotifyTrack> {
   if (!SPOTIFY_ID_RE.test(id)) throw new SpotifyError(400, "That isn't a valid Spotify song link.");

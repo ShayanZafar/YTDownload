@@ -7,15 +7,13 @@
  * free, so the real quality difference is what the uploader started from, and
  * the official upload is taken from the label's masters.
  */
-import { spawn } from "child_process";
 import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
-import { YT_DLP_PATH } from "./audio";
+import { runYtDlpJson } from "./audio";
 import { searchCacheKey, youtubeGuard } from "./youtube-limits";
 
 /** How many results to ask YouTube for; ranking then keeps the best MAX_RESULTS. */
 const FETCH_COUNT = 12;
 export const MAX_RESULTS = 8;
-const SEARCH_TIMEOUT_MS = 30_000;
 
 /** The fields we use from a yt-dlp flat search entry. */
 export type RawSearchEntry = {
@@ -202,50 +200,16 @@ export function ytDlpSearchArgs(query: string): string[] {
   ];
 }
 
-/**
- * Runs yt-dlp directly — never through a shell — so text from the search box
- * can't be interpreted as a command, and parses its JSON output.
- */
-export function runYtDlpJson(args: string[], timeoutMs = SEARCH_TIMEOUT_MS): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(YT_DLP_PATH, args, { windowsHide: true });
-    const out: Buffer[] = [];
-    const err: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        const message = Buffer.concat(err).toString("utf8").trim().split(/\r?\n/).pop();
-        return reject(new Error(message || `yt-dlp exited with code ${code}`));
-      }
-      try {
-        resolve(JSON.parse(Buffer.concat(out).toString("utf8")));
-      } catch {
-        reject(new Error("yt-dlp returned unexpected search output"));
-      }
-    });
-  });
-}
-
-export type SearchOptions = Omit<RankOptions, "limit"> & {
-  /** Is the browser still waiting? (A search is retried after a yt-dlp update only if so.) */
-  stillWanted?: () => boolean;
-};
+export type SearchOptions = Omit<RankOptions, "limit">;
 
 /**
  * The ranked results for a query. Through `youtubeGuard` (youtube-limits.ts):
- * a recent search is answered from its cache, and while YouTube is limiting
- * this computer it throws `YouTubeLimited` instead of asking again.
+ * a recent search is answered from its cache, and when YouTube refuses it
+ * throws `YouTubeRefused` at once.
  */
 export async function searchYouTube(
   query: string,
-  { stillWanted, ...options }: SearchOptions = {},
+  options: SearchOptions = {},
 ): Promise<SearchResult[]> {
   return youtubeGuard.run({
     key: searchCacheKey(query, options.targetDuration),
@@ -253,6 +217,5 @@ export async function searchYouTube(
       const info = (await runYtDlpJson(ytDlpSearchArgs(query))) as { entries?: RawSearchEntry[] };
       return rankResults(query, info.entries ?? [], options);
     },
-    stillWanted,
   });
 }

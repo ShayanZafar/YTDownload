@@ -5,7 +5,6 @@ import path from "path";
 import {
   PLAYLIST_EMBED_LIMIT,
   PLAYLIST_MAX_SONGS,
-  RETRY_AFTER_MAX_MS,
   SpotifyError,
   cleanTrackTitle,
   fetchOembedTrack,
@@ -13,7 +12,6 @@ import {
   fetchSpotifyTrack,
   parseEmbedPage,
   parseOembed,
-  retryAfterMs,
   parsePlaylistItemsPage,
   parsePlaylistPage,
   readEmbedAccessToken,
@@ -709,24 +707,6 @@ describe("resolveShortLink", () => {
   });
 });
 
-describe("retryAfterMs", () => {
-  const now = Date.UTC(2026, 9, 11, 12, 0, 0);
-
-  it("reads Retry-After as seconds or as a date, never waiting longer than the cap", () => {
-    expect(retryAfterMs("3", now)).toBe(3000);
-    expect(retryAfterMs(" 0 ", now)).toBe(0);
-    expect(retryAfterMs(new Date(now + 4000).toUTCString(), now)).toBe(4000);
-    expect(retryAfterMs(new Date(now - 4000).toUTCString(), now)).toBe(0); // already past
-    expect(retryAfterMs("120", now)).toBe(RETRY_AFTER_MAX_MS);
-  });
-
-  it("waits a moment when Spotify doesn't say, or says something odd", () => {
-    expect(retryAfterMs(null, now)).toBe(2000);
-    expect(retryAfterMs("", now)).toBe(2000);
-    expect(retryAfterMs("soon", now)).toBe(2000);
-  });
-});
-
 describe("parseOembed", () => {
   it("reads the title and cover: all the oEmbed endpoint knows", () => {
     expect(
@@ -769,16 +749,21 @@ describe("fetchSpotifyTrack", () => {
     );
   const answer = (status: number, headers: Record<string, string> = {}) =>
     new Response(status === 204 ? null : "error", { status, headers });
-  const stubFetch = (...responses: Response[]) => {
+  /** Spotify's answers, in turn: a response, or an error to throw (no answer at all). */
+  const stubFetch = (...responses: (Response | Error)[]) => {
     const fetch = vi.fn(async (_url: string, _init?: RequestInit) => {
       const next = responses.shift();
       if (!next) throw new TypeError("fetch failed");
+      if (next instanceof Error) throw next;
       return next;
     });
     vi.stubGlobal("fetch", fetch);
     return fetch;
   };
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
   const healthOf = (source: "spotify" | "spotify-oembed") => {
     const { ok, failed, throttled } = sourceHealth.report().sources[source];
     return { ok, failed, throttled };
@@ -798,24 +783,32 @@ describe("fetchSpotifyTrack", () => {
     expect(healthOf("spotify").ok).toBe(before.ok + 1);
   });
 
-  it("tries once more after a 429, once Spotify's Retry-After is up", async () => {
-    const before = healthOf("spotify");
-    const fetch = stubFetch(answer(429, { "retry-after": "0" }), trackPage());
+  it("goes straight to the oEmbed endpoint after a 429 — no retry, no waiting", async () => {
+    // Fake timers: a wait (Retry-After, a back-off) would never end, and the test with it.
+    vi.useFakeTimers();
+    const before = { spotify: healthOf("spotify"), oembed: healthOf("spotify-oembed") };
+    const fetch = stubFetch(answer(429, { "retry-after": "30" }), oembed());
     const track = await fetchSpotifyTrack(ID);
-    expect(track.artists).toEqual(["Queen"]);
+    expect(track.source).toBe("spotify-oembed");
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
     expect(healthOf("spotify")).toEqual({
-      ok: before.ok + 1,
-      failed: before.failed + 1,
-      throttled: before.throttled + 1,
+      ok: before.spotify.ok,
+      failed: before.spotify.failed + 1,
+      throttled: before.spotify.throttled + 1,
     });
+    expect(healthOf("spotify-oembed").ok).toBe(before.oembed.ok + 1);
   });
 
-  it("falls back to the oEmbed endpoint when the embed page can't be read", async () => {
-    // A 429 again after the retry, a 5xx, or a page whose shape has changed.
+  it("falls back to the oEmbed endpoint at once when the embed page can't be read", async () => {
+    vi.useFakeTimers();
+    const timedOut = () =>
+      Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
+    // A 429, a 5xx, no answer in time, or a page whose shape has changed.
     for (const responses of [
-      [answer(429, { "retry-after": "0" }), answer(429, { "retry-after": "0" }), oembed()],
+      [answer(429), oembed()],
       [answer(503), oembed()],
+      [timedOut(), oembed()],
       [new Response("<html>nothing here</html>"), oembed()],
     ]) {
       const before = healthOf("spotify-oembed");

@@ -5,7 +5,9 @@
  * earns "Sign in to confirm you're not a bot" more easily. So when a yt-dlp
  * call fails that way, the app runs the repo's own updater — what `npm run
  * update-yt-dlp` runs, `node scripts/yt-dlp.mjs --update` — once an hour at
- * most, and the call that failed is tried once more (see youtube-limits.ts).
+ * most, in the background (see youtube-limits.ts): no request waits for it.
+ * The one that failed has already been answered; the ones after it use the
+ * new yt-dlp.
  */
 import { spawn } from "child_process";
 import { promises as fs } from "fs";
@@ -64,7 +66,8 @@ export async function runYtDlpUpdateScript(
 
 /**
  * Updates yt-dlp at most once an hour, logging one line when it starts and one
- * when it's done. Callers that ask during an update share it.
+ * when it's done. Callers that ask during an update share it; the app's own
+ * callers don't wait for it (they start it with `void`).
  */
 export class YtDlpUpdater {
   private lastAt: number | undefined;
@@ -82,15 +85,16 @@ export class YtDlpUpdater {
 
   /**
    * Updates yt-dlp if it's due (`reason`: the error that calls for it), and
-   * resolves true if it updated — so the failed call is worth trying again.
-   * A failed update (no network, say) counts as this hour's try: the app
-   * carries on with yt-dlp as it is.
+   * resolves true if it updated. Never rejects. A failed update (no network,
+   * say) counts as this hour's try: the app carries on with yt-dlp as it is.
    */
   update(now: number, reason: string): Promise<boolean> {
     if (this.inFlight) return this.inFlight;
     if (!this.due(now)) return Promise.resolve(false);
     this.lastAt = now;
-    this.log(`yt-dlp: YouTube answered "${reason}" — updating yt-dlp, then trying once more.`);
+    this.log(
+      `yt-dlp: YouTube answered "${reason}" — updating yt-dlp in the background; requests after it use the new one.`,
+    );
     this.inFlight = this.run()
       .then(
         (outcome) => outcome,

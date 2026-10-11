@@ -136,7 +136,7 @@ describe("the MP3 tag (id3v2Tag)", () => {
 describe("MP3 downloads", () => {
   it("leave the tag to the app: ffmpeg writes none", () => {
     const out = audioOutput("mp3", { title: "Song", artist: "Someone" });
-    expect(out.ffmpegArgs[out.ffmpegArgs.indexOf("-write_id3v2") + 1]).toBe("0");
+    expect(out.ffmpegArgs[out.ffmpegArgs.indexOf("-id3v2_version") + 1]).toBe("0");
     expect(out.ffmpegArgs.join(" ")).not.toContain("title=");
     expect(out.prefix?.subarray(0, 3).toString()).toBe("ID3");
   });
