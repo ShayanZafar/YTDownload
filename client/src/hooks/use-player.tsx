@@ -27,6 +27,12 @@ import {
   type Queue,
   type Repeat,
 } from "@/lib/music";
+import {
+  parseRememberedQueue,
+  rememberedQueueText,
+  resumeText,
+  resumeTimeFor,
+} from "@/lib/remembered-player";
 
 /**
  * The music player: one <audio> element for the whole page, so music keeps
@@ -39,6 +45,9 @@ import {
  * Playing starts inside the click that asked for it (phones only let a page
  * start sound when you tap), and the same element plays every song after, so
  * the next song can start on its own.
+ *
+ * It remembers the queue of folder songs and where the song was, so the next
+ * visit carries on from there (paused: it starts again when you press Play).
  */
 
 export type PlayerStatus = "idle" | "loading" | "playing" | "paused";
@@ -79,6 +88,8 @@ export type Player = {
   next: () => void;
   previous: () => void;
   seek: (seconds: number) => void;
+  /** Moves this many seconds on (or back, if negative). */
+  seekBy: (seconds: number) => void;
   setVolume: (volume: number) => void;
   toggleMute: () => void;
   toggleShuffle: () => void;
@@ -113,6 +124,25 @@ function store(key: string, value: string) {
     // Not remembered; it still applies now.
   }
 }
+function forget(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Nothing was stored, then.
+  }
+}
+
+// Where the last visit left off: its queue, and where the song was.
+const QUEUE_KEY = "player-queue";
+const RESUME_KEY = "player-resume";
+
+/** The last visit's queue and where to carry on, if there's one to carry on. */
+function restoredPlayer(): { queue: Queue; time: number } | null {
+  const queue = parseRememberedQueue(stored(QUEUE_KEY));
+  const track = queue && currentOf(queue);
+  if (!queue || !track) return null;
+  return { queue, time: resumeTimeFor(stored(RESUME_KEY), track) };
+}
 
 /** Can this browser play this kind of file itself? (Unknown kinds are worth a try.) */
 const canPlay = (audio: HTMLAudioElement, check: string) =>
@@ -140,10 +170,14 @@ function kindOf(track: PlayerTrack): string {
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [queue, setQueueState] = useState<Queue>(EMPTY_QUEUE);
-  const [status, setStatus] = useState<PlayerStatus>("idle");
-  const [time, setTime] = useState(0);
-  const [duration, setDuration] = useState<number | null>(null);
+  // Shown paused, not loaded: nothing is fetched until Play.
+  const [restored] = useState(restoredPlayer);
+  const [queue, setQueueState] = useState<Queue>(() => restored?.queue ?? EMPTY_QUEUE);
+  const [status, setStatus] = useState<PlayerStatus>(restored ? "paused" : "idle");
+  const [time, setTime] = useState(restored?.time ?? 0);
+  const [duration, setDuration] = useState<number | null>(() =>
+    restored ? (currentOf(restored.queue)?.duration ?? null) : null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [cover, setCover] = useState<string | null>(null);
@@ -162,10 +196,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // The latest values, for the audio element's events and the media keys.
   const latest = useRef({ queue, shuffle, repeat });
   // What's loaded: which song, from which address, and whether that's the
-  // app's conversion. A device song's address is an object URL to let go of.
-  const loaded = useRef<{ key: string; src: string; converted: boolean } | null>(null);
+  // app's conversion, and where it was to start. A device song's address is
+  // an object URL to let go of.
+  const loaded = useRef<{
+    key: string;
+    src: string;
+    converted: boolean;
+    startAt: number;
+  } | null>(null);
   const objectUrl = useRef<string | null>(null);
   const failuresInARow = useRef(0);
+  // Where the current song starts when it's loaded (a remembered song, say).
+  const resumeAt = useRef(restored?.time ?? 0);
   const skipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const current = currentOf(queue) ?? null;
@@ -186,14 +228,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (err instanceof DOMException && err.name === "NotAllowedError") setStatus("paused");
     };
 
-    /** Loads a song into the audio element (and starts it, unless `autoplay` is false). */
+    /**
+     * Loads a song into the audio element (and starts it, unless `autoplay`
+     * is false), from `startAt` seconds in.
+     */
     const load = (
       track: PlayerTrack,
-      { autoplay = true, convert = false }: { autoplay?: boolean; convert?: boolean } = {},
+      {
+        autoplay = true,
+        convert = false,
+        startAt = 0,
+      }: { autoplay?: boolean; convert?: boolean; startAt?: number } = {},
     ) => {
       const element = audio();
       if (!element) return;
       clearTimeout(skipTimer.current);
+      resumeAt.current = 0;
       letGoOfObjectUrl();
       let src: string;
       let converted = false;
@@ -204,13 +254,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         converted = convert || !canPlay(element, track.check);
         src = converted ? folderSongFlacUrl(track.id) : folderSongUrl(track.id);
       }
-      loaded.current = { key: track.key, src, converted };
+      const attempt = { key: track.key, src, converted, startAt };
+      loaded.current = attempt;
       setError(null);
-      setTime(0);
+      setTime(startAt);
       setDuration(track.duration);
       setConverting(converted);
       setStatus(autoplay ? "loading" : "paused");
       element.src = src;
+      if (startAt > 0) {
+        // It can only move there once it knows how long the song is.
+        const moveOn = () => {
+          if (loaded.current === attempt) element.currentTime = startAt;
+        };
+        element.addEventListener("loadedmetadata", moveOn, { once: true });
+      }
       if (autoplay) element.play().catch(onPlayRefused);
     };
 
@@ -233,6 +291,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const { queue: q, repeat: r } = latest.current;
       if (element && element.currentTime > RESTART_AFTER_SECONDS && loaded.current) {
         element.currentTime = 0;
+        return;
+      }
+      if (!loaded.current && resumeAt.current > RESTART_AFTER_SECONDS) {
+        // Remembered part-way through, not loaded yet: back to its start.
+        resumeAt.current = 0;
+        setTime(0);
         return;
       }
       goTo(previousPosition(q.position, q.order.length, r));
@@ -261,7 +325,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (!element?.error || element.error.code === MediaError.MEDIA_ERR_ABORTED) return;
       if (!track || !attempt || attempt.key !== track.key) return;
       if (track.source === "folder" && !attempt.converted) {
-        load(track, { convert: true });
+        load(track, { convert: true, startAt: element.currentTime || attempt.startAt });
         return;
       }
       setStatus("paused");
@@ -297,6 +361,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
       letGoOfObjectUrl();
       loaded.current = null;
+      resumeAt.current = 0;
       failuresInARow.current = 0;
       setQueue(EMPTY_QUEUE);
       setUpNextOpen(false);
@@ -324,6 +389,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       load(tracks[index]);
     };
 
+    const seek = (seconds: number) => {
+      const element = audio();
+      if (!element || !Number.isFinite(seconds)) return;
+      const track = currentTrack();
+      if (!loaded.current && track) {
+        // Not loaded yet: it starts there when it is.
+        resumeAt.current = Math.max(0, Math.min(seconds, track.duration ?? seconds));
+        setTime(resumeAt.current);
+        return;
+      }
+      const end = Number.isFinite(element.duration) ? element.duration : seconds;
+      element.currentTime = Math.max(0, Math.min(seconds, end));
+      setTime(element.currentTime);
+    };
+
     return {
       play,
       enqueue: (tracks: readonly PlayerTrack[], where: "next" | "last") => {
@@ -344,21 +424,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const track = currentTrack();
         if (!element || !track) return;
         if (!element.paused) return element.pause();
-        // Failed, or let go of: load it again.
+        // Not loaded yet (remembered from last time), failed, or let go of: load it.
         if (!loaded.current || loaded.current.key !== track.key || element.error) {
           failuresInARow.current = 0;
-          return load(track);
+          return load(track, { startAt: resumeAt.current });
         }
         element.play().catch(onPlayRefused);
       },
       next,
       previous,
-      seek: (seconds: number) => {
+      seek,
+      seekBy: (seconds: number) => {
         const element = audio();
-        if (!element || !Number.isFinite(seconds)) return;
-        const end = Number.isFinite(element.duration) ? element.duration : seconds;
-        element.currentTime = Math.max(0, Math.min(seconds, end));
-        setTime(element.currentTime);
+        if (!element) return;
+        seek((loaded.current ? element.currentTime : resumeAt.current) + seconds);
       },
       setVolume: (value: number) => {
         const element = audio();
@@ -450,8 +529,35 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Let go of the song's file when the page goes away.
   useEffect(() => () => actions.close(), [actions]);
 
-  // The current song's cover picture.
+  // Remember the queue for next time (its folder songs).
+  useEffect(() => {
+    const text = rememberedQueueText(queue);
+    if (text) return store(QUEUE_KEY, text);
+    forget(QUEUE_KEY);
+    forget(RESUME_KEY);
+  }, [queue]);
+
+  // And where the song is: every few seconds while it plays, when it stops,
+  // and when the page goes away.
   const currentKey = current?.key;
+  const second = Math.floor(time);
+  useEffect(() => {
+    if (!currentKey || (status === "playing" && second % 5 !== 0)) return;
+    store(RESUME_KEY, resumeText(currentKey, second));
+  }, [currentKey, second, status]);
+  useEffect(() => {
+    const onPageHide = () => {
+      const track = currentOf(latest.current.queue);
+      const element = audioRef.current;
+      if (!track || !element) return;
+      const at = loaded.current?.key === track.key ? element.currentTime : resumeAt.current;
+      store(RESUME_KEY, resumeText(track.key, at));
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
+
+  // The current song's cover picture.
   useEffect(() => {
     if (!current) return setCover(null);
     if (current.source === "folder") return setCover(folderSongCoverUrl(current.id));
@@ -519,7 +625,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     session.playbackState = !current ? "none" : status === "playing" ? "playing" : "paused";
   }, [session, current, status]);
 
-  const second = Math.floor(time);
   useEffect(() => {
     if (!session?.setPositionState || duration === null || !current) return;
     try {
@@ -553,6 +658,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       next: actions.next,
       previous: actions.previous,
       seek: actions.seek,
+      seekBy: actions.seekBy,
       setVolume: actions.setVolume,
       toggleMute: actions.toggleMute,
       toggleShuffle: actions.toggleShuffle,

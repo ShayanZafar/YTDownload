@@ -124,7 +124,10 @@ architecture, setup and deployment details, and `LEARNING.md` maps the stack ont
 - The music player: `hooks/use-player.tsx` (`PlayerProvider` in `App.tsx`: one `<audio>` for the
   page, queue/shuffle/repeat, the FLAC fallback for folder songs, Media Session) and
   `components/player-bar.tsx` (fixed to the bottom; rendered by `layout.tsx`), with `components/up-next.tsx`
-  (the queue, opened from the bar; Play next / Add to queue are `queueWith()` in `lib/music.ts`). `components/music-library.tsx`
+  (the queue, opened from the bar; Play next / Add to queue are `queueWith()` in `lib/music.ts`),
+  `hooks/use-player-shortcuts.tsx` (keyboard shortcuts; the pure part is `lib/player-keys.ts`) and
+  `lib/remembered-player.ts` (the folder-song queue and position kept in localStorage, so the next
+  visit carries on, paused; pure, unit-tested). `components/music-library.tsx`
   is "Your music": the folder's songs (`hooks/use-folder-music.ts`) or songs picked on the device
   (`hooks/use-device-music.ts`, `lib/device-music.ts`: tags read in the page, played from blob URLs);
   `lib/music.ts` has the pure parts (songs, sort/filter, play order; unit-tested)
