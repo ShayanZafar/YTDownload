@@ -81,9 +81,12 @@ export async function saveIntoFolder(req: Request, res: Response) {
     // A Spotify song is tagged with Spotify's title and artists (looked up
     // while the source is asked about the audio).
     const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
-    // And its cover: Spotify's album cover, or the video's thumbnail (a
-    // SoundCloud track has no video: Spotify's cover, if it's a Spotify song).
-    const cover = coverFor(link.source === "youtube" ? link.videoId : undefined, songTags);
+    // And its cover: Spotify's album cover, or the video's thumbnail — looked up
+    // meanwhile — or a SoundCloud track's artwork, once the look-up has found it.
+    const videoCover =
+      link.source === "youtube"
+        ? coverFor({ kind: "youtube", videoId: link.videoId }, songTags)
+        : undefined;
     let info;
     try {
       // A refusal from YouTube is answered at once with a 502 that says so.
@@ -98,6 +101,9 @@ export async function saveIntoFolder(req: Request, res: Response) {
     // Cancelled while we were looking up the video: don't start any work.
     if (clientGone) return;
 
+    const cover =
+      videoCover ??
+      coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
     output = await prepareAudioOutput(format, tags, info.acodec, await cover);
     if (clientGone) return;
     const fileName = `${safeFileName(name || info.title)}.${output.ext}`;

@@ -139,9 +139,10 @@ rejected), and `LEARNING.md` maps the stack onto .NET concepts.
   year, track, `TXXX:spotify_id`, front cover) since ffmpeg can't stream one with a cover; the Ogg
   cover block (`flacPictureBlock()`), `jpegSize()`. Pure, unit-tested
 - `server/cover.ts` — download covers: Spotify's album cover (validated `i.scdn.co` /
-  `image-cdn-xx.spotifycdn.com` URL) or the video's thumbnail (`i.ytimg.com`, built from the video
-  id; a SoundCloud track has none, so Spotify's cover when it's a Spotify song), made a ≤600 px
-  square JPEG by ffmpeg (`squareJpeg()`); `coverFor()` waits ≤10 s, never fails
+  `image-cdn-xx.spotifycdn.com` URL), else the video's thumbnail (`i.ytimg.com`, built from the video
+  id, looked for alongside the look-up) or a SoundCloud track's artwork (`sndcdn.com`, 500×500, from
+  the look-up; `isSoundCloudArtworkUrl()`), made a ≤600 px square JPEG by ffmpeg (`squareJpeg()`);
+  `coverFor()` waits ≤10 s, never fails
 - `server/lyrics.ts` — lyrics for the player from LRCLIB's search (`lrclib.net`, free, no key; only
   title, artist and length sent): `searchesFor()`, `pickLyrics()` (same length ±3 s, synced first),
   `parseLrc()`; answers cached in memory. Pure parts unit-tested

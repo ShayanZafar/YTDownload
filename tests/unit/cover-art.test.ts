@@ -176,6 +176,13 @@ describe("covers", () => {
     });
   });
 
+  it("are a SoundCloud track's artwork as it is, no bigger than COVER_SIZE", async () => {
+    expect(jpegSize(await squareJpeg(await picture("500x500"), "soundcloud"))).toEqual({
+      width: 500,
+      height: 500,
+    });
+  });
+
   it("are made by ffmpeg from stdin to stdout, as one JPEG", () => {
     const args = coverArgs("youtube");
     expect(args[args.indexOf("-i") + 1]).toBe("pipe:0");

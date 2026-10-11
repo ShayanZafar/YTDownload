@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   audioLinkOf,
+  isSoundCloudArtworkUrl,
   parseSoundCloudLink,
+  soundCloudArtworkUrl,
   soundCloudTrackNumber,
 } from "../../shared/soundcloud-link";
 import {
@@ -225,6 +227,41 @@ describe("audioLinkOf", () => {
       "soundcloud",
       "youtube",
     ]);
+  });
+});
+
+describe("soundCloudArtworkUrl", () => {
+  it("makes any size of a track's artwork the 500×500 one its cover is made from", () => {
+    expect(
+      soundCloudArtworkUrl("https://i1.sndcdn.com/artworks-000123456789-abc123-original.png"),
+    ).toBe("https://i1.sndcdn.com/artworks-000123456789-abc123-t500x500.jpg");
+    expect(soundCloudArtworkUrl("https://i1.sndcdn.com/artworks-xYz_9-0-large.jpg")).toBe(
+      "https://i1.sndcdn.com/artworks-xYz_9-0-t500x500.jpg",
+    );
+    // A track without artwork shows its uploader's picture.
+    expect(soundCloudArtworkUrl("https://i1.sndcdn.com/avatars-abc-large.jpg")).toBe(
+      "https://i1.sndcdn.com/avatars-abc-t500x500.jpg",
+    );
+    expect(isSoundCloudArtworkUrl("https://i1.sndcdn.com/artworks-abc-t500x500.jpg")).toBe(true);
+  });
+
+  it("is nothing for anything but SoundCloud's own image host", () => {
+    for (const url of [
+      "https://i1.sndcdn.com.evil.example/artworks-abc-large.jpg",
+      "https://evil.example/i1.sndcdn.com/artworks-abc-large.jpg",
+      "http://i1.sndcdn.com/artworks-abc-large.jpg",
+      "https://user@i1.sndcdn.com/artworks-abc-large.jpg",
+      "https://i1.sndcdn.com/../artworks-abc-large.jpg",
+      "https://i1.sndcdn.com/artworks-abc-large.jpg?x=1",
+      "https://i1.sndcdn.com/artworks-abc-large.gif",
+      "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+      "https://i1.sndcdn.com/other-abc-large.jpg",
+      "",
+      undefined,
+    ]) {
+      expect(soundCloudArtworkUrl(url), String(url)).toBeUndefined();
+    }
+    expect(isSoundCloudArtworkUrl("https://i1.sndcdn.com/artworks-abc-large.jpg")).toBe(false);
   });
 });
 

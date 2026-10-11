@@ -62,3 +62,23 @@ export function audioLinkOf(raw: unknown): AudioLink | null {
   const track = parseSoundCloudLink(raw);
   return track ? { source: "soundcloud", url: track } : null;
 }
+
+// A track's artwork (or, without one, its uploader's picture) on SoundCloud's
+// image host, 500×500: "https://i1.sndcdn.com/artworks-<key>-t500x500.jpg".
+const ARTWORK_500_RE =
+  /^https:\/\/i[0-9]{1,2}\.sndcdn\.com\/(?:artworks|avatars)-[A-Za-z0-9_-]{1,200}-t500x500\.jpg$/;
+
+/** Is this a SoundCloud track's 500×500 artwork, so the app may fetch it for a cover? */
+export const isSoundCloudArtworkUrl = (url: unknown): url is string =>
+  typeof url === "string" && ARTWORK_500_RE.test(url);
+
+/**
+ * A SoundCloud track's artwork, 500×500, from any size of it yt-dlp names
+ * ("…-original.png", "…-large.jpg"): SoundCloud serves each size under its
+ * own suffix. Undefined for anything that isn't SoundCloud artwork.
+ */
+export function soundCloudArtworkUrl(url: unknown): string | undefined {
+  if (typeof url !== "string") return undefined;
+  const sized = url.replace(/-[0-9a-z]{1,20}\.(?:jpg|png)$/, "-t500x500.jpg");
+  return isSoundCloudArtworkUrl(sized) ? sized : undefined;
+}

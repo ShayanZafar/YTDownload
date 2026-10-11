@@ -521,9 +521,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // A Spotify song is tagged with Spotify's title and artists (looked up
       // while the source is asked about the audio).
       const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
-      // And its cover: Spotify's album cover, or the video's thumbnail (a
-      // SoundCloud track has no video: Spotify's cover, if it's a Spotify song).
-      const cover = coverFor(link.source === "youtube" ? link.videoId : undefined, songTags);
+      // And its cover: Spotify's album cover, or the video's thumbnail — looked up
+      // meanwhile — or a SoundCloud track's artwork, once the look-up has found it.
+      const videoCover =
+        link.source === "youtube"
+          ? coverFor({ kind: "youtube", videoId: link.videoId }, songTags)
+          : undefined;
 
       // Metadata first, so audio that can't be downloaded fails with a clean
       // error before a streaming response is opened. (A refusal from YouTube
@@ -536,6 +539,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       // These only go out with the first chunk of audio, so a failure before
       // then can still be turned into a proper error response (see below).
+      const cover =
+        videoCover ??
+        coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
       output = await prepareAudioOutput(format, tags, info.acodec, await cover);
       if (clientGone) return;
       // Saved as the name chosen on the page, or the video's title. res.attachment

@@ -22,6 +22,7 @@ import { Transform, type Readable } from "stream";
 import ffmpegStatic from "ffmpeg-static";
 import youtubedl from "youtube-dl-exec";
 import type { DownloadFormat } from "@shared/routes";
+import { soundCloudArtworkUrl } from "@shared/soundcloud-link";
 import { retryWhenBusy } from "./retry-when-busy";
 import { ffmetadataValue, flacPictureBlock, id3v2Tag, type SongTags } from "./tags";
 import { pickThumbnail, type ThumbnailLike } from "./youtube-url";
@@ -335,6 +336,8 @@ export type AudioInfo = AudioMetadata & {
   formatId?: string;
   /** Its codec ("opus", "mp4a.40.2", "mp3"…), which decides the "original" file type. */
   acodec?: string;
+  /** A SoundCloud track's artwork, 500×500 (for its cover); a YouTube video has none here. */
+  artwork?: string;
 };
 
 /**
@@ -364,6 +367,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     release_year?: number;
     release_date?: string;
     ext?: string;
+    thumbnail?: string;
   };
   try {
     info = (await youtubedl(videoUrl, {
@@ -375,6 +379,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
   } catch (err) {
     throw new Error(ytDlpFailure(err), { cause: err });
   }
+  const artwork = soundCloudArtworkUrl(info.thumbnail);
   return {
     title: info.title ?? "audio",
     artist: info.uploader ?? info.channel,
@@ -382,6 +387,9 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     ...youtubeAlbumTags(info),
     formatId: info.format_id,
     acodec: codecOf(info),
+    // SoundCloud's artwork, at the size its cover is made from (YouTube's
+    // covers come from the video id instead: cover.ts).
+    ...(artwork ? { artwork } : {}),
   };
 }
 

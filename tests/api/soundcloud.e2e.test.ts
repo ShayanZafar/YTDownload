@@ -5,6 +5,7 @@ import request from "supertest";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
+import { parseFile } from "music-metadata";
 import { verifyMp3File } from "../utils/mp3";
 import { verifyOriginalAudioFile } from "../utils/original-audio";
 import { audioLinkOf, parseSoundCloudLink } from "../../shared/soundcloud-link";
@@ -121,6 +122,9 @@ describe("SoundCloud end-to-end (API)", () => {
     const file = path.join(dir, "track.mp3");
     await fs.writeFile(file, res.body as Buffer);
     expect((await verifyMp3File(file)).isValid).toBe(true);
+    // Its cover is the track's artwork, from SoundCloud's image host.
+    const { common } = await parseFile(file);
+    expect(common.picture?.[0]?.format).toBe("image/jpeg");
     let history: { url: string; source?: string }[] = [];
     for (let i = 0; i < 50 && !history.some((d) => d.url === whole.url); i++) {
       await new Promise((resolve) => setTimeout(resolve, 200));

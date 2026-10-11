@@ -60,9 +60,10 @@ vi.mock("../../server/audio", async (importOriginal) => {
   };
 });
 
-// A download's cover comes from YouTube's thumbnails or Spotify (server/cover.ts):
-// none here, so nothing leaves this computer.
-vi.mock("../../server/cover", () => ({ coverFor: async () => undefined }));
+// A download's cover comes from YouTube's thumbnails, Spotify or SoundCloud
+// (server/cover.ts): none here, so nothing leaves this computer.
+const coverFor = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../server/cover", () => ({ coverFor }));
 
 const VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const PLAYLIST = "https://www.youtube.com/playlist?list=PLBCF2DAC6FFB574DE";
@@ -205,6 +206,7 @@ afterEach(() => {
   youtubeGuard.reset();
   soundCloudCache.clear();
   vi.restoreAllMocks();
+  coverFor.mockClear();
   fake.videoInfo.mockReset();
   fake.audioInfo.mockReset();
   fake.runJson.mockReset();
@@ -461,7 +463,8 @@ describe("SoundCloud", () => {
   });
 
   it("a track downloads through the same pipeline, by its canonical link, into the history", async () => {
-    fake.audioInfo.mockResolvedValue(trackInfo);
+    const artwork = "https://i1.sndcdn.com/artworks-abc-t500x500.jpg";
+    fake.audioInfo.mockResolvedValue({ ...trackInfo, artwork });
     const res = await request(app)
       .get("/api/video/download")
       .query({ url: TRACK_URN })
@@ -481,6 +484,8 @@ describe("SoundCloud", () => {
     expect((await verifyMp3File(file)).isValid).toBe(true);
     const [entry] = await waitForHistory(TRACK_URN, 1);
     expect(entry).toMatchObject({ title: "One More Time", source: "soundcloud" });
+    // Its cover is its artwork (a YouTube video's is its thumbnail: see the next test).
+    expect(coverFor).toHaveBeenCalledWith({ kind: "soundcloud", url: artwork }, undefined);
   });
 
   it("a track SoundCloud only previews is refused before anything starts", async () => {
@@ -571,6 +576,7 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await fs.writeFile(file, res.body as Buffer);
     expect((await verifyMp3File(file)).isValid).toBe(true);
     expect(await waitForHistory(VIDEO, before + 1)).toHaveLength(before + 1);
+    expect(coverFor).toHaveBeenCalledWith({ kind: "youtube", videoId: "dQw4w9WgXcQ" }, undefined);
   });
 
   it("a download cancelled part-way stops both processes and adds nothing to the history", async () => {
