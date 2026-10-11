@@ -1,10 +1,14 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   PLAYLIST_EMBED_LIMIT,
+  PLAYLIST_MAX_SONGS,
   SpotifyError,
   cleanTrackTitle,
+  fetchSpotifyPlaylist,
   parseEmbedPage,
+  parsePlaylistItemsPage,
   parsePlaylistPage,
+  readEmbedAccessToken,
   parseSpotifyLink,
   playlistLinkError,
   readSpotifyLink,
@@ -341,6 +345,186 @@ describe("parsePlaylistPage", () => {
         /couldn't read the playlist/i,
       );
     }
+  });
+});
+
+// Songs as Spotify's Web API lists them (trimmed to the fields the app asks for).
+const apiItem = (n: number) => ({
+  is_local: false,
+  track: {
+    type: "track",
+    id: `${String(n).padStart(4, "0")}Foc5Q5nqNiosCNqttz`.slice(0, 22),
+    name: `Song ${n}`,
+    duration_ms: 200_400,
+    explicit: n % 2 === 0,
+    artists: [{ name: "Band" }, { name: "Guest" }],
+  },
+});
+const TOKEN = "BQBwyEGz2FQskAhrmhWc1nzSmTZ_RCV8pdaLd2QDbuW";
+
+describe("readEmbedAccessToken", () => {
+  it("reads the embed page's anonymous pass", () => {
+    const html = embedPage({
+      state: { settings: { session: { accessToken: TOKEN, isAnonymous: true } } },
+    });
+    expect(readEmbedAccessToken(html)).toBe(TOKEN);
+  });
+
+  it("gives undefined without one, or for anything that isn't a plain token", () => {
+    for (const accessToken of [
+      undefined,
+      "",
+      42,
+      "a b c d e f g h i j k l m n",
+      "x".repeat(2000),
+    ]) {
+      const html = embedPage({ state: { settings: { session: { accessToken } } } });
+      expect(readEmbedAccessToken(html)).toBeUndefined();
+    }
+    expect(readEmbedAccessToken("<html>no data here</html>")).toBeUndefined();
+  });
+});
+
+describe("parsePlaylistItemsPage", () => {
+  it("reads the songs, how many entries the page had and the playlist's total", () => {
+    const page = parsePlaylistItemsPage({
+      total: 230,
+      items: [
+        apiItem(100),
+        // An episode, a local file and a song Spotify removed: no song to find.
+        { is_local: false, track: { type: "episode", id: "4rOoJ6Egrf8K2IrywzwOMk", name: "Ep" } },
+        { is_local: true, track: { type: "track", id: null, name: "Home Recording" } },
+        { is_local: false, track: null },
+        apiItem(101),
+      ],
+    });
+    expect(page.count).toBe(5);
+    expect(page.total).toBe(230);
+    expect(page.tracks).toEqual([
+      {
+        id: "0100Foc5Q5nqNiosCNqttz",
+        url: "https://open.spotify.com/track/0100Foc5Q5nqNiosCNqttz",
+        title: "Song 100",
+        artists: "Band, Guest",
+        duration: 200,
+        explicit: true,
+      },
+      expect.objectContaining({ title: "Song 101", explicit: false }),
+    ]);
+  });
+
+  it("copes with an answer it can't read", () => {
+    for (const json of [null, "text", { items: "nope" }, { total: -1, items: [] }]) {
+      expect(parsePlaylistItemsPage(json)).toEqual({ tracks: [], count: 0, total: 0 });
+    }
+  });
+});
+
+describe("fetchSpotifyPlaylist", () => {
+  const PLAYLIST = "1aBcDeFgHiJkLmNoPqRsTu";
+  const firstHundred = Array.from({ length: PLAYLIST_EMBED_LIMIT }, (_, n) => {
+    const track = apiItem(n).track;
+    return item(track.id, track.name, "Band", 200_000);
+  });
+  const page = (entity: object, accessToken = TOKEN) =>
+    new Response(
+      embedPage({
+        state: { data: { entity }, settings: { session: { accessToken, isAnonymous: true } } },
+      }),
+    );
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const apiPage = (from: number, to: number, total: number) =>
+    json({ total, items: Array.from({ length: to - from }, (_, i) => apiItem(from + i)) });
+  const stubFetch = (...responses: Response[]) => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => {
+      const next = responses.shift();
+      if (!next) throw new Error("no more answers");
+      return next;
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  };
+  afterEach(() => vi.unstubAllGlobals());
+  const full = { ...playlistEntity, trackList: firstHundred };
+
+  it("pages through the rest of a long playlist with the embed page's pass", async () => {
+    const fetch = stubFetch(page(full), apiPage(100, 200, 230), apiPage(200, 230, 230));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(230);
+    expect(playlist.tracks.map((t) => t.title).slice(98, 102)).toEqual([
+      "Song 98",
+      "Song 99",
+      "Song 100",
+      "Song 101",
+    ]);
+    expect(playlist.maybeMore).toBe(false);
+
+    expect(fetch.mock.calls[0][0]).toBe(`https://open.spotify.com/embed/playlist/${PLAYLIST}`);
+    expect(fetch.mock.calls[0][1]?.headers).not.toHaveProperty("Authorization");
+    for (const [n, offset] of [
+      [1, 100],
+      [2, 200],
+    ]) {
+      const url = new URL(fetch.mock.calls[n][0]);
+      expect(url.origin + url.pathname).toBe(
+        `https://api.spotify.com/v1/playlists/${PLAYLIST}/tracks`,
+      );
+      expect(url.searchParams.get("offset")).toBe(String(offset));
+      expect(url.searchParams.get("limit")).toBe("100");
+      expect(fetch.mock.calls[n][1]?.headers).toMatchObject({ Authorization: `Bearer ${TOKEN}` });
+    }
+  });
+
+  it("asks nothing more of a short playlist, an album, or a page with no pass", async () => {
+    const short = stubFetch(page(playlistEntity));
+    expect((await fetchSpotifyPlaylist("playlist", PLAYLIST)).maybeMore).toBe(false);
+    expect(short).toHaveBeenCalledTimes(1);
+
+    const album = stubFetch(page({ ...full, type: "album" }));
+    expect((await fetchSpotifyPlaylist("album", PLAYLIST)).tracks).toHaveLength(100);
+    expect(album).toHaveBeenCalledTimes(1);
+
+    const noPass = stubFetch(page(full, ""));
+    expect((await fetchSpotifyPlaylist("playlist", PLAYLIST)).maybeMore).toBe(true);
+    expect(noPass).toHaveBeenCalledTimes(1);
+  });
+
+  it("knows a playlist of exactly 100 songs is complete", async () => {
+    stubFetch(page(full), json({ total: 100, items: [] }));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(100);
+    expect(playlist.maybeMore).toBe(false);
+  });
+
+  it("keeps the first 100 when Spotify won't share the rest (its own playlists)", async () => {
+    stubFetch(page(full), json({ error: { status: 404, message: "Resource not found" } }, 404));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(100);
+    expect(playlist.maybeMore).toBe(true);
+  });
+
+  it("keeps what came before a page that fails", async () => {
+    stubFetch(page(full), apiPage(100, 200, 400), json({}, 500));
+    const failedLater = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(failedLater.tracks).toHaveLength(200);
+    expect(failedLater.maybeMore).toBe(true);
+
+    stubFetch(page(full), new Response("not json"));
+    expect((await fetchSpotifyPlaylist("playlist", PLAYLIST)).tracks).toHaveLength(100);
+  });
+
+  it(`stops at ${PLAYLIST_MAX_SONGS} songs`, async () => {
+    const total = PLAYLIST_MAX_SONGS + 500;
+    const pages = [];
+    for (let from = 100; from < PLAYLIST_MAX_SONGS; from += 100) {
+      pages.push(apiPage(from, from + 100, total));
+    }
+    const fetch = stubFetch(page(full), ...pages);
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(PLAYLIST_MAX_SONGS);
+    expect(playlist.maybeMore).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(1 + pages.length);
   });
 });
 

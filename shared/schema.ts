@@ -92,6 +92,9 @@ export type PlaylistSource = (typeof playlistSources)[number];
  * A playlist the panel shows: a public Spotify playlist or album, read from
  * Spotify's embed page (no account needed), or a public YouTube playlist.
  */
+/** The most songs the app lists of a Spotify playlist. */
+export const SPOTIFY_PLAYLIST_MAX_SONGS = 1000;
+
 export const spotifyPlaylistSchema = z.object({
   source: z.enum(playlistSources).default("spotify"),
   kind: z.enum(["playlist", "album"]),
@@ -104,8 +107,9 @@ export const spotifyPlaylistSchema = z.object({
   image: z.string().nullable(),
   tracks: z.array(spotifyPlaylistTrackSchema),
   /**
-   * Spotify shares only the first 100 songs of a playlist this way, and the app
-   * lists at most the first 500 videos of a YouTube playlist: true if there may be more.
+   * True if there may be more: Spotify shares only the first 100 songs of its own
+   * playlists, and the app lists at most `SPOTIFY_PLAYLIST_MAX_SONGS` songs of a
+   * Spotify playlist and the first 500 videos of a YouTube playlist.
    */
   maybeMore: z.boolean(),
 });

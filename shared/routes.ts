@@ -137,7 +137,7 @@ export const api = {
         502: errorSchemas.internal,
       },
     },
-    /** The songs in a public Spotify playlist or album (the first 100 of a playlist). */
+    /** The songs in a public Spotify playlist or album (up to 1,000 songs of a playlist). */
     playlist: {
       method: "GET" as const,
       path: "/api/spotify/playlist" as const,

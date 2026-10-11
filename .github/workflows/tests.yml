@@ -45,6 +45,10 @@ jobs:
 
       - name: Install
         run: npm ci
+        env:
+          # youtube-dl-exec's installer asks GitHub's API for yt-dlp's latest
+          # release; signed in, it isn't refused by the shared runners' rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: yt-dlp and ffmpeg run
         run: >-
