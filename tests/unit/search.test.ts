@@ -178,7 +178,7 @@ describe("rankResults", () => {
     expect(ids).toEqual(["bbbbbbbbbb3", "bbbbbbbbbb2"]);
   });
 
-  it("builds the watch URL, thumbnail and rounded duration", () => {
+  it("builds the watch URL, thumbnail and rounded duration, and says the result is YouTube's", () => {
     const result = rankResults("daft punk get lucky", entries).find((r) => r.id === "aaaaaaaaaa3");
     expect(result).toEqual({
       id: "aaaaaaaaaa3",
@@ -188,6 +188,7 @@ describe("rankResults", () => {
       duration: 369,
       thumbnail: "https://i.ytimg.com/vi/aaaaaaaaaa3/hqdefault.jpg",
       official: true,
+      source: "youtube",
     });
   });
 

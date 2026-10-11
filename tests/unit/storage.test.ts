@@ -48,6 +48,18 @@ describe("FileStorage (download history)", () => {
     expect(plain).not.toHaveProperty("spotifyId");
   });
 
+  it("remembers a download that came from SoundCloud (YouTube, the usual, goes unsaid)", async () => {
+    await store.createDownload({ url: "https://youtu.be/a", title: "Plain", source: "youtube" });
+    await store.createDownload({
+      url: "https://api.soundcloud.com/tracks/254112129",
+      title: "One More Time",
+      source: "soundcloud",
+    });
+    const [soundCloud, youtube] = await store.getDownloads();
+    expect(soundCloud.source).toBe("soundcloud");
+    expect(youtube).not.toHaveProperty("source");
+  });
+
   it(`keeps only the newest ${MAX_HISTORY} entries`, async () => {
     // Start from a full history (newest first), then add five more.
     const full = Array.from({ length: MAX_HISTORY }, (_, i) => {

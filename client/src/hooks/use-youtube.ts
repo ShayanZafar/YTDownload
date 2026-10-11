@@ -1,7 +1,8 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { api, errorSchemas } from "@shared/routes";
+import { api } from "@shared/routes";
 import { z } from "zod";
 import { playlistSourceOf } from "@/lib/format";
+import { errorFrom } from "@/lib/save-to-folder";
 
 /**
  * Safely parse data and log detailed errors if validation fails.
@@ -31,19 +32,26 @@ export function useRecentDownloads(pollEveryMs: number | false = false) {
 }
 
 /**
- * Song search: YouTube results for a text query, official uploads first. A
- * Spotify song link also returns the song it points to (`spotify`).
+ * Song search: results for a text query, official uploads first — YouTube's,
+ * or SoundCloud's when YouTube can't answer (`source` says which, and so does
+ * each result). A Spotify song link also returns the song it points to
+ * (`spotify`). `soundCloudOnly` asks SoundCloud alone, for a song YouTube
+ * refused to hand over. A failure is an `ApiError` with the app's message
+ * (`limited` when YouTube refused).
  */
-export async function searchSongs(query: string, signal?: AbortSignal) {
-  const res = await fetch(`${api.video.search.path}?${new URLSearchParams({ q: query })}`, {
+export async function searchSongs(
+  query: string,
+  signal?: AbortSignal,
+  { soundCloudOnly = false }: { soundCloudOnly?: boolean } = {},
+) {
+  const params = new URLSearchParams({ q: query });
+  if (soundCloudOnly) params.set("source", "soundcloud");
+  const res = await fetch(`${api.video.search.path}?${params}`, {
     credentials: "include",
     signal,
   });
+  if (!res.ok) throw await errorFrom(res);
   const data: unknown = await res.json().catch(() => undefined);
-  if (!res.ok) {
-    const parsedError = errorSchemas.internal.safeParse(data);
-    throw new Error(parsedError.success ? parsedError.data.message : "Search failed");
-  }
   return parseWithLogging(api.video.search.responses[200], data, "video.search");
 }
 
@@ -52,11 +60,8 @@ export async function openSpotifyLink(link: string) {
   const res = await fetch(`${api.spotify.link.path}?${new URLSearchParams({ link })}`, {
     credentials: "include",
   });
+  if (!res.ok) throw await errorFrom(res);
   const data: unknown = await res.json().catch(() => undefined);
-  if (!res.ok) {
-    const parsedError = errorSchemas.internal.safeParse(data);
-    throw new Error(parsedError.success ? parsedError.data.message : "Couldn't open the link");
-  }
   return parseWithLogging(api.spotify.link.responses[200], data, "spotify.link");
 }
 
@@ -64,8 +69,14 @@ export function useSpotifyLink() {
   return useMutation({ mutationFn: openSpotifyLink });
 }
 
+/** A search the page runs: `soundCloudOnly` to look on SoundCloud alone. */
+export type SongSearchRequest = { query: string; soundCloudOnly?: boolean };
+
 export function useSongSearch() {
-  return useMutation({ mutationFn: (query: string) => searchSongs(query) });
+  return useMutation({
+    mutationFn: ({ query, soundCloudOnly }: SongSearchRequest) =>
+      searchSongs(query, undefined, { soundCloudOnly }),
+  });
 }
 
 /**
@@ -85,13 +96,8 @@ export function usePlaylist(link: string | null) {
       const res = await fetch(`${path}?${new URLSearchParams({ link: link ?? "" })}`, {
         credentials: "include",
       });
+      if (!res.ok) throw await errorFrom(res);
       const data: unknown = await res.json().catch(() => undefined);
-      if (!res.ok) {
-        const parsedError = errorSchemas.internal.safeParse(data);
-        throw new Error(
-          parsedError.success ? parsedError.data.message : "Couldn't open that playlist",
-        );
-      }
       return parseWithLogging(responses[200], data, path);
     },
   });
@@ -110,16 +116,8 @@ export function useVideoInfo() {
         credentials: "include",
       });
 
-      if (!res.ok) {
-        if (res.status === 400 || res.status === 500) {
-          const errorData = await res.json();
-          const schema =
-            res.status === 400 ? api.video.info.responses[400] : api.video.info.responses[500];
-          const parsedError = schema.safeParse(errorData);
-          throw new Error(parsedError.success ? parsedError.data.message : "An error occurred");
-        }
-        throw new Error("Failed to fetch video information");
-      }
+      // A 400, a 500 or a 502 (YouTube refused: it's limiting this computer) all say why.
+      if (!res.ok) throw await errorFrom(res);
 
       const data = await res.json();
       return parseWithLogging(api.video.info.responses[200], data, "video.info");

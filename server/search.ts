@@ -1,30 +1,53 @@
 /**
- * Song search: find YouTube uploads for a text query ("artist song name").
+ * Song search: find uploads for a text query ("artist song name").
  *
  * yt-dlp's `ytsearchN:` lists the top N YouTube results quickly (~4s) without
  * opening each video. We then rank them so the artist's or label's own upload
  * comes first — every YouTube upload tops out at the same ~130 kbps audio for
  * free, so the real quality difference is what the uploader started from, and
  * the official upload is taken from the label's masters.
+ *
+ * SoundCloud (`scsearchN:`, soundcloud.ts) is the fallback, and `searchSongs()`
+ * never waits on anything of ours to use it: YouTube is always asked; when its
+ * search fails or finds nothing, SoundCloud is asked at once — and while
+ * YouTube has refused this computer in the last 10 minutes, SoundCloud is
+ * asked at the same time as YouTube (hedging), so a refusal costs no time.
+ * YouTube's results are used whenever it answers with some, else
+ * SoundCloud's; every result says which source it's from. Both are ranked the
+ * same way.
  */
-import { spawn } from "child_process";
-import { SAME_LENGTH_SECONDS, type SearchResult } from "@shared/schema";
-import { YT_DLP_PATH } from "./audio";
+import type { AudioSource, SearchResult } from "@shared/schema";
+import { SAME_LENGTH_SECONDS } from "@shared/schema";
+import { runYtDlpJson, ytDlpErrorLine } from "./audio";
+import { looksLikePreview, recordSoundCloud, soundCloudResult } from "./soundcloud";
+import type { SourceHealthStore } from "./source-health";
+import {
+  TtlCache,
+  YouTubeRefused,
+  searchCacheKey,
+  youtubeGuard,
+  type YouTubeGuard,
+} from "./youtube-limits";
 
-/** How many results to ask YouTube for; ranking then keeps the best MAX_RESULTS. */
-const FETCH_COUNT = 12;
+/** How many results to ask for; ranking then keeps the best MAX_RESULTS. */
+export const FETCH_COUNT = 12;
 export const MAX_RESULTS = 8;
-const SEARCH_TIMEOUT_MS = 30_000;
 
-/** The fields we use from a yt-dlp flat search entry. */
+/** The fields we use from a yt-dlp flat search entry (YouTube's, or SoundCloud's). */
 export type RawSearchEntry = {
-  id?: string | null;
+  id?: string | number | null;
   title?: string | null;
   duration?: number | null;
   channel?: string | null;
   uploader?: string | null;
   channel_is_verified?: boolean | null;
   live_status?: string | null;
+  /** SoundCloud: the track's API link, and its page (the link people know). */
+  url?: string | null;
+  webpage_url?: string | null;
+  /** SoundCloud: its artwork, in several sizes. */
+  thumbnails?: { url?: unknown; width?: unknown }[] | null;
+  thumbnail?: string | null;
 };
 
 const VIDEO_ID_RE = /^[\w-]{11}$/;
@@ -128,37 +151,59 @@ export function isOfficial(entry: RawSearchEntry, query = ""): boolean {
 }
 
 /**
- * Turn raw search entries into results, best first: official uploads of the
- * song searched for up; results missing part of the search (another artist's
- * song with the same name) and live/cover/remix-style versions (unless asked
- * for) down; otherwise YouTube's own order. Drops live streams and anything
- * that isn't a single video.
+ * A YouTube search entry as a result: its watch link and thumbnail, built from
+ * its id. Live streams and anything that isn't a single video are left out.
  */
+export function youtubeResult(entry: RawSearchEntry, query: string): SearchResult | undefined {
+  const id = typeof entry.id === "string" ? entry.id : "";
+  if (!VIDEO_ID_RE.test(id)) return undefined;
+  if (entry.live_status === "is_live" || entry.live_status === "is_upcoming") return undefined;
+  return {
+    id,
+    url: `https://www.youtube.com/watch?v=${id}`,
+    title: entry.title?.trim() || "Untitled",
+    channel: (entry.channel ?? entry.uploader ?? "").trim(),
+    duration: typeof entry.duration === "number" ? Math.round(entry.duration) : null,
+    thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+    official: isOfficial(entry, query),
+    source: "youtube",
+  };
+}
+
 export type RankOptions = {
   limit?: number;
   /** The song's length in seconds, if known: same-length uploads move up (above official ones). */
   targetDuration?: number | null;
+  /** An entry as a result, or undefined to leave it out: YouTube's (the default) or SoundCloud's. */
+  toResult?: (entry: RawSearchEntry, query: string) => SearchResult | undefined;
+  /** Entries to put after all the others, however well they match (SoundCloud's previews). */
+  last?: (entry: RawSearchEntry) => boolean;
 };
 
+/**
+ * Turn raw search entries into results, best first: official uploads of the
+ * song searched for up; results missing part of the search (another artist's
+ * song with the same name) and live/cover/remix-style versions (unless asked
+ * for) down; otherwise the source's own order. Entries `toResult` leaves out
+ * (live streams, anything that isn't a single video or track) are dropped,
+ * and those `last` picks out go after everything else.
+ */
 export function rankResults(
   query: string,
   entries: RawSearchEntry[],
-  { limit = MAX_RESULTS, targetDuration }: RankOptions = {},
+  { limit = MAX_RESULTS, targetDuration, toResult = youtubeResult, last }: RankOptions = {},
 ): SearchResult[] {
   const q = normalize(query);
   const seen = new Set<string>();
-  const scored: { score: number; index: number; result: SearchResult }[] = [];
+  const scored: { last: boolean; score: number; index: number; result: SearchResult }[] = [];
 
   entries.forEach((entry, index) => {
-    const id = entry.id ?? "";
-    if (!VIDEO_ID_RE.test(id) || seen.has(id)) return;
-    if (entry.live_status === "is_live" || entry.live_status === "is_upcoming") return;
-    seen.add(id);
+    const result = toResult(entry, query);
+    if (!result || seen.has(result.id)) return;
+    seen.add(result.id);
 
-    const title = entry.title?.trim() || "Untitled";
-    const official = isOfficial(entry, query);
     const matches = queryCoverage(query, entry) >= MATCH_THRESHOLD;
-    const t = normalize(title);
+    const t = normalize(result.title);
     const variant = VARIANT_GROUPS.some(
       (group) => group.some((w) => hasWords(t, w)) && !group.some((w) => hasWords(q, w)),
     );
@@ -167,75 +212,208 @@ export function rankResults(
       typeof entry.duration === "number" &&
       Math.abs(entry.duration - targetDuration) <= SAME_LENGTH_SECONDS;
     scored.push({
+      last: last?.(entry) ?? false,
       index,
       score:
-        (official && matches ? 2 : 0) +
+        (result.official && matches ? 2 : 0) +
         (sameLength && matches ? 3 : 0) -
         (matches ? 0 : 1) -
         (variant ? 3 : 0),
-      result: {
-        id,
-        url: `https://www.youtube.com/watch?v=${id}`,
-        title,
-        channel: (entry.channel ?? entry.uploader ?? "").trim(),
-        duration: typeof entry.duration === "number" ? Math.round(entry.duration) : null,
-        thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
-        official,
-      },
+      result,
     });
   });
 
-  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  scored.sort((a, b) => Number(a.last) - Number(b.last) || b.score - a.score || a.index - b.index);
   return scored.slice(0, limit).map((s) => s.result);
 }
 
-/** yt-dlp arguments for a quick YouTube search that lists results without opening them. */
-export function ytDlpSearchArgs(query: string): string[] {
+/**
+ * yt-dlp arguments for a quick search that lists results without opening them:
+ * `ytsearch12:` on YouTube, `scsearch12:` on SoundCloud.
+ */
+function flatSearchArgs(prefix: "ytsearch" | "scsearch", query: string): string[] {
   // "--" ends the options, so nothing in the query can be read as one.
   return [
     "--flat-playlist",
     "--dump-single-json",
     "--no-warnings",
     "--",
-    `ytsearch${FETCH_COUNT}:${query}`,
+    `${prefix}${FETCH_COUNT}:${query}`,
   ];
 }
 
+/** yt-dlp arguments for a quick YouTube search that lists results without opening them. */
+export const ytDlpSearchArgs = (query: string) => flatSearchArgs("ytsearch", query);
+
+/** yt-dlp arguments for the same search on SoundCloud (no account or key needed). */
+export const soundCloudSearchArgs = (query: string) => flatSearchArgs("scsearch", query);
+
+export type SearchOptions = Pick<RankOptions, "targetDuration">;
+
+/** What a search runs on: the guard around YouTube, yt-dlp, and SoundCloud's cache and health. */
+export type SearchDeps = {
+  guard?: YouTubeGuard;
+  /** Runs yt-dlp with these arguments and gives its JSON (`runYtDlpJson`). */
+  run?: (args: string[]) => Promise<unknown>;
+  health?: Pick<SourceHealthStore, "record">;
+  soundCloudCache?: TtlCache<SearchResult[]>;
+  now?: () => number;
+};
+
+/** SoundCloud's answers, kept for a while like YouTube's (youtube-limits.ts). */
+export const soundCloudCache = new TtlCache<SearchResult[]>();
+
 /**
- * Runs yt-dlp directly — never through a shell — so text from the search box
- * can't be interpreted as a command, and parses its JSON output.
+ * The ranked YouTube results for a query. Through `youtubeGuard`
+ * (youtube-limits.ts): a recent search is answered from its cache, and when
+ * YouTube refuses it throws `YouTubeRefused` at once.
  */
-export function runYtDlpJson(args: string[], timeoutMs = SEARCH_TIMEOUT_MS): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(YT_DLP_PATH, args, { windowsHide: true });
-    const out: Buffer[] = [];
-    const err: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    child.on("error", (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        const message = Buffer.concat(err).toString("utf8").trim().split(/\r?\n/).pop();
-        return reject(new Error(message || `yt-dlp exited with code ${code}`));
-      }
-      try {
-        resolve(JSON.parse(Buffer.concat(out).toString("utf8")));
-      } catch {
-        reject(new Error("yt-dlp returned unexpected search output"));
-      }
-    });
+export async function searchYouTube(
+  query: string,
+  options: SearchOptions = {},
+  { guard = youtubeGuard, run = runYtDlpJson }: SearchDeps = {},
+): Promise<SearchResult[]> {
+  return guard.run({
+    key: searchCacheKey(query, options.targetDuration),
+    attempt: async () => {
+      const info = (await run(ytDlpSearchArgs(query))) as { entries?: RawSearchEntry[] };
+      return rankResults(query, info.entries ?? [], options);
+    },
   });
 }
 
-export async function searchYouTube(
+/**
+ * The ranked SoundCloud results for a query (`scsearch`, through the same
+ * runner as YouTube's search; the query after "--"), 30-second previews last.
+ * Every attempt is recorded as `soundcloud` in the source-health report;
+ * answers are cached for a while.
+ */
+export async function searchSoundCloud(
   query: string,
-  options: Omit<RankOptions, "limit"> = {},
+  { targetDuration }: SearchOptions = {},
+  {
+    run = runYtDlpJson,
+    health,
+    soundCloudCache: cache = soundCloudCache,
+    now = Date.now,
+  }: SearchDeps = {},
 ): Promise<SearchResult[]> {
-  const info = (await runYtDlpJson(ytDlpSearchArgs(query))) as { entries?: RawSearchEntry[] };
-  return rankResults(query, info.entries ?? [], options);
+  const key = searchCacheKey(query, targetDuration);
+  const cached = cache.get(key, now());
+  if (cached) return cached;
+  let info: { entries?: RawSearchEntry[] };
+  try {
+    info = (await run(soundCloudSearchArgs(query))) as typeof info;
+  } catch (err) {
+    recordSoundCloud(false, reasonOf(err), health);
+    throw err;
+  }
+  recordSoundCloud(true, "", health);
+  const results = rankResults(query, info.entries ?? [], {
+    targetDuration,
+    toResult: soundCloudResult,
+    last: looksLikePreview,
+  });
+  cache.set(key, results, now());
+  return results;
+}
+
+/** Results, and which source they're from. */
+export type SongSearchAnswer = { results: SearchResult[]; source: AudioSource };
+
+export type SongSearchOptions = SearchOptions & {
+  /** What to ask SoundCloud, if not the same (a Spotify song's search drops "audio"). */
+  soundCloudQuery?: string;
+};
+
+/** No source could be searched: a 502 that says why; `limited` when YouTube refused. */
+export class SearchFailed extends Error {
+  readonly status = 502;
+  constructor(
+    message: string,
+    readonly limited: boolean,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
+/** A failed search's reason, in a few words: yt-dlp's own error line. */
+function reasonOf(err: unknown): string {
+  if (err instanceof YouTubeRefused) return err.reason;
+  return ytDlpErrorLine(err instanceof Error ? err.message : String(err));
+}
+
+/** What each source's search came to: its results, or why it failed. */
+type Outcome = { results: SearchResult[] } | { error: unknown };
+
+const outcomeOf = (search: Promise<SearchResult[]>): Promise<Outcome> =>
+  search.then(
+    (results) => ({ results }),
+    (error: unknown) => ({ error }),
+  );
+
+/**
+ * The search the app's routes use. YouTube is always asked. While YouTube has
+ * refused this computer in the last 10 minutes, SoundCloud is asked at the
+ * same time; otherwise it's asked only once YouTube's search has failed or
+ * found nothing — straight away, never after a wait. YouTube's results are the
+ * answer when it has some; else SoundCloud's; else YouTube's empty answer.
+ * Throws `SearchFailed` only when no source could be searched at all.
+ */
+export async function searchSongs(
+  query: string,
+  { soundCloudQuery = query, ...options }: SongSearchOptions = {},
+  deps: SearchDeps = {},
+): Promise<SongSearchAnswer> {
+  const guard = deps.guard ?? youtubeGuard;
+  const askSoundCloud = () => outcomeOf(searchSoundCloud(soundCloudQuery, options, deps));
+  // Hedging: SoundCloud's answer is on its way while YouTube's is.
+  const hedge = guard.refusedRecently() ? askSoundCloud() : undefined;
+
+  const youtube = await outcomeOf(searchYouTube(query, options, deps));
+  if ("results" in youtube && youtube.results.length > 0) {
+    return { results: youtube.results, source: "youtube" };
+  }
+  const soundCloud = await (hedge ?? askSoundCloud());
+  if ("results" in soundCloud && (soundCloud.results.length > 0 || "error" in youtube)) {
+    return { results: soundCloud.results, source: "soundcloud" };
+  }
+  // YouTube answered, with nothing: that's the answer, whatever SoundCloud said.
+  if ("results" in youtube) return { results: [], source: "youtube" };
+
+  const soundCloudReason = reasonOf((soundCloud as { error: unknown }).error);
+  if (youtube.error instanceof YouTubeRefused) {
+    throw new SearchFailed(
+      `YouTube is refusing this computer right now (it limits computers that ask it a lot), and SoundCloud couldn't be searched either (${soundCloudReason}). Neither can answer at the moment: search again in a while.`,
+      true,
+      { cause: youtube.error },
+    );
+  }
+  throw new SearchFailed(
+    `Couldn't search YouTube (${reasonOf(youtube.error)}) or SoundCloud (${soundCloudReason}). Check the internet connection, then search again.`,
+    false,
+    { cause: youtube.error },
+  );
+}
+
+/**
+ * A search on SoundCloud alone — for a song YouTube refused to hand over (a
+ * refused download or save), where YouTube's results would only be refused
+ * again. Throws `SearchFailed` when SoundCloud can't be searched.
+ */
+export async function searchSoundCloudOnly(
+  query: string,
+  options: SearchOptions = {},
+  deps: SearchDeps = {},
+): Promise<SongSearchAnswer> {
+  try {
+    return { results: await searchSoundCloud(query, options, deps), source: "soundcloud" };
+  } catch (err) {
+    throw new SearchFailed(
+      `Couldn't search SoundCloud (${reasonOf(err)}). Check the internet connection, then search again.`,
+      false,
+      { cause: err },
+    );
+  }
 }

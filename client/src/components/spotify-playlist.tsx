@@ -97,6 +97,8 @@ const uniqueIds = (tracks: SpotifyPlaylistTrack[]) => Array.from(new Set(tracks.
 type Mark = {
   Icon: typeof CheckCircle2;
   text: string;
+  /** A small label after the text: where a saved song came from, when it wasn't YouTube. */
+  label?: string;
   /** For screen readers, and the tooltip. */
   detail: string;
   className: string;
@@ -121,7 +123,7 @@ function markFor(
       return {
         Icon: Loader2,
         text: "Finding",
-        detail: "looking for it on YouTube",
+        detail: "looking for it",
         className: "text-muted-foreground",
         spin: true,
       };
@@ -137,7 +139,9 @@ function markFor(
       return {
         Icon: CheckCircle2,
         text: "Saved",
-        detail: `saved as ${status.file}`,
+        ...(status.source === "soundcloud"
+          ? { label: "SoundCloud", detail: `saved from SoundCloud as ${status.file}` }
+          : { detail: `saved as ${status.file}` }),
         className: "text-primary",
       };
     case "check":
@@ -182,7 +186,8 @@ function markFor(
  *
  * With a "Save to" folder, each song says whether it's already in the folder,
  * the list can show just the missing ones, and "Download" fetches the ticked
- * ones (all missing songs, to begin with) one after another.
+ * ones (all missing songs, to begin with), as many at once as the app's
+ * computer has CPU cores.
  */
 export function SpotifyPlaylistPanel({
   source,
@@ -403,7 +408,7 @@ export function SpotifyPlaylistPanel({
                 >
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
                   <span className="truncate">
-                    Downloading {Math.min(progress.done + 1, progress.total)} of {progress.total}…
+                    Downloading: {progress.done} of {progress.total} done…
                   </span>
                 </p>
                 <button
@@ -431,7 +436,7 @@ export function SpotifyPlaylistPanel({
                   title={
                     isYouTube
                       ? `Save each ticked video into ${where}`
-                      : `Find each ticked song on YouTube and save it into ${where}`
+                      : `Find each ticked song and save it into ${where}`
                   }
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
@@ -502,12 +507,12 @@ export function SpotifyPlaylistPanel({
           <p className="border-b border-border bg-secondary/40 px-4 py-2 text-xs text-muted-foreground">
             {[
               toCheck > 0 &&
-                `${countSongs(toCheck)} to check (no YouTube upload was surely the same recording)`,
+                `${countSongs(toCheck)} to check (no upload found was surely the same recording)`,
               failed > 0 && `${failed} failed`,
             ]
               .filter(Boolean)
               .join(" · ")}
-            . Click a song to choose its YouTube upload yourself.
+            . Click a song to choose its upload yourself.
           </p>
         )}
 
@@ -620,6 +625,11 @@ export function SpotifyPlaylistPanel({
                       >
                         <mark.Icon className={cn("h-4 w-4", mark.spin && "animate-spin")} />
                         <span className="hidden sm:inline">{mark.text}</span>
+                        {mark.label && (
+                          <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground">
+                            {mark.label}
+                          </span>
+                        )}
                       </span>
                     )}
                     {track.duration != null && (

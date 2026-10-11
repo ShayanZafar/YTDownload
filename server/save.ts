@@ -4,17 +4,14 @@ import path from "path";
 import { api } from "@shared/routes";
 import { safeFileName } from "@shared/filename";
 import type { SaveEvent } from "@shared/schema";
-import {
-  fetchAudioInfo,
-  prepareAudioOutput,
-  startAudioPipeline,
-  type PreparedOutput,
-} from "./audio";
+import { audioLinkOf } from "@shared/soundcloud-link";
+import { prepareAudioOutput, startAudioPipeline, type PreparedOutput } from "./audio";
+import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
 import {
   FolderError,
   assertWritableFolder,
-  availablePath,
+  claimNewName,
   createNewFile,
   folderError,
 } from "./folders";
@@ -22,19 +19,20 @@ import { retryWhenBusy } from "./retry-when-busy";
 import { settings } from "./settings";
 import { spotifySongTags } from "./spotify";
 import { storage } from "./storage";
-import { extractVideoId } from "./youtube-url";
+import { YouTubeRefused, sendRefused } from "./youtube-limits";
 
 /** How often progress is reported while the audio arrives. */
 const PROGRESS_EVERY_MS = 250;
 
-/** YouTube (or yt-dlp/ffmpeg) couldn't deliver the audio — a 502, like a normal download's. */
+/** The source (or yt-dlp/ffmpeg) couldn't deliver the audio — a 502, like a normal download's. */
 class DownloadError extends Error {}
 
 /**
  * POST /api/video/save — a download saved by the app itself into the "Save to"
  * folder, instead of by the browser, so it works the same in every browser.
  *
- * It's the same yt-dlp → ffmpeg pipeline as a normal download, written to
+ * It's the same yt-dlp → ffmpeg pipeline as a normal download (of a YouTube
+ * video, or of a SoundCloud track a search found there), written to
  * "<name>.<ext>.part" in the folder and renamed to "<name>.<ext>" once it's
  * complete — or "<name> (1).<ext>" and so on, since an existing file is never
  * replaced. A cancel or a failure removes the .part file and adds nothing to
@@ -65,9 +63,13 @@ export async function saveIntoFolder(req: Request, res: Response) {
       return res.status(400).json({ message: issue.message, field: issue.path.join(".") });
     }
     const { url, format, name, spotifyId } = input.data;
-    const videoId = extractVideoId(url);
-    if (!videoId) {
-      return res.status(400).json({ message: "Invalid or missing YouTube URL", field: "url" });
+    // Only a YouTube video or a SoundCloud track, and only its canonical link
+    // goes to yt-dlp.
+    const link = audioLinkOf(url);
+    if (!link) {
+      return res
+        .status(400)
+        .json({ message: "Invalid or missing YouTube or SoundCloud link", field: "url" });
     }
 
     const { saveFolder } = await settings.get();
@@ -76,16 +78,21 @@ export async function saveIntoFolder(req: Request, res: Response) {
     }
     const folder = await assertWritableFolder(saveFolder);
 
-    const canonical = `https://www.youtube.com/watch?v=${videoId}`;
     // A Spotify song is tagged with Spotify's title and artists (looked up
-    // while YouTube is asked about the video).
+    // while the source is asked about the audio).
     const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
-    // And its cover: Spotify's album cover, or the video's thumbnail.
-    const cover = coverFor(videoId, songTags);
+    // And its cover: Spotify's album cover, or the video's thumbnail — looked up
+    // meanwhile — or a SoundCloud track's artwork, once the look-up has found it.
+    const videoCover =
+      link.source === "youtube"
+        ? coverFor({ kind: "youtube", videoId: link.videoId }, songTags)
+        : undefined;
     let info;
     try {
-      info = await fetchAudioInfo(canonical);
+      // A refusal from YouTube is answered at once with a 502 that says so.
+      info = await lookUpAudio(link);
     } catch (err) {
+      if (err instanceof YouTubeRefused) throw err;
       throw new DownloadError(`Couldn't download the audio: ${(err as Error).message}`, {
         cause: err,
       });
@@ -94,6 +101,9 @@ export async function saveIntoFolder(req: Request, res: Response) {
     // Cancelled while we were looking up the video: don't start any work.
     if (clientGone) return;
 
+    const cover =
+      videoCover ??
+      coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
     output = await prepareAudioOutput(format, tags, info.acodec, await cover);
     if (clientGone) return;
     const fileName = `${safeFileName(name || info.title)}.${output.ext}`;
@@ -108,7 +118,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
       stop?.();
     });
 
-    const pipeline = startAudioPipeline(canonical, info.formatId, output.ffmpegArgs, output.prefix);
+    const pipeline = startAudioPipeline(link.url, info.formatId, output.ffmpegArgs, output.prefix);
     stop = pipeline.stop;
     if (clientGone) pipeline.stop(); // cancelled while the file was being made
 
@@ -135,15 +145,20 @@ export async function saveIntoFolder(req: Request, res: Response) {
     await part.closed;
     if (clientGone) return; // the .part file is removed below
     if (writeError) throw folderError(writeError, folder, "write");
+    // Recorded for the source-health report; YouTube may have refused it.
+    const refused = audioEnded(link, ok, reason);
+    if (refused) throw refused;
     if (!ok || bytes === 0) {
-      throw new DownloadError(`Couldn't download the audio: ${reason || "YouTube sent no audio"}`);
+      throw new DownloadError(
+        `Couldn't download the audio: ${reason || `${sourceName(link)} sent no audio`}`,
+      );
     }
 
     // Complete: give it its real name, and add it to the history.
     const saved = await claimName(part.path, folder, fileName);
     part = undefined;
     await storage
-      .createDownload({ url, title: info.title, spotifyId })
+      .createDownload({ url, title: info.title, spotifyId, source: link.source })
       .catch((err) => console.error("Failed to save download history", err));
     send(res, { type: "done", fileName: path.basename(saved), folder, path: saved, bytes });
     res.end();
@@ -156,19 +171,22 @@ export async function saveIntoFolder(req: Request, res: Response) {
   }
 }
 
-// Choosing a free name and renaming onto it happen one save at a time, so two
-// saves of the same song finishing together can't both pick "Song.mp3".
-let naming: Promise<unknown> = Promise.resolve();
-
-function claimName(partPath: string, folder: string, fileName: string): Promise<string> {
-  const run = async () => {
-    const target = await availablePath(folder, fileName);
+/**
+ * Gives a finished file its name: "<name>.<ext>", or "<name> (1).<ext>"… if
+ * that's taken. The name is claimed first (`claimNewName()`: an empty file,
+ * made only if nothing has that name yet), then the .part file is renamed
+ * over it — so saves finishing together never take the same name or replace
+ * a file, and none waits for another.
+ */
+async function claimName(partPath: string, folder: string, fileName: string): Promise<string> {
+  const target = await claimNewName(folder, fileName);
+  try {
     await retryWhenBusy(() => fs.rename(partPath, target));
-    return target;
-  };
-  const result = naming.then(run, run);
-  naming = result.catch(() => {});
-  return result;
+  } catch (err) {
+    await fs.rm(target, { force: true }).catch(() => {}); // the empty name it had claimed
+    throw err;
+  }
+  return target;
 }
 
 /** Stops writing the unfinished file and deletes it. */
@@ -186,12 +204,18 @@ function send(res: Response, event: SaveEvent) {
 
 /** A JSON error response if nothing's been sent yet, otherwise an "error" line. */
 function reportFailure(res: Response, err: unknown) {
-  const status = err instanceof FolderError ? err.status : err instanceof DownloadError ? 502 : 500;
+  const status =
+    err instanceof FolderError || err instanceof YouTubeRefused
+      ? err.status
+      : err instanceof DownloadError
+        ? 502
+        : 500;
   const message = err instanceof Error ? err.message : "Couldn't save the audio.";
   if (status >= 500) console.error(`Saving into the folder failed: ${message}`);
   if (res.writableEnded || res.destroyed) return;
   if (!res.headersSent) {
-    res.status(status).json({ message });
+    if (err instanceof YouTubeRefused) sendRefused(res);
+    else res.status(status).json({ message });
     return;
   }
   send(res, { type: "error", message });

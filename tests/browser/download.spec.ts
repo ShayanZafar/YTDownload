@@ -356,8 +356,10 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
               duration: 19,
               thumbnail: "https://i.ytimg.com/vi/jNQXAC9IVRw/hqdefault.jpg",
               official: true,
+              source: "youtube",
             },
           ],
+          source: "youtube",
           spotify: {
             id,
             url: `https://open.spotify.com/track/${id}`,
@@ -509,7 +511,7 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
     // What the app answers a browser on another device: it can't save into a
     // folder on this computer, so downloads go to that device.
     await page.route("**/api/settings", (route) =>
-      route.fulfill({ json: { saveFolder: null, canSaveToFolder: false } }),
+      route.fulfill({ json: { saveFolder: null, canSaveToFolder: false, cpuCores: 4 } }),
     );
     await page.goto("/");
     await expect(page.getByText(/downloads go to this device's downloads folder/i)).toBeVisible();

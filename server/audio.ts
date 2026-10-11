@@ -1,18 +1,20 @@
 /**
- * Turning a YouTube video into a downloadable audio stream.
+ * Turning a YouTube video (or a SoundCloud track: the same pipeline) into a
+ * downloadable audio stream.
  *
  *   yt-dlp  ──(best audio on stdout)──▶  ffmpeg  ──(file on stdout)──▶  HTTP response
  *                                                                   or a file in the "Save to" folder
  *
  * ffmpeg either converts to MP3 (the default) or, for "original", just
- * repackages YouTube's own stream into a proper audio file without re-encoding.
+ * repackages the source's own stream into a proper audio file without
+ * re-encoding.
  * No temporary files: the browser's download starts with the first chunk (or,
  * with a "Save to" folder, the file is written as the audio arrives).
  * Both binaries are fetched by `npm install` (youtube-dl-exec → yt-dlp,
  * ffmpeg-static → ffmpeg), so there's nothing to install system-wide.
  * Set FFMPEG_BIN to use a different ffmpeg.
  */
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "child_process";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -20,8 +22,10 @@ import { Transform, type Readable } from "stream";
 import ffmpegStatic from "ffmpeg-static";
 import youtubedl from "youtube-dl-exec";
 import type { DownloadFormat } from "@shared/routes";
+import { soundCloudArtworkUrl } from "@shared/soundcloud-link";
 import { retryWhenBusy } from "./retry-when-busy";
 import { ffmetadataValue, flacPictureBlock, id3v2Tag, type SongTags } from "./tags";
+import { pickThumbnail, type ThumbnailLike } from "./youtube-url";
 
 // Flags shared by every yt-dlp call.
 // `jsRuntimes: "node"` — since late 2025 yt-dlp needs a JavaScript runtime to
@@ -127,15 +131,27 @@ export function ffmpegMp3Args(): string[] {
   return [
     ...["-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-map_metadata", "-1"],
     ...["-c:a", "libmp3lame", "-b:a", MP3_BITRATE, "-compression_level", LAME_QUALITY],
-    ...["-write_id3v2", "0", "-f", "mp3", "pipe:1"],
+    // No tag of ffmpeg's own: `-id3v2_version 0` (the mp3 muxer has no
+    // "-write_id3v2", and ignores it — leaving a second ID3v2.4 tag after the app's).
+    ...["-id3v2_version", "0", "-f", "mp3", "pipe:1"],
   ];
 }
 
 /**
- * Where to put YouTube's original stream so it's a normal, tagged audio file.
- * The audio itself is copied bit-for-bit (`-c:a copy`); only the container changes.
+ * Where to put the source's original stream so it's a normal, tagged audio
+ * file. The audio itself is copied bit-for-bit (`-c:a copy`); only the
+ * container changes.
  */
 export function originalContainer(acodec: string | undefined): Container {
+  if (acodec?.startsWith("mp3")) {
+    // MP3 (what SoundCloud often streams) stays an .mp3, with the same
+    // ID3v2.3 tags as a converted one.
+    return {
+      ext: "mp3",
+      contentType: "audio/mpeg",
+      muxerArgs: ["-id3v2_version", "3", "-f", "mp3"],
+    };
+  }
   if (acodec?.startsWith("opus")) {
     // Ogg Opus (.opus) — the standard file for Opus audio. Players treat it as
     // music (a .webm is often mistaken for video) and show its tags.
@@ -157,11 +173,11 @@ export function originalContainer(acodec: string | undefined): Container {
       ],
     };
   }
-  // Anything else YouTube might serve: Matroska audio holds any codec.
+  // Anything else a source might serve: Matroska audio holds any codec.
   return { ext: "mka", contentType: "audio/x-matroska", muxerArgs: ["-f", "matroska"] };
 }
 
-/** The file a download produces, for the requested format and the stream YouTube picked. */
+/** The file a download produces, for the requested format and the stream the source picked. */
 export function audioOutput(
   format: DownloadFormat,
   meta: AudioMetadata,
@@ -245,8 +261,63 @@ export async function prepareAudioOutput(
   }
 }
 
-export function spawnYtDlpAudio(videoUrl: string, format?: string) {
+export function spawnYtDlpAudio(videoUrl: string, format?: string): ChildProcessWithoutNullStreams {
   return spawn(YT_DLP_PATH, ytDlpAudioArgs(videoUrl, format), { windowsHide: true });
+}
+
+const SEARCH_TIMEOUT_MS = 30_000;
+
+/**
+ * Runs yt-dlp directly — never through a shell — so text from the search box
+ * can't be interpreted as a command, and parses its JSON output (a search's or
+ * a playlist's flat listing).
+ */
+export function runYtDlpJson(args: string[], timeoutMs = SEARCH_TIMEOUT_MS): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(YT_DLP_PATH, args, { windowsHide: true });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        const message = Buffer.concat(err).toString("utf8").trim().split(/\r?\n/).pop();
+        return reject(new Error(message || `yt-dlp exited with code ${code}`));
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(out).toString("utf8")));
+      } catch {
+        reject(new Error("yt-dlp returned unexpected search output"));
+      }
+    });
+  });
+}
+
+/** What the page shows for a pasted link before downloading: the title and a thumbnail. */
+export type VideoInfo = { title: string; thumbnail: string };
+
+/**
+ * A YouTube video's title and thumbnail. Only those are kept: yt-dlp's whole
+ * answer lists every format and runs to hundreds of KB.
+ */
+export async function fetchVideoInfo(videoUrl: string): Promise<VideoInfo> {
+  let info: ThumbnailLike & { title?: string };
+  try {
+    info = (await youtubedl(videoUrl, {
+      dumpSingleJson: true,
+      skipDownload: true,
+      ...YT_DLP_BASE_FLAGS,
+    })) as typeof info;
+  } catch (err) {
+    throw new Error(ytDlpFailure(err), { cause: err });
+  }
+  return { title: info.title ?? "Untitled", thumbnail: pickThumbnail(info) };
 }
 
 export function spawnFfmpeg(args: string[]) {
@@ -256,18 +327,34 @@ export function spawnFfmpeg(args: string[]) {
   return spawn(FFMPEG_PATH, args, { windowsHide: true });
 }
 
-/** What the metadata pass found out about a video's audio. */
+/** What the metadata pass found out about a video's (or a track's) audio. */
 export type AudioInfo = AudioMetadata & {
-  /** The audio stream yt-dlp picked; the download is pinned to it. */
+  /**
+   * The audio stream yt-dlp picked; the download is pinned to it. (SoundCloud's
+   * 30-second previews end in "_preview": see soundcloud.ts.)
+   */
   formatId?: string;
-  /** Its codec ("opus", "mp4a.40.2"…), which decides the "original" file type. */
+  /** Its codec ("opus", "mp4a.40.2", "mp3"…), which decides the "original" file type. */
   acodec?: string;
+  /** A SoundCloud track's artwork, 500×500 (for its cover); a YouTube video has none here. */
+  artwork?: string;
 };
 
 /**
+ * A stream's codec: yt-dlp's `acodec` — or, where it doesn't say (SoundCloud's
+ * MP3 and Opus streams can leave it out), what the stream's file type means.
+ */
+export function codecOf({ acodec, ext }: { acodec?: string; ext?: string }): string | undefined {
+  if (acodec && acodec !== "none") return acodec;
+  return ext === "mp3" || ext === "opus" ? ext : undefined;
+}
+
+/**
  * The light metadata pass before a download: the title and artist (for the
- * file name and tags) and which audio stream YouTube will give us. A video
- * that can't be downloaded fails here, before any response or file is started.
+ * file name and tags) and which audio stream the source (YouTube, or
+ * SoundCloud) will give us. Audio that can't be downloaded fails here, before
+ * any response or file is started. `videoUrl` is always a canonical link
+ * (shared/soundcloud-link.ts: `audioLinkOf()`).
  */
 export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
   let info: {
@@ -279,6 +366,8 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     album?: string;
     release_year?: number;
     release_date?: string;
+    ext?: string;
+    thumbnail?: string;
   };
   try {
     info = (await youtubedl(videoUrl, {
@@ -290,13 +379,17 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
   } catch (err) {
     throw new Error(ytDlpFailure(err), { cause: err });
   }
+  const artwork = soundCloudArtworkUrl(info.thumbnail);
   return {
     title: info.title ?? "audio",
     artist: info.uploader ?? info.channel,
     // YouTube Music's uploads say which album the song is from, and when it came out.
     ...youtubeAlbumTags(info),
     formatId: info.format_id,
-    acodec: info.acodec,
+    acodec: codecOf(info),
+    // SoundCloud's artwork, at the size its cover is made from (YouTube's
+    // covers come from the video id instead: cover.ts).
+    ...(artwork ? { artwork } : {}),
   };
 }
 
@@ -331,18 +424,38 @@ export type AudioPipeline = {
 /**
  * Starts yt-dlp → ffmpeg for one video: yt-dlp fetches the audio stream the
  * metadata pass picked, and ffmpeg turns it into the file `ffmpegArgs` describe.
+ * `spawnSource` stands in for yt-dlp in tests (a process that writes audio to
+ * its stdout), so the pipeline's cancel paths are tested without the network.
  */
 export function startAudioPipeline(
   videoUrl: string,
   formatId: string | undefined,
   ffmpegArgs: string[],
   prefix?: Buffer,
+  { spawnSource = spawnYtDlpAudio }: { spawnSource?: typeof spawnYtDlpAudio } = {},
 ): AudioPipeline {
   // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.
   const ffmpeg = spawnFfmpeg(ffmpegArgs);
-  const ytdlp = spawnYtDlpAudio(videoUrl, formatId);
-  const stop = () => {
+  // What the caller reads: ffmpeg's output, with an MP3's tag in front of it.
+  const audio = prefix ? withPrefix(ffmpeg.stdout, prefix) : ffmpeg.stdout;
+  const ytdlp = spawnSource(videoUrl, formatId);
+  const kill = () => {
     for (const p of [ytdlp, ffmpeg]) if (isRunning(p)) p.kill();
+  };
+  let draining = false;
+  const stop = () => {
+    kill();
+    if (draining) return;
+    draining = true;
+    // Whoever was reading the audio may be gone — a cancelled download's
+    // response unpipes it, which pauses it, as the response closes. Let it run
+    // dry instead, even if something pauses it on the way out: an ffmpeg
+    // blocked writing to a full pipe (or to a full prefix stream) never gets
+    // to act on its signal (macOS, Linux), and a process whose output is
+    // never read never "closes".
+    const drain = () => process.nextTick(() => audio.resume());
+    audio.on("pause", drain);
+    drain();
   };
 
   const errors = { ytdlp: "", ffmpeg: "", spawn: "" };
@@ -365,7 +478,7 @@ export function startAudioPipeline(
   // reason it ended, make sure yt-dlp isn't left running.
   const ffmpegCode = new Promise<number | null>((resolve) =>
     ffmpeg.once("close", (code) => resolve(code)),
-  ).finally(stop);
+  ).finally(kill);
   const finished = Promise.all([exitCode(ytdlp), ffmpegCode]).then(([ytdlpCode, ffCode]) => {
     const ok = ytdlpCode === 0 && ffCode === 0 && !errors.spawn;
     const reason = ok
@@ -379,7 +492,7 @@ export function startAudioPipeline(
     return { ok, reason };
   });
 
-  return { audio: prefix ? withPrefix(ffmpeg.stdout, prefix) : ffmpeg.stdout, stop, finished };
+  return { audio, stop, finished };
 }
 
 /**

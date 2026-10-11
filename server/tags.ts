@@ -7,7 +7,7 @@
  * ffmpeg writes MP3 tags itself, but with a cover it can only get the tag's
  * size right by going back to the start of the file afterwards — which a
  * stream (the download, or the save into a folder) can't do. So ffmpeg writes
- * the MP3 without a tag (`-write_id3v2 0`) and the app puts this one in front.
+ * the MP3 without a tag (`-id3v2_version 0`) and the app puts this one in front.
  * ID3v2.3 rather than 2.4: Windows Explorer and many car and phone players
  * only read 2.3.
  */

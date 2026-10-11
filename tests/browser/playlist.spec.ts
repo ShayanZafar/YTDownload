@@ -81,7 +81,7 @@ test.describe("a YouTube playlist", () => {
     });
     await page.route("**/api/search?*", async (route) => {
       asked.searches++;
-      await route.fulfill({ json: { results: [] } });
+      await route.fulfill({ json: { results: [], source: "youtube" } });
     });
 
     await page.goto("/");
@@ -208,7 +208,7 @@ test.describe("a YouTube playlist", () => {
     let searches = 0;
     await page.route("**/api/search?*", async (route) => {
       searches++;
-      await route.fulfill({ json: { results: [] } });
+      await route.fulfill({ json: { results: [], source: "youtube" } });
     });
 
     await page.goto("/");

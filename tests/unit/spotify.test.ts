@@ -1,11 +1,18 @@
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
 import {
   PLAYLIST_EMBED_LIMIT,
   PLAYLIST_MAX_SONGS,
   SpotifyError,
   cleanTrackTitle,
+  fetchOembedTrack,
   fetchSpotifyPlaylist,
+  fetchSpotifyTrack,
+  spotifyTrackCache,
   parseEmbedPage,
+  parseOembed,
   parsePlaylistItemsPage,
   parsePlaylistPage,
   readEmbedAccessToken,
@@ -18,8 +25,23 @@ import {
   unusableLinkError,
 } from "../../server/spotify";
 import { rankResults, type RawSearchEntry } from "../../server/search";
+import { sourceHealth } from "../../server/source-health";
+import { cpuCores } from "../../server/cpu-cores";
 
 const ID = "4u7EnebtmKWzUH433cf5Qv"; // Queen – Bohemian Rhapsody (Remastered 2011)
+
+// Every request to Spotify is recorded for the source-health report, which
+// is written to a file: a throwaway one here, never the app's own.
+let healthDir: string;
+beforeAll(async () => {
+  healthDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-spotify-"));
+  process.env.SOURCE_HEALTH_FILE = path.join(healthDir, "source-health.json");
+});
+afterAll(async () => {
+  await sourceHealth.flush().catch(() => {});
+  delete process.env.SOURCE_HEALTH_FILE;
+  await fs.rm(healthDir, { recursive: true, force: true });
+});
 
 describe("parseSpotifyLink", () => {
   it("reads song links in all their shapes", () => {
@@ -514,6 +536,67 @@ describe("fetchSpotifyPlaylist", () => {
     expect((await fetchSpotifyPlaylist("playlist", PLAYLIST)).tracks).toHaveLength(100);
   });
 
+  it("asks for the remaining pages together once the first says how many there are", async () => {
+    // The answer for each request, once the test says (by offset; the embed page at once).
+    const answers = new Map<string, (res: Response) => void>();
+    const fetch = vi.fn((url: string) =>
+      url.startsWith("https://open.spotify.com/")
+        ? Promise.resolve(page(full))
+        : new Promise<Response>((resolve) =>
+            answers.set(new URL(url).searchParams.get("offset")!, resolve),
+          ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const answered = new Set<string>();
+    const waiting = () => [...answers.keys()].filter((offset) => !answered.has(offset));
+    const answer = (offset: string) => {
+      answered.add(offset);
+      const from = Number(offset);
+      answers.get(offset)!(apiPage(from, Math.min(from + 100, 450), 450));
+    };
+
+    const playlist = fetchSpotifyPlaylist("playlist", PLAYLIST);
+    await vi.waitFor(() => expect(waiting()).toEqual(["100"]));
+    answer("100");
+    // Pages 200, 300 and 400 go out together: as many at once as this computer has cores.
+    await vi.waitFor(() =>
+      expect(waiting()).toEqual(["200", "300", "400"].slice(0, Math.min(cpuCores(), 3))),
+    );
+    // Answered last page first, the songs still come in the playlist's order.
+    while (answered.size < 4) {
+      await vi.waitFor(() => expect(waiting().length).toBeGreaterThan(0));
+      answer(waiting().sort((a, b) => Number(b) - Number(a))[0]);
+    }
+    const done = await playlist;
+    expect(done.tracks).toHaveLength(450);
+    expect(done.tracks.map((t) => t.title).slice(199, 202)).toEqual([
+      "Song 199",
+      "Song 200",
+      "Song 201",
+    ]);
+    expect(done.maybeMore).toBe(false);
+  });
+
+  it("keeps the songs before a page that fails, even when later pages came", async () => {
+    stubFetch(
+      page(full),
+      apiPage(100, 200, 500),
+      apiPage(200, 300, 500),
+      json({}, 500),
+      apiPage(400, 500, 500),
+    );
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(300);
+    expect(playlist.maybeMore).toBe(true);
+  });
+
+  it("stops at a short page before the end, rather than leave a gap", async () => {
+    stubFetch(page(full), apiPage(100, 200, 400), apiPage(200, 250, 400), apiPage(300, 400, 400));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(250);
+    expect(playlist.maybeMore).toBe(true);
+  });
+
   it(`stops at ${PLAYLIST_MAX_SONGS} songs`, async () => {
     const total = PLAYLIST_MAX_SONGS + 500;
     const pages = [];
@@ -556,6 +639,12 @@ describe("spotifySearchQuery", () => {
       }),
     ).toBe("Daft Punk Get Lucky audio");
     expect(spotifySearchQuery({ title: "Song", artists: [] })).toBe("Song audio");
+  });
+
+  it("leaves out “audio” on SoundCloud, whose tracks are all audio", () => {
+    const track = { title: "One More Time", artists: ["Daft Punk"] };
+    expect(spotifySearchQuery(track, "soundcloud")).toBe("Daft Punk One More Time");
+    expect(spotifySearchQuery(track, "youtube")).toBe("Daft Punk One More Time audio");
   });
 });
 
@@ -684,5 +773,169 @@ describe("resolveShortLink", () => {
     });
     await expect(readSpotifyLink("daft punk")).resolves.toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseOembed", () => {
+  it("reads the title and cover: all the oEmbed endpoint knows", () => {
+    expect(
+      parseOembed(
+        {
+          title: "Bohemian Rhapsody - Remastered 2011",
+          thumbnail_url: "https://i.scdn.co/image/ab67616d00001e02",
+          provider_name: "Spotify",
+        },
+        ID,
+      ),
+    ).toEqual({
+      id: ID,
+      url: `https://open.spotify.com/track/${ID}`,
+      title: "Bohemian Rhapsody - Remastered 2011",
+      artists: [],
+      duration: null,
+      thumbnail: "https://i.scdn.co/image/ab67616d00001e02",
+      source: "spotify-oembed",
+    });
+    expect(parseOembed({ title: "Song" }, ID).thumbnail).toBeNull();
+  });
+
+  it("fails clearly without a title", () => {
+    for (const json of [{}, null, { title: " " }, { title: 42 }]) {
+      expect(() => parseOembed(json, ID)).toThrow(SpotifyError);
+    }
+  });
+});
+
+describe("fetchSpotifyTrack", () => {
+  const trackPage = () => new Response(embedPage({ state: { data: { entity: trackEntity } } }));
+  const oembed = (status = 200) =>
+    new Response(
+      JSON.stringify({
+        title: "Bohemian Rhapsody - Remastered 2011",
+        thumbnail_url: "https://i.scdn.co/image/cover",
+      }),
+      { status, headers: { "content-type": "application/json" } },
+    );
+  const answer = (status: number, headers: Record<string, string> = {}) =>
+    new Response(status === 204 ? null : "error", { status, headers });
+  /** Spotify's answers, in turn: a response, or an error to throw (no answer at all). */
+  const stubFetch = (...responses: (Response | Error)[]) => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => {
+      const next = responses.shift();
+      if (!next) throw new TypeError("fetch failed");
+      if (next instanceof Error) throw next;
+      return next;
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    spotifyTrackCache.clear();
+  });
+  const healthOf = (source: "spotify" | "spotify-oembed") => {
+    const { ok, failed, throttled } = sourceHealth.report().sources[source];
+    return { ok, failed, throttled };
+  };
+
+  it("reads the song from its embed page, and records that Spotify answered", async () => {
+    const before = healthOf("spotify");
+    const fetch = stubFetch(trackPage());
+    const track = await fetchSpotifyTrack(ID);
+    expect(track).toMatchObject({
+      title: "Bohemian Rhapsody - Remastered 2011",
+      artists: ["Queen"],
+    });
+    expect(track.source).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe(`https://open.spotify.com/embed/track/${ID}`);
+    expect(healthOf("spotify").ok).toBe(before.ok + 1);
+  });
+
+  it("asks Spotify once about a song it has just read — but again after a fallback's answer", async () => {
+    const fetch = stubFetch(trackPage());
+    const first = await fetchSpotifyTrack(ID);
+    expect(await fetchSpotifyTrack(ID)).toBe(first);
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    spotifyTrackCache.clear();
+    const fallback = stubFetch(answer(503), oembed(), trackPage());
+    expect((await fetchSpotifyTrack(ID)).source).toBe("spotify-oembed");
+    expect((await fetchSpotifyTrack(ID)).source).toBeUndefined(); // the whole song, this time
+    expect(fallback).toHaveBeenCalledTimes(3);
+  });
+
+  it("goes straight to the oEmbed endpoint after a 429 — no retry, no waiting", async () => {
+    // Fake timers: a wait (Retry-After, a back-off) would never end, and the test with it.
+    vi.useFakeTimers();
+    const before = { spotify: healthOf("spotify"), oembed: healthOf("spotify-oembed") };
+    const fetch = stubFetch(answer(429, { "retry-after": "30" }), oembed());
+    const track = await fetchSpotifyTrack(ID);
+    expect(track.source).toBe("spotify-oembed");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(healthOf("spotify")).toEqual({
+      ok: before.spotify.ok,
+      failed: before.spotify.failed + 1,
+      throttled: before.spotify.throttled + 1,
+    });
+    expect(healthOf("spotify-oembed").ok).toBe(before.oembed.ok + 1);
+  });
+
+  it("falls back to the oEmbed endpoint at once when the embed page can't be read", async () => {
+    vi.useFakeTimers();
+    const timedOut = () =>
+      Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
+    // A 429, a 5xx, no answer in time, or a page whose shape has changed.
+    for (const responses of [
+      [answer(429), oembed()],
+      [answer(503), oembed()],
+      [timedOut(), oembed()],
+      [new Response("<html>nothing here</html>"), oembed()],
+    ]) {
+      const before = healthOf("spotify-oembed");
+      const fetch = stubFetch(...responses);
+      const track = await fetchSpotifyTrack(ID);
+      expect(track).toEqual({
+        id: ID,
+        url: `https://open.spotify.com/track/${ID}`,
+        title: "Bohemian Rhapsody - Remastered 2011",
+        artists: [],
+        duration: null,
+        thumbnail: "https://i.scdn.co/image/cover",
+        source: "spotify-oembed",
+      });
+      const last = fetch.mock.calls.at(-1)!;
+      const url = new URL(last[0]);
+      expect(url.origin + url.pathname).toBe("https://open.spotify.com/oembed");
+      expect(url.searchParams.get("url")).toBe(`https://open.spotify.com/track/${ID}`);
+      expect(healthOf("spotify-oembed").ok).toBe(before.ok + 1);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("doesn't fall back for a song Spotify doesn't have", async () => {
+    const fetch = stubFetch(answer(404), oembed());
+    await expect(fetchSpotifyTrack(ID)).rejects.toMatchObject({ status: 404 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    const inPage = stubFetch(new Response(embedPage({ status: 404, title: "Page not found" })));
+    await expect(fetchSpotifyTrack(ID)).rejects.toMatchObject({ status: 404 });
+    expect(inPage).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the embed page's problem when the fallback fails too", async () => {
+    stubFetch(answer(503), answer(500));
+    await expect(fetchSpotifyTrack(ID)).rejects.toThrow(/HTTP 503/);
+    stubFetch(answer(503)); // and then no connection at all
+    await expect(fetchSpotifyTrack(ID)).rejects.toThrow(/HTTP 503/);
+  });
+
+  it("asks the oEmbed endpoint only about a valid song id", async () => {
+    const fetch = stubFetch(oembed());
+    await expect(fetchOembedTrack("not-an-id")).rejects.toMatchObject({ status: 400 });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(fetchOembedTrack(ID)).resolves.toMatchObject({ source: "spotify-oembed" });
   });
 });

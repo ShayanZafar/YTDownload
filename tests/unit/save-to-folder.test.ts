@@ -5,6 +5,7 @@ import {
   parseSaveEvent,
   saveOnServer,
 } from "../../client/src/lib/save-to-folder";
+import { REFUSED_MESSAGE } from "../../server/youtube-limits";
 
 const encoder = new TextEncoder();
 const SONG = { url: "https://www.youtube.com/watch?v=jNQXAC9IVRw", format: "mp3" as const };
@@ -79,6 +80,35 @@ describe("saveOnServer", () => {
     const failure = saveOnServer(SONG, { fetchImpl });
     await expect(failure).rejects.toBeInstanceOf(ApiError);
     await expect(failure).rejects.toMatchObject({ status: 404, message: /doesn't exist/ });
+  });
+
+  it("says when YouTube refused the save (it's limiting the computer): a 502 that says so", async () => {
+    const message = REFUSED_MESSAGE;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message, source: "youtube", limited: true }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const failure = saveOnServer(SONG, { fetchImpl });
+    await expect(failure).rejects.toBeInstanceOf(ApiError);
+    await expect(failure).rejects.toMatchObject({ status: 502, limited: true, message });
+  });
+
+  it("isn't limited for any other failure", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ message: "Couldn't download the audio: gone" }), {
+          status: 502,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    await expect(saveOnServer(SONG, { fetchImpl })).rejects.toMatchObject({
+      status: 502,
+      limited: false,
+      message: "Couldn't download the audio: gone",
+    });
   });
 
   it("notices when the answer stops before the file is saved", async () => {

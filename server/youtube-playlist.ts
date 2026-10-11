@@ -5,7 +5,8 @@
  */
 import type { SpotifyPlaylist, SpotifyPlaylistTrack } from "@shared/schema";
 import { extractPlaylistId } from "@shared/youtube-link";
-import { runYtDlpJson } from "./search";
+import { runYtDlpJson } from "./audio";
+import { YouTubeRefused, playlistCacheKey, youtubeGuard } from "./youtube-limits";
 
 /** The most videos listed: more takes YouTube many seconds, and is more than anyone picks from. */
 export const YOUTUBE_PLAYLIST_LIMIT = 500;
@@ -152,14 +153,23 @@ export function playlistFailure(message: string): YouTubePlaylistError {
   return new YouTubePlaylistError(502, `Couldn't read the playlist from YouTube: ${reason}`);
 }
 
-/** The videos in a public YouTube playlist (the first 500). */
+/**
+ * The videos in a public YouTube playlist (the first 500). Through
+ * `youtubeGuard` (youtube-limits.ts): a playlist listed lately comes from its
+ * cache, and when YouTube refuses it throws `YouTubeRefused` at once. There's
+ * no other source for a YouTube playlist, so YouTube is always asked.
+ */
 export async function fetchYouTubePlaylist(link: string): Promise<SpotifyPlaylist> {
   const id = youtubePlaylistIdOf(link);
-  let raw: unknown;
   try {
-    raw = await runYtDlpJson(ytDlpPlaylistArgs(id), PLAYLIST_TIMEOUT_MS);
+    // Parsed inside, so the cache holds the playlist as sent, not yt-dlp's whole listing.
+    return await youtubeGuard.run({
+      key: playlistCacheKey(id),
+      attempt: async () =>
+        parsePlaylistJson(await runYtDlpJson(ytDlpPlaylistArgs(id), PLAYLIST_TIMEOUT_MS), id),
+    });
   } catch (err) {
+    if (err instanceof YouTubeRefused) throw err;
     throw playlistFailure(err instanceof Error ? err.message : String(err));
   }
-  return parsePlaylistJson(raw, id);
 }

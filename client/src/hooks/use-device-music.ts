@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { readDeviceTags, type DeviceTags } from "@/lib/device-music";
 import { deviceTrack, isAudioFile, type PlayerTrack } from "@/lib/music";
 
-/** Songs whose tags are read at the same time. */
-const READ_AT_ONCE = 4;
+/**
+ * Songs whose tags are read at the same time: one per CPU core of this device
+ * — they're read here, in the page — never a number of our own.
+ */
+const readAtOnce = () => Math.max(1, navigator.hardwareConcurrency || 1);
 /** How often the list takes in the tags read so far, while many are being read. */
 const SHOW_TAGS_EVERY_MS = 250;
 
@@ -65,7 +68,7 @@ export function useDeviceMusic() {
           flushTimer.current ??= setTimeout(flush, SHOW_TAGS_EVERY_MS);
         }
       };
-      Array.from({ length: Math.min(READ_AT_ONCE, fresh.length) }, worker);
+      Array.from({ length: Math.min(readAtOnce(), fresh.length) }, worker);
       return fresh.length;
     },
     [flush],

@@ -2,14 +2,17 @@
  * Cover art for downloads: the album cover from Spotify for a Spotify song,
  * otherwise the video's thumbnail from YouTube, cut to a square (the middle
  * of the picture — for a YouTube Music upload, that's exactly the album
- * cover) and made a JPEG of at most 600×600, which every player shows.
+ * cover), or a SoundCloud track's artwork, made a JPEG of at most 600×600,
+ * which every player shows.
  *
  * Only YouTube's thumbnail host (at an address built from the validated video
- * id) and Spotify's image hosts are ever fetched. A cover that can't be had
+ * id), Spotify's image hosts and SoundCloud's (a validated 500×500 artwork
+ * address, shared/soundcloud-link.ts) are ever fetched. A cover that can't be had
  * quickly is simply left out: the download never waits on it for long or
  * fails because of it.
  */
 import { spawn } from "child_process";
+import { isSoundCloudArtworkUrl } from "@shared/soundcloud-link";
 import { FFMPEG_PATH } from "./audio";
 import { jpegSize } from "./tags";
 
@@ -24,8 +27,14 @@ const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const SPOTIFY_COVER_RE =
   /^https:\/\/(?:i\.scdn\.co|image-cdn-[a-z]{2}\.spotifycdn\.com)\/image\/[a-f0-9]{16,64}$/;
 
-/** Where a cover can come from: a Spotify album cover, or a YouTube video's thumbnails. */
-export type CoverSource = { kind: "spotify"; url: string } | { kind: "youtube"; videoId: string };
+/**
+ * Where a cover can come from: a Spotify album cover, a YouTube video's
+ * thumbnails, or a SoundCloud track's artwork.
+ */
+export type CoverSource =
+  | { kind: "spotify"; url: string }
+  | { kind: "youtube"; videoId: string }
+  | { kind: "soundcloud"; url: string };
 
 /** Is this the address of a Spotify cover picture (so the app may fetch it)? */
 export const isSpotifyCoverUrl = (url: string) => SPOTIFY_COVER_RE.test(url);
@@ -44,7 +53,8 @@ export function youtubeThumbnailUrls(videoId: string): string[] {
 /**
  * ffmpeg's filter that makes a picture a square cover: the middle square of a
  * 16:9 video picture (inside the black bars of a 4:3 thumbnail), or a Spotify
- * cover as it is (already square), no bigger than COVER_SIZE.
+ * cover or SoundCloud artwork as it is (already square), no bigger than
+ * COVER_SIZE.
  */
 export function coverFilter(kind: CoverSource["kind"]): string {
   // Commas inside an expression are escaped: in a filter they separate filters.
@@ -66,9 +76,13 @@ export async function fetchCover(source: CoverSource): Promise<Buffer | undefine
   const urls =
     source.kind === "youtube"
       ? youtubeThumbnailUrls(source.videoId)
-      : isSpotifyCoverUrl(source.url)
-        ? [source.url]
-        : [];
+      : source.kind === "spotify"
+        ? isSpotifyCoverUrl(source.url)
+          ? [source.url]
+          : []
+        : isSoundCloudArtworkUrl(source.url)
+          ? [source.url]
+          : [];
   for (const url of urls) {
     const picture = await fetchImage(url);
     if (picture) return squareJpeg(picture, source.kind).catch(() => undefined);
@@ -115,19 +129,20 @@ export function squareJpeg(picture: Buffer, kind: CoverSource["kind"]): Promise<
 const COVER_WAIT_MS = 10_000;
 
 /**
- * The cover for a download of this video: the Spotify album cover when the
- * song's Spotify details have one, otherwise the video's thumbnail — or
- * undefined if neither comes within COVER_WAIT_MS. Never fails.
+ * The cover for a download: the Spotify album cover when the song's Spotify
+ * details have one, otherwise `own` — the video's thumbnail, or the SoundCloud
+ * track's artwork — or undefined if none comes within COVER_WAIT_MS. Never
+ * fails.
  */
 export function coverFor(
-  videoId: string,
+  own: Exclude<CoverSource, { kind: "spotify" }> | undefined,
   spotify?: Promise<{ coverUrl?: string } | undefined>,
 ): Promise<Buffer | undefined> {
   const find = async () => {
     const url = (await spotify)?.coverUrl;
     return (
       (url ? await fetchCover({ kind: "spotify", url }) : undefined) ??
-      (await fetchCover({ kind: "youtube", videoId }))
+      (own ? await fetchCover(own) : undefined)
     );
   };
   let timer: NodeJS.Timeout | undefined;

@@ -124,7 +124,7 @@ test.describe("Music player (browser)", () => {
   }) => {
     // What the app answers a browser on another device.
     await page.route("**/api/settings", (route) =>
-      route.fulfill({ json: { saveFolder: null, canSaveToFolder: false } }),
+      route.fulfill({ json: { saveFolder: null, canSaveToFolder: false, cpuCores: 4 } }),
     );
     const sent: string[] = [];
     page.on("request", (req) => {

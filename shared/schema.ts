@@ -5,6 +5,13 @@ export const spotifyIdSchema = z
   .string()
   .regex(/^[A-Za-z0-9]{22}$/, "That isn't a Spotify song id");
 
+/**
+ * Where audio comes from: YouTube, or SoundCloud — the fallback a search uses
+ * when YouTube can't answer (see docs/sources.md). Left out means YouTube.
+ */
+export const audioSources = ["youtube", "soundcloud"] as const;
+export type AudioSource = (typeof audioSources)[number];
+
 /** One entry in the download history (stored in data/history.json by the server). */
 export const downloadSchema = z.object({
   id: z.number().int(),
@@ -17,6 +24,8 @@ export const downloadSchema = z.object({
    * or playlist), so the playlist panel can show which songs you already have.
    */
   spotifyId: z.string().optional(),
+  /** Where the audio came from, when it wasn't YouTube. */
+  source: z.enum(audioSources).optional(),
 });
 
 export type Download = z.infer<typeof downloadSchema>;
@@ -39,7 +48,7 @@ export const lyricsSchema = z.object({
 });
 export type Lyrics = z.infer<typeof lyricsSchema>;
 
-/** One song search result (a YouTube video). */
+/** One song search result: a YouTube video, or a SoundCloud track (`source`). */
 export const searchResultSchema = z.object({
   id: z.string(),
   url: z.string(),
@@ -50,6 +59,8 @@ export const searchResultSchema = z.object({
   thumbnail: z.string(),
   /** Uploaded by the artist or label ("Artist - Topic", VEVO, or the artist's own verified channel). */
   official: z.boolean(),
+  /** Where it is: YouTube when left out, or SoundCloud (searched when YouTube can't answer). */
+  source: z.enum(audioSources).optional(),
 });
 
 export type SearchResult = z.infer<typeof searchResultSchema>;
@@ -59,6 +70,14 @@ export type SearchResult = z.infer<typeof searchResultSchema>;
  * the same recording (ranked first, and marked "Same length" in the results).
  */
 export const SAME_LENGTH_SECONDS = 5;
+
+/**
+ * Where a song's details came from: Spotify's embed page (the usual; left
+ * out), or Spotify's oEmbed endpoint — the fallback when the embed page can't
+ * be read, which knows only the title and cover: no artists, no length.
+ */
+export const spotifyTrackSources = ["spotify", "spotify-oembed"] as const;
+export type SpotifyTrackSource = (typeof spotifyTrackSources)[number];
 
 /** A song read from a Spotify link, used to find the same recording on YouTube. */
 export const spotifyTrackSchema = z.object({
@@ -70,10 +89,12 @@ export const spotifyTrackSchema = z.object({
   duration: z.number().nullable(),
   /** Cover art. */
   thumbnail: z.string().nullable(),
+  /** Present when the details came from a fallback (see `spotifyTrackSources`). */
+  source: z.enum(spotifyTrackSources).optional(),
 });
 
 export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
-export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId">;
+export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId" | "source">;
 
 /** One song in a Spotify playlist or album, as the playlist panel lists it. */
 /** A YouTube video id: 11 letters, digits, - and _. */
@@ -143,6 +164,12 @@ export const saveSettingsSchema = z.object({
    * app can — elsewhere (e.g. a phone) downloads go to that device instead.
    */
   canSaveToFolder: z.boolean(),
+  /**
+   * The CPU cores of the computer running the app: "Download all" works on
+   * this many songs at once. (The page may be on a phone, whose own count
+   * says nothing about the app's computer.)
+   */
+  cpuCores: z.number().int().positive(),
 });
 
 export type SaveSettings = z.infer<typeof saveSettingsSchema>;
@@ -261,3 +288,43 @@ export const saveEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SaveEvent = z.infer<typeof saveEventSchema>;
+
+/**
+ * How the outside sources the app depends on have been answering (the last
+ * 24 hours), as `GET /api/health/sources` and `data/source-health.json` report
+ * it (see server/source-health.ts). A source is `primary` for a job (`for`),
+ * or a `fallback` tried when the primary fails.
+ */
+export const sourceRoles = ["primary", "fallback"] as const;
+
+export const sourceHealthSchema = z.object({
+  role: z.enum(sourceRoles),
+  /** The job it's for: "audio", "song details". */
+  for: z.string(),
+  /** Attempts that worked, in the last 24 hours. */
+  ok: z.number(),
+  failed: z.number(),
+  /** Of the failed: the source said to slow down (HTTP 429, "too many requests"). */
+  throttled: z.number(),
+  /** When it last worked (ISO 8601), or null. */
+  lastOk: z.string().nullable(),
+  /** What its last failure said, or null. */
+  lastError: z.string().nullable(),
+});
+
+export type SourceHealth = z.infer<typeof sourceHealthSchema>;
+
+export const sourceHealthReportSchema = z.object({
+  updatedAt: z.string(),
+  /**
+   * True when some job can't be done: its primary source is unreliable (at
+   * least 5 attempts in 24 hours, under half of them successful) and so is
+   * every fallback that could stand in for it.
+   */
+  unreliable: z.boolean(),
+  /** One plain sentence: "YouTube: 2 of 20 requests succeeded in the last 24 h (last error: …)." */
+  summary: z.string(),
+  sources: z.record(z.string(), sourceHealthSchema),
+});
+
+export type SourceHealthReport = z.infer<typeof sourceHealthReportSchema>;

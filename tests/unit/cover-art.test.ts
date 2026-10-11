@@ -136,7 +136,7 @@ describe("the MP3 tag (id3v2Tag)", () => {
 describe("MP3 downloads", () => {
   it("leave the tag to the app: ffmpeg writes none", () => {
     const out = audioOutput("mp3", { title: "Song", artist: "Someone" });
-    expect(out.ffmpegArgs[out.ffmpegArgs.indexOf("-write_id3v2") + 1]).toBe("0");
+    expect(out.ffmpegArgs[out.ffmpegArgs.indexOf("-id3v2_version") + 1]).toBe("0");
     expect(out.ffmpegArgs.join(" ")).not.toContain("title=");
     expect(out.prefix?.subarray(0, 3).toString()).toBe("ID3");
   });
@@ -173,6 +173,13 @@ describe("covers", () => {
     expect(jpegSize(await squareJpeg(await picture("300x300"), "spotify"))).toEqual({
       width: 300,
       height: 300,
+    });
+  });
+
+  it("are a SoundCloud track's artwork as it is, no bigger than COVER_SIZE", async () => {
+    expect(jpegSize(await squareJpeg(await picture("500x500"), "soundcloud"))).toEqual({
+      width: 500,
+      height: 500,
     });
   });
 

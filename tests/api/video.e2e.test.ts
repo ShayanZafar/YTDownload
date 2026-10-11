@@ -9,6 +9,7 @@ import os from "os";
 import { parseBuffer, parseFile } from "music-metadata";
 import { verifyMp3File } from "../utils/mp3";
 import { verifyOriginalAudioFile } from "../utils/original-audio";
+import { sourceHealth } from "../../server/source-health";
 
 // Stable, public, non-restricted test video:
 // "Me at the zoo" - the very first video uploaded to YouTube (April 2005).
@@ -33,6 +34,7 @@ beforeAll(async () => {
   historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-history-"));
   process.env.HISTORY_FILE = path.join(historyDir, "history.json");
   process.env.SETTINGS_FILE = path.join(historyDir, "settings.json");
+  process.env.SOURCE_HEALTH_FILE = path.join(historyDir, "source-health.json");
 
   // Mirror the minimum middleware stack that server/index.ts sets up,
   // so we can attach Supertest to the real route handlers without starting
@@ -53,8 +55,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   cancelRequestsStillGoing();
+  // The report of this run's YouTube calls is written on a timer: write it
+  // now, before its folder goes.
+  await sourceHealth.flush().catch(() => {});
   delete process.env.HISTORY_FILE;
   delete process.env.SETTINGS_FILE;
+  delete process.env.SOURCE_HEALTH_FILE;
   await fs.rm(historyDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
@@ -465,7 +471,11 @@ describe("Save to folder (API)", () => {
 
   it("starts with downloads going to the browser, and won't save before a folder is chosen", async () => {
     const settings = await request(app).get("/api/settings");
-    expect(settings.body).toEqual({ saveFolder: null, canSaveToFolder: true });
+    expect(settings.body).toEqual({
+      saveFolder: null,
+      canSaveToFolder: true,
+      cpuCores: os.availableParallelism(),
+    });
 
     const { res, error } = await save({ url: TEST_VIDEO_URL });
     expect(res.status).toBe(409);
@@ -513,7 +523,11 @@ describe("Save to folder (API)", () => {
   it("saves the MP3 straight into the chosen folder, reporting progress", async () => {
     const chosen = await setFolder(saveDir);
     expect(chosen.status).toBe(200);
-    expect(chosen.body).toEqual({ saveFolder: saveDir, canSaveToFolder: true });
+    expect(chosen.body).toEqual({
+      saveFolder: saveDir,
+      canSaveToFolder: true,
+      cpuCores: os.availableParallelism(),
+    });
     const before = (await historyFor(TEST_VIDEO_URL)).length;
 
     const { res, events, done } = await save({ url: TEST_VIDEO_URL });

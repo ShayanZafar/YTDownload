@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { constants, promises as fs, type WriteStream } from "fs";
+import type { FileHandle } from "fs/promises";
 import os from "os";
 import path from "path";
 import { safeFileName } from "@shared/filename";
@@ -243,38 +244,61 @@ export function numberedName(fileName: string, n: number): string {
   return `${fileName.slice(0, fileName.length - ext.length)} (${n})${ext}`;
 }
 
-/** `folder/name.ext`, or `name (1).ext`, `name (2).ext`… if taken — never overwrite. */
-export async function availablePath(folder: string, fileName: string): Promise<string> {
+/**
+ * Did opening `candidate` with "wx" fail because something already has that
+ * name? EEXIST says so — but for a folder of that name Windows may answer
+ * "access denied" instead, so then look.
+ */
+async function nameTaken(err: unknown, candidate: string): Promise<boolean> {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EEXIST") return true;
+  if (code !== "EPERM" && code !== "EACCES" && code !== "EISDIR") return false;
+  return fs.lstat(candidate).then(
+    () => true,
+    () => false,
+  );
+}
+
+/**
+ * Opens a new, empty file — `name`, or `name (1)`, `name (2)`… if that's
+ * taken (by a file or a folder). The system itself refuses to open an
+ * existing name this way ("wx"), so two saves at once can never get the same
+ * file, and neither waits for the other.
+ */
+async function openNewFile(
+  folder: string,
+  fileName: string,
+): Promise<{ path: string; handle: FileHandle }> {
   for (let n = 0; n < 1000; n++) {
     const candidate = path.join(folder, numberedName(fileName, n));
-    const taken = await fs.lstat(candidate).then(
-      () => true,
-      (err: NodeJS.ErrnoException) => err.code !== "ENOENT",
-    );
-    if (!taken) return candidate;
+    try {
+      return { path: candidate, handle: await fs.open(candidate, "wx") };
+    } catch (err) {
+      if (!(await nameTaken(err, candidate))) throw folderError(err, folder, "write");
+    }
   }
   throw new FolderError(409, `Too many files named “${fileName}” in that folder.`);
 }
 
-/**
- * Creates a new, empty file for writing — `name`, or `name (1)`… if that's
- * taken. The system itself refuses to open an existing file this way ("wx"),
- * so two downloads saving at once can never write into the same file.
- */
+/** Creates a new, empty file for writing — `name`, or `name (1)`… if that's taken. */
 export async function createNewFile(
   folder: string,
   fileName: string,
 ): Promise<{ path: string; stream: WriteStream }> {
-  for (let n = 0; n < 1000; n++) {
-    const candidate = path.join(folder, numberedName(fileName, n));
-    try {
-      const handle = await fs.open(candidate, "wx");
-      return { path: candidate, stream: handle.createWriteStream() };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw folderError(err, folder, "write");
-    }
-  }
-  throw new FolderError(409, `Too many files named “${fileName}” in that folder.`);
+  const { path: file, handle } = await openNewFile(folder, fileName);
+  return { path: file, stream: handle.createWriteStream() };
+}
+
+/**
+ * Claims the name a finished file is to have: makes it, empty — `name`, or
+ * `name (1)`… if that's taken — and returns its path, for the finished file
+ * to be renamed over. Saves finishing at the same moment each claim a
+ * different name, without a lock: the system decides ("wx").
+ */
+export async function claimNewName(folder: string, fileName: string): Promise<string> {
+  const { path: file, handle } = await openNewFile(folder, fileName);
+  await handle.close();
+  return file;
 }
 
 /** A file-system error as a message for the page, with a fitting HTTP status. */

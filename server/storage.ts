@@ -78,6 +78,8 @@ export class FileStorage implements IStorage {
         title: insert.title,
         downloadedAt: new Date().toISOString(),
         ...(insert.spotifyId ? { spotifyId: insert.spotifyId } : {}),
+        // YouTube is the default, so only another source is written down.
+        ...(insert.source && insert.source !== "youtube" ? { source: insert.source } : {}),
       };
       return { entries: [entry, ...entries], result: entry };
     });
