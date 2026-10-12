@@ -266,14 +266,23 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   `globalSetup` (`scripts/leftovers.ts`) deletes what stopped runs left (a Playwright run's server
   files once its process is gone, other test folders a day old), and `scripts/clean.ts` everything
   at once (`clean-script.test.ts` checks every name)
+- `docs/core-flows.md` — the core flows (what a person relies on the app for), each naming a unit,
+  an integration and a UI test (`file` › exact title), `—` for a gap, and `Gaps allowed: N`.
+  `scripts/core-flows.ts` (`npm run core-flows`, in verify) checks it, with the pure rules in
+  `scripts/core-flows-rules.ts` (`tests/unit/core-flows.test.ts`): each named test exists, unit and
+  integration tests are ones verify runs, UI tests are `tests/browser` specs, and the gaps equal
+  the allowed count. Integration means real routes/pipeline with stand-ins (`audio-routes.test.ts`,
+  the music and history API tests); a browser test counts only if it runs on stand-ins (`page.route`,
+  ffmpeg-made songs) — several in `download.spec.ts` need live YouTube or Spotify and don't
 
 ## Commands
 
 - `npm run verify` — the one check before a change is done: `prettier --check`, `eslint`, `tsc`,
   `npm run licenses` (every dependency must carry a free, open-source licence; `ffmpeg-static`, GPL like
   ffmpeg itself, is the one agreed exception, so a new copyleft or non-open package fails the check rather
-  than widening the list), then the unit tests and the music and history API tests (no network). CI runs the same script on every push and pull
+  than widening the list), `npm run core-flows`, then the unit tests and the music and history API tests (no network). CI runs the same script on every push and pull
   request
+- `npm run core-flows` — checks `docs/core-flows.md` against the tests (one line when all is well)
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
   `scripts\windows\start.cmd` (`scripts/unix/start.sh` on macOS and Linux) does the same with install checks and opens the browser
 - `npm run check` — type-check
@@ -448,6 +457,12 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   with a unit test that runs without the network — the player's tests show how to make songs with
   ffmpeg instead of downloading them. If the change can only be checked against YouTube or Spotify,
   run `tests/api` or the browser tests too and say which ones you ran.
+- Core flows (`docs/core-flows.md`): every flow names a test at each level — unit (one module, no
+  network), integration (several parts through the real routes or pipeline, outside services
+  played by stand-ins) and UI (a real browser driving the running app, on stand-ins). A change to
+  a core flow updates its tests at all three levels in the same change; a new feature adds its
+  flow and all three tests before it's done. Closing a gap lowers `Gaps allowed`; it never goes up.
+  Tests against live services stay separate (`tests/api`'s YouTube/SoundCloud/Spotify tests).
 - Docs match the code: a new file, route, command or environment variable goes in this file's Layout,
   Commands or Local setup, and anything a user sees goes in `README.md` / `docs/run/README.md`.
 - Never skip or delete a test, loosen a check, or add an `eslint-disable` / `@ts-expect-error` to get
