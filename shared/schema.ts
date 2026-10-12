@@ -134,6 +134,14 @@ export type PlaylistSource = (typeof playlistSources)[number];
 /** The most songs the app lists of a Spotify playlist. */
 export const SPOTIFY_PLAYLIST_MAX_SONGS = 1000;
 
+/**
+ * Why the app lists no more of a Spotify playlist: Spotify refused (HTTP 429,
+ * "too many requests", with a time to ask again), the request failed, Spotify
+ * shares only the first 100 songs of its own playlists (HTTP 404), or the
+ * app's limit of `SPOTIFY_PLAYLIST_MAX_SONGS`.
+ */
+export const playlistMoreReasons = ["refused", "failed", "spotify-own", "limit"] as const;
+
 export const spotifyPlaylistSchema = z.object({
   source: z.enum(playlistSources).default("spotify"),
   kind: z.enum(["playlist", "album"]),
@@ -151,9 +159,27 @@ export const spotifyPlaylistSchema = z.object({
    * Spotify playlist and the first 500 videos of a YouTube playlist.
    */
   maybeMore: z.boolean(),
+  /**
+   * Why a Spotify playlist stopped short, when the app knows: with
+   * `maybeMore` but without this, the embed page listed 100 songs and gave
+   * no way to ask for the rest.
+   */
+  more: z
+    .object({
+      reason: z.enum(playlistMoreReasons),
+      /**
+       * When the app asks Spotify again (ISO 8601): for "refused", the time
+       * Spotify gave (Retry-After); for "failed", a minute on.
+       */
+      retryAt: z.string().optional(),
+      /** For "failed": what went wrong, in a few words ("HTTP 503", "no connection"). */
+      note: z.string().optional(),
+    })
+    .optional(),
 });
 
 export type SpotifyPlaylist = z.infer<typeof spotifyPlaylistSchema>;
+export type PlaylistMore = NonNullable<SpotifyPlaylist["more"]>;
 
 /** The "Save to" setting as the page sees it. */
 export const saveSettingsSchema = z.object({
@@ -310,6 +336,11 @@ export const sourceHealthSchema = z.object({
   lastOk: z.string().nullable(),
   /** What its last failure said, or null. */
   lastError: z.string().nullable(),
+  /**
+   * Until when (ISO 8601) the source has told the app to wait (an HTTP 429's
+   * Retry-After), while that's still to come; else null.
+   */
+  refusedUntil: z.string().nullable(),
 });
 
 export type SourceHealth = z.infer<typeof sourceHealthSchema>;
@@ -318,8 +349,9 @@ export const sourceHealthReportSchema = z.object({
   updatedAt: z.string(),
   /**
    * True when some job can't be done: its primary source is unreliable (at
-   * least 5 attempts in 24 hours, under half of them successful) and so is
-   * every fallback that could stand in for it.
+   * least 5 attempts in 24 hours, under half of them successful, or refusing
+   * the app for more than another hour) and so is every fallback that could
+   * stand in for it.
    */
   unreliable: z.boolean(),
   /** One plain sentence: "YouTube: 2 of 20 requests succeeded in the last 24 h (last error: …)." */

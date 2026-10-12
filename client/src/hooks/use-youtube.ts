@@ -1,6 +1,8 @@
+import { useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 import { z } from "zod";
+import { useAskAgainAt } from "@/hooks/use-ask-again-at";
 import { playlistSourceOf } from "@/lib/format";
 import { errorFrom } from "@/lib/save-to-folder";
 
@@ -82,14 +84,16 @@ export function useSongSearch() {
 /**
  * The songs in a Spotify playlist or album (up to 1,000 songs of a playlist), or
  * the videos in a YouTube playlist (the first 500), for the playlist panel.
- * `link` is null while no playlist is open.
+ * `link` is null while no playlist is open. When Spotify didn't share the
+ * whole playlist but said when to ask again (`more.retryAt`), it asks again
+ * then by itself, and the rest of the songs fill in.
  */
 export function usePlaylist(link: string | null) {
   const { path, responses } =
     link !== null && playlistSourceOf(link) === "youtube"
       ? api.youtube.playlist
       : api.spotify.playlist;
-  return useQuery({
+  const query = useQuery({
     queryKey: [path, link],
     enabled: link !== null,
     queryFn: async () => {
@@ -101,6 +105,13 @@ export function usePlaylist(link: string | null) {
       return parseWithLogging(responses[200], data, path);
     },
   });
+  const { refetch } = query;
+  useAskAgainAt(
+    query.data?.more?.retryAt,
+    `${query.dataUpdatedAt}-${query.errorUpdatedAt}`,
+    useCallback(() => void refetch(), [refetch]),
+  );
+  return query;
 }
 
 export function useVideoInfo() {

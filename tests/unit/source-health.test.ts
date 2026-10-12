@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import {
   MAX_EVENTS,
   MIN_ATTEMPTS,
+  REFUSED_FOR_MS,
   SOURCES,
   SourceHealthStore,
   WINDOW_MS,
@@ -28,7 +29,7 @@ const event = (
   source: SourceName,
   ok: boolean,
   t = NOW,
-  failure: Pick<HealthEvent, "kind" | "note"> = {},
+  failure: Pick<HealthEvent, "kind" | "note" | "until"> = {},
 ): HealthEvent => ({ t, source, ok, ...(ok ? {} : { kind: "error", ...failure }) });
 
 /** `ok` successes and `failed` failures of `source`, a minute apart, ending now. */
@@ -47,6 +48,7 @@ const healthOf = (ok: number, failed: number): SourceHealth => ({
   throttled: 0,
   lastOk: null,
   lastError: null,
+  refusedUntil: null,
 });
 
 describe("isUnreliable", () => {
@@ -57,6 +59,18 @@ describe("isUnreliable", () => {
     expect(isUnreliable(healthOf(2, 3))).toBe(true); // 40 %
     expect(isUnreliable(healthOf(5, 5))).toBe(false); // exactly half is not "under half"
     expect(isUnreliable(healthOf(18, 2))).toBe(false);
+  });
+
+  it("counts a source refusing the app for more than another hour, however few the attempts", () => {
+    const refused = (minutes: number) => ({
+      ...healthOf(0, 1),
+      refusedUntil: new Date(NOW + minutes * 60_000).toISOString(),
+    });
+    expect(isUnreliable(refused(15 * 60), NOW)).toBe(true);
+    expect(isUnreliable(refused(61), NOW)).toBe(true);
+    // Back within the hour: not worth looking for another source.
+    expect(isUnreliable(refused(60), NOW)).toBe(false);
+    expect(isUnreliable(refused(5), NOW)).toBe(false);
   });
 });
 
@@ -80,6 +94,7 @@ describe("buildReport", () => {
       throttled: 2,
       lastOk: new Date(minutesAgo(3)).toISOString(),
       lastError: "HTTP Error 429: Too Many Requests",
+      refusedUntil: null,
     });
     expect(report.sources.spotify).toMatchObject({
       role: "primary",
@@ -99,6 +114,7 @@ describe("buildReport", () => {
       throttled: 0,
       lastOk: null,
       lastError: null,
+      refusedUntil: null,
     });
     expect(report.sources.soundcloud).toEqual({
       role: "fallback",
@@ -108,15 +124,56 @@ describe("buildReport", () => {
       throttled: 0,
       lastOk: null,
       lastError: null,
+      refusedUntil: null,
+    });
+    expect(report.sources["spotify-web-api"]).toMatchObject({
+      role: "primary",
+      for: "playlist songs past 100",
     });
     expect(Object.keys(report.sources).sort()).toEqual([
       "soundcloud",
       "spotify",
       "spotify-oembed",
+      "spotify-web-api",
       "youtube",
     ]);
     expect(report.unreliable).toBe(false);
     expect(report.summary).toBe("All sources healthy.");
+  });
+
+  it("says until when a source has asked the app to wait (Retry-After), while it still does", () => {
+    const until = NOW + 15 * 60 * 60_000;
+    const events = [
+      event("spotify-web-api", true, minutesAgo(90)),
+      event("spotify-web-api", false, minutesAgo(30), {
+        kind: "throttled",
+        note: "HTTP 429",
+        until,
+      }),
+    ];
+    const report = buildReport(events, NOW);
+    expect(sourceHealthReportSchema.safeParse(report).success).toBe(true);
+    expect(report.sources["spotify-web-api"]).toEqual({
+      role: "primary",
+      for: "playlist songs past 100",
+      ok: 1,
+      failed: 1,
+      throttled: 1,
+      lastOk: new Date(minutesAgo(90)).toISOString(),
+      lastError: "HTTP 429",
+      refusedUntil: new Date(until).toISOString(),
+    });
+    // Refused for 15 more hours, with nothing to stand in: the job can't be done.
+    expect(report.unreliable).toBe(true);
+    expect(report.summary).toBe(
+      `Spotify Web API: 1 of 2 requests succeeded in the last 24 h (last error: HTTP 429; refused until ${new Date(until).toISOString()}).`,
+    );
+
+    // Once the time has passed, or the source has answered since, it no longer is.
+    expect(buildReport(events, until + 1).sources["spotify-web-api"].refusedUntil).toBeNull();
+    const answered = buildReport([...events, event("spotify-web-api", true, minutesAgo(1))], NOW);
+    expect(answered.sources["spotify-web-api"].refusedUntil).toBeNull();
+    expect(answered.unreliable).toBe(false);
   });
 
   it("leaves out events older than 24 hours", () => {
@@ -197,6 +254,12 @@ describe("anyJobUnreliable", () => {
 
   it("is true when the primary and every fallback are unreliable", () => {
     expect(anyJobUnreliable(sources({ spotify: [0, 10], "spotify-oembed": [2, 8] }))).toBe(true);
+  });
+
+  it("is true when the Spotify Web API, which has no fallback, is unreliable", () => {
+    expect(SOURCES["spotify-web-api"]).toMatchObject({ role: "primary" });
+    expect(anyJobUnreliable(sources({ "spotify-web-api": [1, 9] }))).toBe(true);
+    expect(anyJobUnreliable(sources({ "spotify-web-api": [9, 1] }))).toBe(false);
   });
 
   it("ignores an unreliable fallback while the primary is fine", () => {
@@ -288,6 +351,32 @@ describe("SourceHealthStore", () => {
       throttled: 0,
       lastError: "HTTP 503",
     });
+  });
+
+  it("keeps how long a refusal lasts, for a failure only", () => {
+    const until = NOW + 2 * 60 * 60_000;
+    store.record("spotify-web-api", false, { kind: "throttled", note: "HTTP 429", until });
+    expect(store.report().sources["spotify-web-api"].refusedUntil).toBe(
+      new Date(until).toISOString(),
+    );
+    store.record("spotify", true, { until });
+    expect(store.report().sources.spotify.refusedUntil).toBeNull();
+  });
+
+  it("rewrites the file when a refusal stops counting, with no attempt to prompt it", async () => {
+    // While refused, the app asks nothing: only the clock changes the report.
+    store.record("spotify-web-api", false, {
+      kind: "throttled",
+      note: "HTTP 429",
+      until: NOW + REFUSED_FOR_MS + 150,
+    });
+    await store.flush();
+    expect((await readFile()).unreliable).toBe(true);
+    now += 200; // within the refusal's last hour
+    await vi.waitFor(async () => expect((await readFile()).unreliable).toBe(false), {
+      timeout: 3000,
+    });
+    expect((await readFile()).sources["spotify-web-api"].refusedUntil).not.toBeNull();
   });
 
   it("writes the report file (making its folder), and folds bursts into one write", async () => {

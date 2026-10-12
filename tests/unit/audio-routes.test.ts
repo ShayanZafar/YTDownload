@@ -699,6 +699,7 @@ describe("GET /api/health/sources", () => {
       "soundcloud",
       "spotify",
       "spotify-oembed",
+      "spotify-web-api",
       "youtube",
     ]);
     expect(JSON.stringify(report)).not.toContain(dir); // no paths in it

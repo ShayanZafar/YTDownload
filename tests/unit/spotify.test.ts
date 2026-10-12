@@ -5,6 +5,7 @@ import path from "path";
 import {
   PLAYLIST_EMBED_LIMIT,
   PLAYLIST_MAX_SONGS,
+  RETRY_FAILED_AFTER_MS,
   SpotifyError,
   cleanTrackTitle,
   fetchOembedTrack,
@@ -14,6 +15,7 @@ import {
   parseEmbedPage,
   parseOembed,
   parsePlaylistItemsPage,
+  parseRetryAfter,
   parsePlaylistPage,
   readEmbedAccessToken,
   parseSpotifyLink,
@@ -23,6 +25,7 @@ import {
   spotifyLinkError,
   spotifySearchQuery,
   unusableLinkError,
+  webApiRefusal,
 } from "../../server/spotify";
 import { rankResults, type RawSearchEntry } from "../../server/search";
 import { sourceHealth } from "../../server/source-health";
@@ -467,8 +470,21 @@ describe("fetchSpotifyPlaylist", () => {
     vi.stubGlobal("fetch", fetch);
     return fetch;
   };
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    webApiRefusal.clear();
+  });
   const full = { ...playlistEntity, trackList: firstHundred };
+  /** Spotify's "too many requests", with the Retry-After it gave (or none). */
+  const tooMany = (retryAfter?: string) =>
+    new Response(JSON.stringify({ error: { status: 429, message: "API rate limit exceeded" } }), {
+      status: 429,
+      headers: retryAfter === undefined ? {} : { "retry-after": retryAfter },
+    });
+  const webApiCalls = (fetch: ReturnType<typeof stubFetch>) =>
+    fetch.mock.calls.filter(([url]) => url.startsWith("https://api.spotify.com/")).length;
+  const webApiHealth = () => sourceHealth.report().sources["spotify-web-api"];
 
   it("pages through the rest of a long playlist with the embed page's pass", async () => {
     const fetch = stubFetch(page(full), apiPage(100, 200, 230), apiPage(200, 230, 230));
@@ -481,6 +497,7 @@ describe("fetchSpotifyPlaylist", () => {
       "Song 101",
     ]);
     expect(playlist.maybeMore).toBe(false);
+    expect(playlist.more).toBeUndefined();
 
     expect(fetch.mock.calls[0][0]).toBe(`https://open.spotify.com/embed/playlist/${PLAYLIST}`);
     expect(fetch.mock.calls[0][1]?.headers).not.toHaveProperty("Authorization");
@@ -507,8 +524,11 @@ describe("fetchSpotifyPlaylist", () => {
     expect((await fetchSpotifyPlaylist("album", PLAYLIST)).tracks).toHaveLength(100);
     expect(album).toHaveBeenCalledTimes(1);
 
+    // No pass: there may be more, but the app can't say why it stopped.
     const noPass = stubFetch(page(full, ""));
-    expect((await fetchSpotifyPlaylist("playlist", PLAYLIST)).maybeMore).toBe(true);
+    const withoutPass = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(withoutPass.maybeMore).toBe(true);
+    expect(withoutPass.more).toBeUndefined();
     expect(noPass).toHaveBeenCalledTimes(1);
   });
 
@@ -517,6 +537,7 @@ describe("fetchSpotifyPlaylist", () => {
     const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
     expect(playlist.tracks).toHaveLength(100);
     expect(playlist.maybeMore).toBe(false);
+    expect(playlist.more).toBeUndefined();
   });
 
   it("keeps the first 100 when Spotify won't share the rest (its own playlists)", async () => {
@@ -524,16 +545,126 @@ describe("fetchSpotifyPlaylist", () => {
     const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
     expect(playlist.tracks).toHaveLength(100);
     expect(playlist.maybeMore).toBe(true);
+    expect(playlist.more).toEqual({ reason: "spotify-own" });
   });
 
-  it("keeps what came before a page that fails", async () => {
+  it("keeps what came before a page that fails, and says to try again in a minute", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const inAMinute = new Date(Date.now() + RETRY_FAILED_AFTER_MS).toISOString();
     stubFetch(page(full), apiPage(100, 200, 400), json({}, 500));
     const failedLater = await fetchSpotifyPlaylist("playlist", PLAYLIST);
     expect(failedLater.tracks).toHaveLength(200);
     expect(failedLater.maybeMore).toBe(true);
+    expect(failedLater.more).toEqual({ reason: "failed", note: "HTTP 500", retryAt: inAMinute });
 
     stubFetch(page(full), new Response("not json"));
-    expect((await fetchSpotifyPlaylist("playlist", PLAYLIST)).tracks).toHaveLength(100);
+    const unreadable = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(unreadable.tracks).toHaveLength(100);
+    expect(unreadable.more).toMatchObject({ reason: "failed", retryAt: inAMinute });
+  });
+
+  it("says when a playlist's rest failed: an error, no answer, or a 429 without Retry-After", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const inAMinute = new Date(Date.now() + RETRY_FAILED_AFTER_MS).toISOString();
+    const timeout = Object.assign(new Error("The operation was aborted due to timeout"), {
+      name: "TimeoutError",
+    });
+    const cases: [answer: Response | Error, note: string][] = [
+      [new Response("busy", { status: 503 }), "HTTP 503"],
+      [new Response("no", { status: 401 }), "HTTP 401"],
+      [timeout, "it took too long"],
+      [new TypeError("fetch failed"), "no connection"],
+      [tooMany(), "HTTP 429"],
+      [tooMany("0"), "HTTP 429"], // nothing to wait for
+      [tooMany("soon"), "HTTP 429"], // unreadable
+      [tooMany("99999999999999"), "HTTP 429"], // later than any date can be
+    ];
+    for (const [answer, note] of cases) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url.startsWith("https://open.spotify.com/")) return page(full);
+          if (answer instanceof Error) throw answer;
+          return answer;
+        }),
+      );
+      const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+      expect(playlist.tracks, note).toHaveLength(100);
+      expect(playlist.more, note).toEqual({ reason: "failed", note, retryAt: inAMinute });
+    }
+    // None of them is a refusal to remember: the next open asks again.
+    expect(webApiRefusal.until).toBe(0);
+    expect(() => sourceHealth.report()).not.toThrow();
+  });
+
+  it("gives the first 100 and when to ask again when Spotify refuses the rest (429)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const before = webApiHealth();
+    const until = Date.now() + 54_901_000;
+    stubFetch(page(full), tooMany("54901"));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(100);
+    expect(playlist.maybeMore).toBe(true);
+    expect(playlist.more).toEqual({ reason: "refused", retryAt: new Date(until).toISOString() });
+
+    // Recorded as the Web API's, with until when it refuses; the embed page's stays Spotify's.
+    expect(webApiHealth()).toMatchObject({
+      failed: before.failed + 1,
+      throttled: before.throttled + 1,
+      lastError: "HTTP 429",
+    });
+    expect(Date.parse(webApiHealth().refusedUntil!)).toBe(until);
+  });
+
+  it("reads Retry-After as an HTTP date too", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const at = new Date(Math.ceil(Date.now() / 1000) * 1000 + 3 * 60 * 60_000);
+    stubFetch(page(full), tooMany(at.toUTCString()));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.more).toEqual({ reason: "refused", retryAt: at.toISOString() });
+  });
+
+  it("asks the Web API nothing while it refuses, then again once the time has come", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const refusedAt = Date.now();
+    const retryAt = new Date(refusedAt + 54_901_000).toISOString();
+    stubFetch(page(full), tooMany("54901"));
+    await fetchSpotifyPlaylist("playlist", PLAYLIST);
+
+    // Any playlist, any pass: the refusal is the whole route's, not one playlist's.
+    vi.setSystemTime(refusedAt + 60 * 60_000);
+    const other = stubFetch(page({ ...full, name: "Another" }, "AnotherAnonymousPass_123"));
+    const meanwhile = await fetchSpotifyPlaylist("playlist", "9zYxWvUtSrQpOnMlKjIhGf");
+    expect(meanwhile.tracks).toHaveLength(100);
+    expect(meanwhile.more).toEqual({ reason: "refused", retryAt });
+    expect(other).toHaveBeenCalledTimes(1); // the embed page only
+    expect(webApiCalls(other)).toBe(0);
+
+    vi.setSystemTime(Date.parse(retryAt) + 1000);
+    const after = stubFetch(page(full), apiPage(100, 200, 250), apiPage(200, 250, 250));
+    const whole = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(webApiCalls(after)).toBe(2);
+    expect(whole.tracks).toHaveLength(250);
+    expect(whole.maybeMore).toBe(false);
+    expect(whole.more).toBeUndefined();
+  });
+
+  it("keeps the songs that came before a refused page", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const retryAt = new Date(Date.now() + 600_000).toISOString();
+    stubFetch(page(full), apiPage(100, 200, 400), apiPage(200, 300, 400), tooMany("600"));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(300);
+    expect(playlist.more).toEqual({ reason: "refused", retryAt });
+  });
+
+  it("says Spotify refused, and until when, though a page before the refused one failed", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const retryAt = new Date(Date.now() + 600_000).toISOString();
+    stubFetch(page(full), apiPage(100, 200, 400), json({}, 503), tooMany("600"));
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
+    expect(playlist.tracks).toHaveLength(200);
+    expect(playlist.more).toEqual({ reason: "refused", retryAt });
   });
 
   it("asks for the remaining pages together once the first says how many there are", async () => {
@@ -588,6 +719,7 @@ describe("fetchSpotifyPlaylist", () => {
     const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
     expect(playlist.tracks).toHaveLength(300);
     expect(playlist.maybeMore).toBe(true);
+    expect(playlist.more).toMatchObject({ reason: "failed", note: "HTTP 500" });
   });
 
   it("stops at a short page before the end, rather than leave a gap", async () => {
@@ -595,6 +727,7 @@ describe("fetchSpotifyPlaylist", () => {
     const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
     expect(playlist.tracks).toHaveLength(250);
     expect(playlist.maybeMore).toBe(true);
+    expect(playlist.more).toMatchObject({ reason: "failed", note: "a page came back short" });
   });
 
   it(`stops at ${PLAYLIST_MAX_SONGS} songs`, async () => {
@@ -607,7 +740,32 @@ describe("fetchSpotifyPlaylist", () => {
     const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST);
     expect(playlist.tracks).toHaveLength(PLAYLIST_MAX_SONGS);
     expect(playlist.maybeMore).toBe(true);
+    expect(playlist.more).toEqual({ reason: "limit" });
     expect(fetch).toHaveBeenCalledTimes(1 + pages.length);
+  });
+});
+
+describe("parseRetryAfter", () => {
+  const NOW = Date.UTC(2026, 9, 12, 14, 0, 0);
+
+  it("reads seconds or an HTTP date, as the time to ask again", () => {
+    expect(parseRetryAfter("54901", NOW)).toBe(NOW + 54_901_000);
+    expect(parseRetryAfter(" 120 ", NOW)).toBe(NOW + 120_000);
+    expect(parseRetryAfter("Tue, 13 Oct 2026 05:10:00 GMT", NOW)).toBe(
+      Date.UTC(2026, 9, 13, 5, 10, 0),
+    );
+  });
+
+  it("gives undefined for nothing to wait for, or anything it can't read", () => {
+    for (const value of [null, "", "0", "-5", "1.5", "soon", "Mon, 12 Oct 2026 13:00:00 GMT"]) {
+      expect(parseRetryAfter(value, NOW), String(value)).toBeUndefined();
+    }
+  });
+
+  it("turns down a time later than any date can be", () => {
+    expect(parseRetryAfter("99999999999999", NOW)).toBeUndefined();
+    expect(parseRetryAfter(String(8.64e12), NOW)).toBeUndefined();
+    expect(parseRetryAfter(String(365 * 86_400), NOW)).toBe(NOW + 365 * 86_400_000);
   });
 });
 

@@ -11,10 +11,14 @@
  * with the anonymous pass the embed page itself carries (the owner agreed to
  * this unofficial route). Spotify answers that only for playlists people made — its
  * own (editorial, mixes) stay at 100 — and anything that fails keeps the 100.
+ * A refusal (HTTP 429) is Spotify's quota for this computer, so it's
+ * remembered until its Retry-After (`webApiRefusal`): playlists then open with
+ * their first 100 songs, and the answer says when to ask again (`more`).
  */
 import {
   SPOTIFY_PLAYLIST_MAX_SONGS,
   type AudioSource,
+  type PlaylistMore,
   type SpotifyPlaylist,
   type SpotifyPlaylistTrack,
   type SpotifyTrack,
@@ -33,6 +37,8 @@ export const PLAYLIST_EMBED_LIMIT = 100;
 export const PLAYLIST_MAX_SONGS = SPOTIFY_PLAYLIST_MAX_SONGS;
 /** Songs per Web API page (Spotify's maximum). */
 const PLAYLIST_PAGE_SIZE = 100;
+/** When the rest of a playlist failed with no Retry-After to go by, the page asks again this much later. */
+export const RETRY_FAILED_AFTER_MS = 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
 // Spotify serves the same page to any browser; a browser-like User-Agent just
 // avoids being treated as an unknown bot.
@@ -44,10 +50,42 @@ export class SpotifyError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** For no answer at all, why: "no connection", "it took too long". */
+    readonly unreachable?: string,
   ) {
     super(message);
   }
 }
+
+/** The latest time a Date can hold (ms since the epoch). */
+const LATEST_DATE_MS = 8.64e15;
+
+/**
+ * When to ask again, from a 429's Retry-After — a number of seconds or an
+ * HTTP date — or undefined when it gives nothing to wait for, can't be read,
+ * or is later than any date can be.
+ */
+export function parseRetryAfter(value: string | null, now: number): number | undefined {
+  const text = value?.trim() ?? "";
+  const at = /^\d+$/.test(text)
+    ? now + Number(text) * 1000
+    : /[a-z]/i.test(text)
+      ? Date.parse(text)
+      : NaN;
+  return at > now && at <= LATEST_DATE_MS ? at : undefined;
+}
+
+/**
+ * Until when Spotify's Web API refuses this computer (ms since the epoch, 0
+ * when it doesn't): one for every playlist and pass, as Spotify's quota is.
+ * While it holds, playlists open with their first 100 songs without asking.
+ */
+export const webApiRefusal = {
+  until: 0,
+  clear() {
+    this.until = 0;
+  },
+};
 
 export type SpotifyLink =
   | { kind: "track"; id: string }
@@ -318,7 +356,7 @@ export function parseEmbedPage(html: string, id: string): SpotifyTrack {
  * connection, or too slow); an answer of any status is returned.
  */
 async function fetchSpotify(
-  source: "spotify" | "spotify-oembed",
+  source: "spotify" | "spotify-oembed" | "spotify-web-api",
   url: string,
   init: RequestInit,
 ): Promise<Response> {
@@ -329,7 +367,7 @@ async function fetchSpotify(
     const reason =
       err instanceof Error && err.name === "TimeoutError" ? "it took too long" : "no connection";
     sourceHealth.record(source, false, { note: `Couldn't reach Spotify (${reason})` });
-    throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`);
+    throw new SpotifyError(502, `Couldn't reach Spotify (${reason}).`, reason);
   }
   // A 404 is Spotify answering (there's no such song): the source is fine.
   if (res.ok || res.status === 404) {
@@ -339,6 +377,8 @@ async function fetchSpotify(
   sourceHealth.record(source, false, {
     kind: res.status === 429 ? "throttled" : res.status === 403 ? "blocked" : "error",
     note: `HTTP ${res.status}`,
+    until:
+      res.status === 429 ? parseRetryAfter(res.headers.get("retry-after"), Date.now()) : undefined,
   });
   return res;
 }
@@ -558,26 +598,54 @@ export function parsePlaylistItemsPage(json: unknown): {
   };
 }
 
-/** One page of a playlist's songs from the Web API, from `offset` on — or undefined if Spotify didn't give it. */
+/** Why the app stopped short of a playlist's end: the answer's `more`, with `retryAt` in ms. */
+type MoreStop = { reason: PlaylistMore["reason"]; retryAt?: number; note?: string };
+
+const failedStop = (note: string): MoreStop => ({
+  reason: "failed",
+  note,
+  retryAt: Date.now() + RETRY_FAILED_AFTER_MS,
+});
+
+/**
+ * One page of a playlist's songs from the Web API, from `offset` on — or why
+ * Spotify didn't give it. A refusal is remembered (`webApiRefusal`).
+ */
 async function fetchPlaylistItemsPage(
   id: string,
   token: string,
   offset: number,
-): Promise<ReturnType<typeof parsePlaylistItemsPage> | undefined> {
+): Promise<{ page: ReturnType<typeof parsePlaylistItemsPage> } | { stop: MoreStop }> {
   const params = new URLSearchParams({
     offset: String(offset),
     limit: String(Math.min(PLAYLIST_PAGE_SIZE, PLAYLIST_MAX_SONGS - offset)),
     fields: "total,items(is_local,track(type,id,name,duration_ms,explicit,artists(name)))",
   });
+  let res: Response;
   try {
-    const res = await fetchSpotify(
-      "spotify",
+    res = await fetchSpotify(
+      "spotify-web-api",
       `https://api.spotify.com/v1/playlists/${id}/tracks?${params}`,
       { headers: { Authorization: `Bearer ${token}`, "User-Agent": USER_AGENT } },
     );
-    return res.ok ? parsePlaylistItemsPage(await res.json()) : undefined;
+  } catch (err) {
+    return {
+      stop: failedStop((err instanceof SpotifyError && err.unreachable) || "no connection"),
+    };
+  }
+  if (res.status === 404) return { stop: { reason: "spotify-own" } };
+  if (res.status === 429) {
+    const retryAt = parseRetryAfter(res.headers.get("retry-after"), Date.now());
+    if (retryAt) {
+      webApiRefusal.until = Math.max(webApiRefusal.until, retryAt);
+      return { stop: { reason: "refused", retryAt } };
+    }
+  }
+  if (!res.ok) return { stop: failedStop(`HTTP ${res.status}`) };
+  try {
+    return { page: parsePlaylistItemsPage(await res.json()) };
   } catch {
-    return undefined;
+    return { stop: failedStop("an answer it couldn't read") };
   }
 }
 
@@ -586,39 +654,50 @@ async function fetchPlaylistItemsPage(
  * API with the embed page's anonymous pass — up to `PLAYLIST_MAX_SONGS` in
  * all. The first page says how many there are; the rest are then asked for
  * together, a page per CPU core at a time (Spotify publishes no limit to keep
- * to). `complete` is false if Spotify wouldn't share them all (its own
- * playlists answer 404) or the list was cut at the limit; a failed page keeps
- * what came before it.
+ * to). `stop` says why it didn't get them all: Spotify refused (and when to
+ * ask again), a page failed, Spotify won't share its own playlists (404), or
+ * the list was cut at the limit; a failed page keeps what came before it.
+ * While a refusal holds, it asks nothing.
  */
 export async function fetchMorePlaylistSongs(
   id: string,
   token: string,
-): Promise<{ tracks: SpotifyPlaylistTrack[]; complete: boolean }> {
+): Promise<{ tracks: SpotifyPlaylistTrack[]; stop?: MoreStop }> {
+  if (webApiRefusal.until > Date.now()) {
+    return { tracks: [], stop: { reason: "refused", retryAt: webApiRefusal.until } };
+  }
   const first = await fetchPlaylistItemsPage(id, token, PLAYLIST_EMBED_LIMIT);
-  if (!first) return { tracks: [], complete: false };
-  const tracks = [...first.tracks];
-  let offset = PLAYLIST_EMBED_LIMIT + first.count;
-  if (first.count === 0 || offset >= first.total) return { tracks, complete: true };
+  if ("stop" in first) return { tracks: [], stop: first.stop };
+  const tracks = [...first.page.tracks];
+  let offset = PLAYLIST_EMBED_LIMIT + first.page.count;
+  if (first.page.count === 0 || offset >= first.page.total) return { tracks };
 
   const offsets: number[] = [];
-  for (let at = offset; at < Math.min(first.total, PLAYLIST_MAX_SONGS); at += PLAYLIST_PAGE_SIZE) {
-    offsets.push(at);
-  }
-  const pages = await mapAtOnce(offsets, (at) => fetchPlaylistItemsPage(id, token, at));
-  for (const page of pages) {
-    if (!page) return { tracks, complete: false };
+  const end = Math.min(first.page.total, PLAYLIST_MAX_SONGS);
+  for (let at = offset; at < end; at += PLAYLIST_PAGE_SIZE) offsets.push(at);
+  const answers = await mapAtOnce(offsets, (at) => fetchPlaylistItemsPage(id, token, at));
+  // A refusal on any page outweighs a failure before it: it says when to ask again.
+  const refusal = answers
+    .map((answer) => ("stop" in answer ? answer.stop : undefined))
+    .find((stop) => stop?.reason === "refused");
+  for (const answer of answers) {
+    if ("stop" in answer) return { tracks, stop: refusal ?? answer.stop };
+    const { page } = answer;
     tracks.push(...page.tracks);
     offset += page.count;
-    if (page.count === 0 || offset >= page.total) return { tracks, complete: true };
+    if (page.count === 0 || offset >= page.total) return { tracks };
     // A short page before the end would leave a gap before the next: stop there.
-    if (page.count < PLAYLIST_PAGE_SIZE) return { tracks, complete: false };
+    if (page.count < PLAYLIST_PAGE_SIZE) {
+      return { tracks, stop: refusal ?? failedStop("a page came back short") };
+    }
   }
-  return { tracks, complete: false }; // cut at PLAYLIST_MAX_SONGS
+  return { tracks, stop: { reason: "limit" } }; // cut at PLAYLIST_MAX_SONGS
 }
 
 /**
  * The songs in a public playlist or album: Spotify's public embed page, and
- * for a playlist of more than 100 songs, the rest from its Web API.
+ * for a playlist of more than 100 songs, the rest from its Web API — or, if
+ * the app didn't get them all, why (`more`).
  */
 export async function fetchSpotifyPlaylist(
   kind: "playlist" | "album",
@@ -631,11 +710,18 @@ export async function fetchSpotifyPlaylist(
   const playlist = parsePlaylistPage(html, kind, id);
   const token = playlist.maybeMore ? readEmbedAccessToken(html) : undefined;
   if (!token) return playlist;
-  const more = await fetchMorePlaylistSongs(id, token);
+  const { tracks, stop } = await fetchMorePlaylistSongs(id, token);
   return {
     ...playlist,
-    tracks: [...playlist.tracks, ...more.tracks],
-    maybeMore: !more.complete,
+    tracks: [...playlist.tracks, ...tracks],
+    maybeMore: stop !== undefined,
+    ...(stop && {
+      more: {
+        reason: stop.reason,
+        ...(stop.note && { note: stop.note }),
+        ...(stop.retryAt && { retryAt: new Date(stop.retryAt).toISOString() }),
+      },
+    }),
   };
 }
 

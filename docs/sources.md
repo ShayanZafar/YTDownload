@@ -18,9 +18,17 @@ The owner's rule (October 11, 2026) for every outside service:
 | **Audio**: a search, and the download of what it found  | YouTube, through yt-dlp (`youtube`)                                          | SoundCloud, through the same yt-dlp (`soundcloud`): asked at once when YouTube's search fails or finds nothing, and at the same time as YouTube while YouTube has refused this computer in the last 10 minutes (below). A song YouTube refuses to hand over can be looked for on SoundCloud alone: **Search SoundCloud** over the results, **Find on SoundCloud** on a refused save, and **Download all** does it by itself. |
 | **Audio**: a pasted YouTube link, or a YouTube playlist | YouTube, through yt-dlp (`youtube`)                                          | None: only YouTube has that exact video or playlist. A refusal is answered at once, saying to search for the song by name instead.                                                                                                                                                                                                                                                                                           |
 | **Song details** from a Spotify song link               | Spotify's public embed page, `open.spotify.com/embed/track/<id>` (`spotify`) | Spotify's keyless oEmbed endpoint, `open.spotify.com/oembed?url=…` (`spotify-oembed`), at once when the embed page fails for any reason but "no such song" (a `429` included): it knows the song's title and cover, not its artists or length. Such a song is searched for by title alone, and **Download all** marks it **Check** rather than guess which upload is the same recording.                                     |
-| **Playlists**: a Spotify playlist's or album's songs    | The embed page of the playlist or album, which lists its first 100 songs     | Past 100 songs, Spotify's Web API with the embed page's anonymous pass — the first page says how many there are, and the rest are asked for together, one per CPU core; if one fails, the songs before it stay (`maybeMore`). No oEmbed fallback: it knows nothing about a playlist's songs.                                                                                                                                 |
+| **Playlists**: a Spotify playlist's or album's songs    | The embed page of the playlist or album, which lists its first 100 songs     | Past 100 songs, Spotify's Web API (`spotify-web-api`) with the embed page's anonymous pass — the first page says how many there are, and the rest are asked for together, one per CPU core; if one fails, the songs before it stay, and the answer says why it stopped (`more`, below). Nothing stands in for it: the oEmbed endpoint knows nothing about a playlist's songs.                                                |
 
 A song's details from Spotify's embed page are kept for 10 minutes — they don't change, and **Download all** asks about each song more than once (its search, then its file's tags); the oEmbed endpoint's partial answers aren't kept, so the whole song is asked for again next time. The embed page and the oEmbed endpoint are both Spotify's own, public and keyless, so the app never needs a Spotify account (and can't have one: see "Considered and rejected"). SoundCloud needs no account or key either: yt-dlp uses SoundCloud's own web client.
+
+## When Spotify won't share the rest of a playlist
+
+Spotify's Web API answers a playlist's songs past 100 only while this computer is within Spotify's quota. Past it, Spotify answers `429` with a `Retry-After` (on October 12, 2026: 54,901 seconds, about 15 hours, for a fresh anonymous pass too), so the refusal is the whole route's, not one pass's. With nothing to stand in, the app waits on its own (`server/spotify.ts`):
+
+- **It remembers the refusal until its `Retry-After`** (`webApiRefusal`, in memory; a restart asks once and remembers again). Meanwhile every playlist opens at once with its first 100 songs, and the Web API isn't asked.
+- **The answer says why it stopped and when to ask again**: `more: { reason, retryAt?, note? }`. `refused` (a `429` with `Retry-After`, seconds or an HTTP date: `retryAt` is that time), `failed` (a 5xx, 401/403, no connection, an answer it couldn't read, a page that came back short, or a `429` without `Retry-After`: `retryAt` a minute on), `spotify-own` (a `404`: Spotify's own playlists stay at 100) or `limit` (1,000 songs, the app's own). `maybeMore` without `more` means the embed page gave no pass, so the app can't tell why.
+- **The panel says so, and fills in by itself**: its note names the reason and, for `refused` and `failed`, when the app asks again. While the panel is open the page asks again at `retryAt` (a tab asleep then asks as soon as it's shown again), and the rest of the songs join the list in place — the filter, the view, the ticks and a running Download stay as they were.
 
 ## SoundCloud, the fallback for audio
 
@@ -45,7 +53,7 @@ YouTube limits computers that ask too much — "HTTP Error 429: Too Many Request
 
 Every attempt against a source is recorded: when, whether it worked, and for a failure whether the source said to slow down (`throttled`: HTTP 429), refused the computer (`blocked`: YouTube's bot check, or an HTTP 403 from Spotify) or anything else (`error`), with its last error line. A video or track that's private or removed is the source answering properly, so it counts as a success.
 
-A source is **unreliable** when it has been asked at least 5 times in the last 24 hours and under half of those attempts worked. The report's top-level `unreliable` is true when some job can't be done: its primary source is unreliable and so is every fallback for it — or it has no fallback. YouTube's fallback for audio is SoundCloud, so an unreliable YouTube alone doesn't make it true; YouTube and SoundCloud both unreliable does. The `summary` names the unreliable sources with their counts and last error, or says "All sources healthy."
+A source is **unreliable** when it has been asked at least 5 times in the last 24 hours and under half of those attempts worked — or when it has refused the app (a `429` with `Retry-After`) for more than another hour: while refused, the app asks it about once per refusal, so it would never reach 5 attempts. The report gives that time as `refusedUntil`. The report's top-level `unreliable` is true when some job can't be done: its primary source is unreliable and so is every fallback for it — or it has no fallback, like the Spotify Web API for a playlist's songs past 100. YouTube's fallback for audio is SoundCloud, so an unreliable YouTube alone doesn't make it true; YouTube and SoundCloud both unreliable does. The `summary` names the unreliable sources with their counts and last error, or says "All sources healthy."
 
 ## Where health is recorded
 
@@ -65,7 +73,8 @@ A source is **unreliable** when it has been asked at least 5 times in the last 2
       "failed": 18,
       "throttled": 18,
       "lastOk": "2026-10-11T11:20:02.000Z",
-      "lastError": "HTTP Error 429: Too Many Requests"
+      "lastError": "HTTP Error 429: Too Many Requests",
+      "refusedUntil": null
     },
     "soundcloud": {
       "role": "fallback",
@@ -74,7 +83,8 @@ A source is **unreliable** when it has been asked at least 5 times in the last 2
       "failed": 0,
       "throttled": 0,
       "lastOk": "2026-10-11T11:58:40.000Z",
-      "lastError": null
+      "lastError": null,
+      "refusedUntil": null
     },
     "spotify": {
       "role": "primary",
@@ -83,7 +93,8 @@ A source is **unreliable** when it has been asked at least 5 times in the last 2
       "failed": 0,
       "throttled": 0,
       "lastOk": "2026-10-11T11:40:00.000Z",
-      "lastError": null
+      "lastError": null,
+      "refusedUntil": null
     },
     "spotify-oembed": {
       "role": "fallback",
@@ -92,7 +103,18 @@ A source is **unreliable** when it has been asked at least 5 times in the last 2
       "failed": 0,
       "throttled": 0,
       "lastOk": null,
-      "lastError": null
+      "lastError": null,
+      "refusedUntil": null
+    },
+    "spotify-web-api": {
+      "role": "primary",
+      "for": "playlist songs past 100",
+      "ok": 0,
+      "failed": 0,
+      "throttled": 0,
+      "lastOk": null,
+      "lastError": null,
+      "refusedUntil": null
     }
   }
 }

@@ -19,7 +19,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  SPOTIFY_PLAYLIST_MAX_SONGS,
   type PlaylistSource,
   type SongsInFolder,
   type SpotifyPlaylist,
@@ -27,6 +26,7 @@ import {
 } from "@shared/schema";
 import type { SongStatus } from "@/hooks/use-download-all";
 import { formatBytes, formatDuration } from "@/lib/format";
+import { playlistMoreNote } from "@/lib/playlist-more";
 import { searchableText } from "@/lib/history-filter";
 import { folderName } from "@/lib/save-to-folder";
 import { cn } from "@/lib/utils";
@@ -54,6 +54,11 @@ type SpotifyPlaylistPanelProps = {
   folder?: {
     path: string;
     songs?: SongsInFolder;
+    /**
+     * `songs` is the answer from before more of the playlist's songs
+     * arrived: the new ones haven't been looked for yet.
+     */
+    isOutdated: boolean;
     isChecking: boolean;
     error: Error | null;
   };
@@ -217,11 +222,14 @@ export function SpotifyPlaylistPanel({
   const [show, setShow] = useState<"all" | "missing">("all");
   // Songs ticked or unticked for "Download" (the rest follow the default).
   const [choices, setChoices] = useState<Record<string, boolean>>({});
+  // Tick all / Untick all: the default from then on, for songs that arrive later too.
+  const [tickAllSaid, setTickAllSaid] = useState<boolean | null>(null);
   // A different playlist starts afresh.
   useEffect(() => {
     setFilter("");
     setShow("all");
     setChoices({});
+    setTickAllSaid(null);
   }, [playlist?.id]);
 
   const tracks = useMemo(() => playlist?.tracks ?? [], [playlist]);
@@ -246,11 +254,16 @@ export function SpotifyPlaylistPanel({
   );
   const missingIds = uniqueIds(missing);
   const inFolderCount = found ? uniqueIds(tracks).length - missingIds.length : 0;
-  // Ticked: what you chose, else every missing song but the ones to check by hand.
-  const isTicked = (id: string) => choices[id] ?? statusOf(id)?.state !== "check";
+  // Ticked: what you chose for the song, else what Tick all / Untick all
+  // said, else every missing song but the ones to check by hand.
+  const isTicked = (id: string) => choices[id] ?? tickAllSaid ?? statusOf(id)?.state !== "check";
   const ticked = missing.filter((t) => isTicked(t.id));
   const tickedCount = uniqueIds(ticked).length;
-  const tickAll = (on: boolean) => setChoices(Object.fromEntries(missingIds.map((id) => [id, on])));
+  const tickAll = (on: boolean) => {
+    setChoices({});
+    setTickAllSaid(on);
+  };
+  const moreNote = playlist ? playlistMoreNote(playlist) : null;
 
   const shown = useMemo(
     () =>
@@ -431,12 +444,15 @@ export function SpotifyPlaylistPanel({
                 </button>
                 <button
                   type="button"
-                  disabled={tickedCount === 0}
+                  // Some of the songs that just arrived may be in the folder already.
+                  disabled={tickedCount === 0 || folder?.isOutdated}
                   onClick={() => onDownloadAll(ticked)}
                   title={
-                    isYouTube
-                      ? `Save each ticked video into ${where}`
-                      : `Find each ticked song and save it into ${where}`
+                    folder?.isOutdated
+                      ? `Looking through ${where} for the songs that just arrived…`
+                      : isYouTube
+                        ? `Save each ticked video into ${where}`
+                        : `Find each ticked song and save it into ${where}`
                   }
                   className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
@@ -669,15 +685,12 @@ export function SpotifyPlaylistPanel({
           </p>
         ) : null}
 
-        {playlist?.maybeMore && (
-          <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
-            {isYouTube
-              ? "The app lists the first 500 videos of a playlist. For a later one, copy its link on YouTube and paste it in the box."
-              : `${
-                  playlist.tracks.length > 100
-                    ? `This is as far as the app got (it lists at most ${SPOTIFY_PLAYLIST_MAX_SONGS.toLocaleString("en")} songs of a playlist).`
-                    : "Spotify shared only the first 100 songs of this playlist (it does that for its own playlists, like its mixes and editorial lists)."
-                } For a later one, copy its link in Spotify (Share → Copy Song Link) and paste it in the search box.`}
+        {moreNote && (
+          <p
+            data-testid="playlist-more"
+            className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground"
+          >
+            {moreNote}
           </p>
         )}
         {playlist && !folder && canChooseFolder && tracks.length > 0 && (
