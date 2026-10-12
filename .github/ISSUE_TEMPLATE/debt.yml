@@ -1,0 +1,31 @@
+name: Debt
+description: Code that costs more to change than it should (the backlog skill files these too)
+labels: [debt]
+body:
+  - type: textarea
+    id: where
+    attributes:
+      label: Where
+      description: The files, and lines if it helps.
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: Cost of leaving it
+      description: What it makes slower, riskier or more expensive to change.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: Fix
+      description: The change, in two or three sentences.
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size
+      options:
+        - "S: under an hour"
+        - "M: one session"
+        - "L: needs a spec"

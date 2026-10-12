@@ -266,6 +266,9 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   `globalSetup` (`scripts/leftovers.ts`) deletes what stopped runs left (a Playwright run's server
   files once its process is gone, other test folders a day old), and `scripts/clean.ts` everything
   at once (`clean-script.test.ts` checks every name)
+- `docs/decisions.md` — decisions made, one line each (date, decision, why, issue). Pending decisions
+  and debt are GitHub issues labelled `decision` and `debt`; the `backlog` skill files and closes
+  them, and the monthly refactor takes `debt` issues first
 - `docs/core-flows.md` — the core flows (what a person relies on the app for), each naming a unit,
   an integration and a UI test (`file` › exact title), `—` for a gap, and `Gaps allowed: N`.
   `scripts/core-flows.ts` (`npm run core-flows`, in verify) checks it, with the pure rules in
