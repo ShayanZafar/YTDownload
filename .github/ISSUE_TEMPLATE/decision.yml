@@ -1,0 +1,37 @@
+name: Decision
+description: A choice that's the owner's, with the options and a recommendation
+title: "Decide: "
+labels: [decision]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options
+      description: Each option with what it costs and what it gets.
+    validations:
+      required: true
+  - type: textarea
+    id: recommendation
+    attributes:
+      label: Recommendation
+      description: Which option, and why.
+    validations:
+      required: true
+  - type: textarea
+    id: blocking
+    attributes:
+      label: Blocking
+      description: What waits on this, or "nothing".
+  - type: textarea
+    id: default
+    attributes:
+      label: Default
+      description: >-
+        For a reversible choice write "If there's no answer by YYYY-MM-DD, <option> applies." (7 days out).
+        Leave it empty and add the irreversible label if it can't be undone: it then waits for the owner.

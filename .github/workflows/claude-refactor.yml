@@ -66,5 +66,5 @@ jobs:
           claude_args: >-
             --model claude-opus-5-5
             --max-turns 120
-            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm run verify),Bash(npm run check),Bash(npx *),Bash(git *),Bash(gh pr *),Bash(wc *),Bash(sort *),Bash(uniq *),Bash(head *),Bash(tail *),Bash(xargs *)"
+            --allowedTools "Read,Glob,Grep,Edit,MultiEdit,Write,Bash(npm run verify),Bash(npm run check),Bash(npx *),Bash(git *),Bash(gh pr *),Bash(gh issue *),Bash(wc *),Bash(sort *),Bash(uniq *),Bash(head *),Bash(tail *),Bash(xargs *)"
             --append-system-prompt "This is a non-interactive CI run that ends with your final message; nothing can resume it. Run every subagent and command in the foreground, wait for each result, and finish only when the work is complete."
