@@ -249,8 +249,9 @@ rejected), and `LEARNING.md` maps the stack onto .NET concepts.
   the `CLAUDE_CODE_OAUTH_TOKEN` secret and skip, green, without it. `.github/dependabot.yml` —
   monthly grouped npm and Actions updates (TypeScript majors by hand);
   `.github/pull_request_template.md` — the PR checklist
-- `.claude/skills/` — `verify` (runs `npm run verify`, before each commit) and `refactor` (measure,
-  then at most three behaviour-preserving cleanups)
+- `.claude/skills/` — `verify` (runs `npm run verify`, before each commit), `refactor` (measure,
+  then at most three behaviour-preserving cleanups) and `backlog` (files, triages and works the
+  `debt`/`decision` issues; records decisions in `docs/decisions.md`)
 - `scripts/yt-dlp.mjs` — the `postinstall`: on macOS/Linux, swaps youtube-dl-exec's Python yt-dlp
   (needs Python 3.10+) for yt-dlp's standalone build (`yt-dlp_macos`, `yt-dlp_linux[_aarch64]`,
   musl builds); a no-op on Windows (`yt-dlp.exe` is standalone). `--update` (`npm run
