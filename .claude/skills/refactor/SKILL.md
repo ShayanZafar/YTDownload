@@ -45,10 +45,10 @@ After every cleanup, run `npm run verify 2>&1 | tail -40`. It must pass before t
 
 The files that steer sessions drift as the code changes. Fix what is mechanical, in one extra commit `setup: <what changed>`; judgment calls (shortening CLAUDE.md, merging docs) are for the user's `/tune`, so only report them.
 
-- References: every `scripts/…`, `npm run …`, `docs/….md` and `.github/workflows/….yml` named in `CLAUDE.md`, `README.md`, `docs/` and `.claude/skills/` exists (Grep for them, confirm with Glob); fix the name, or delete the sentence if the thing is gone.
+- References: every `scripts/…`, `npm run …`, `docs/….md` and `.github/workflows/….yml` named in `CLAUDE.md`, `README.md`, `docs/`, `.claude/rules/` and `.claude/skills/` exists (Grep for them, confirm with Glob); fix the name, or delete the sentence if the thing is gone.
 - Clickable scripts: each double-click action has a `.cmd`, a `.command` and a `.sh` (helpers exempt); `git ls-files --eol scripts` shows `i/lf` for all of them; `git ls-files -s scripts` shows `100755` for every `.sh` and `.command` (`git update-index --chmod=+x <file>` fixes it); a `.command` only `cd`s and `exec`s its `.sh`; the three do the same steps.
 - Workflows: the names `auto-merge.yml` lists (`workflows:`, `ON_MAIN`) match the `name:` of real workflows; `uses:` versions agree across workflows.
-- Sizes, reported in the PR body: `wc -w CLAUDE.md .claude/skills/*/SKILL.md`. `CLAUDE.md` is sent with every request; over 600 words, say so and what you'd move to the docs, but don't move it here.
+- Sizes, reported in the PR body: `npm run instructions` (`CLAUDE.md`, sent with every request, and the `.claude/rules/` files; verify fails when they outgrow their budgets) and `wc -w .claude/skills/*/SKILL.md`. If one is close to its budget, say what you'd move to a rules file or the docs, but don't move it here.
 ## 5. Deliver
 
 - In CI (`GITHUB_ACTIONS` is set): create a branch `refactor/<year>-<month>` from the current `main`, push it, and open one pull request with `gh pr create` titled "Monthly refactor: <one line>". The body lists each cleanup (what, why, the measurement it improves), the before/after numbers from step 1, and anything the reviewer should look at closely. If a PR for that branch already exists, push to it instead.

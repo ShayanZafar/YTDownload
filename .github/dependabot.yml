@@ -3,7 +3,7 @@
 # soon as GitHub publishes an advisory.
 #
 # If a grouped npm update's lockfile won't install, close the PR and run the
-# upgrade locally with `npx npm@11 update` instead (see CLAUDE.md on npm 10).
+# upgrade locally with `npx npm@11 update` instead (see .claude/rules/dependencies.md on npm 10).
 version: 2
 updates:
   - package-ecosystem: npm

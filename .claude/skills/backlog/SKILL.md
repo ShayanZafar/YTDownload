@@ -47,12 +47,12 @@ Leave out the Default line for an irreversible decision and say instead why it w
 When the owner answers (a comment by ShayanZafar picking an option or saying what to do), or a reversible decision's default date is today or earlier with no answer:
 
 1. Add one line at the top of the list in `docs/decisions.md` (newest first): `- YYYY-MM-DD — <decision>. Why: <reason>. (#n)`. For a default add "(default applied: no answer in 7 days)" before `(#n)`. Never apply a default to an `irreversible` decision.
-2. If it's a standing rule (it says how things are to be done from now on), also add one dated line to CLAUDE.md where that subject belongs.
+2. If it's a standing rule (it says how things are to be done from now on), also add one dated line where that subject belongs: the `.claude/rules/` file for its area, or CLAUDE.md if it holds everywhere (or the repo has no `.claude/rules/`).
 3. Put all record-keeping changes from one run in one branch and one pull request (`claude/decisions-YYYY-MM-DD`). Never push to the default branch and never merge.
 4. Comment on the issue that it's recorded, linking that pull request, and close it (`state_reason: completed`).
 5. If the decision calls for work: do it in its own pull request when it's small and clear (see Working), otherwise file it as `debt` and link the decision.
 
-Never ask again about anything in `docs/decisions.md`. Decisions made before Oct 12, 2026 are recorded inline, with their dates, in CLAUDE.md and in TECHNICAL.md's Conventions and gotchas.
+Never ask again about anything in `docs/decisions.md`. Decisions made before Oct 12, 2026 are recorded inline, with their dates, in CLAUDE.md and `.claude/rules/`.
 
 **Acting on answers at once.** The Claude Backlog workflow (`.github/workflows/claude-backlog.yml`) runs this section as soon as the owner comments on a `decision` or `debt` issue, and opens the pull request; the weekly triage is the safety net. It also records any decision the owner closed with an answer that has no line in `docs/decisions.md` yet.
 

@@ -1,7 +1,7 @@
 /**
  * Coping with YouTube limiting this computer, without ever slowing the app
  * down: nothing here gates, queues, caps or delays a call, and nothing waits
- * on a timer of ours (the owner's rule; see CLAUDE.md).
+ * on a timer of ours (the owner's rule; see .claude/rules/outside-sources.md).
  *
  * YouTube limits computers that ask too much ("HTTP Error 429", "Sign in to
  * confirm you're not a bot", "This content isn't available, try again

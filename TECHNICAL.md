@@ -101,13 +101,14 @@ This document covers the project's architecture, local development setup, enviro
 │   │   └── claude-refactor.yml # Monthly: Claude runs /refactor and opens a pull request
 │   ├── dependabot.yml         # Monthly grouped npm and GitHub Actions updates
 │   └── pull_request_template.md # The checklist a pull request starts with
-├── .claude/skills/            # Claude Code skills: /verify (npm run verify), /refactor
+├── .claude/skills/            # Claude Code skills: /verify (npm run verify), /refactor, /backlog
+├── .claude/rules/             # Claude Code's rules for each area, loaded with that area's files
 ├── docs/
 │   ├── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
 │   └── sources.md             # The outside sources: primary, fallbacks, health, what was rejected
 ├── vite.config.ts             # Vite configuration
 ├── tests/                     # unit, api (Vitest) and browser (Playwright) tests
-├── CLAUDE.md                  # Project notes Claude Code reads automatically
+├── CLAUDE.md                  # Claude Code's instructions, sent with every request (≤600 words)
 ├── LEARNING.md                # The stack, mapped onto .NET concepts
 └── package.json
 ```
@@ -326,11 +327,9 @@ What each file does, and the function and constant names to look for. This was C
   helpers for running the app (`start.cmd`, `stop.cmd`, `update.cmd`, `update-yt-dlp.cmd`,
   `autostart-on/off.cmd`), all thin wrappers around `app.ps1`; `scripts/unix/` is the same for
   macOS and Linux (`app.sh`, POSIX sh, with `start/stop/update/update-yt-dlp.sh` wrappers and
-  `.command` files for Finder; `tests/unit/unix-scripts.test.ts` checks them). Keep `app.ps1` Windows PowerShell
-  5.1-compatible and plain ASCII, with CRLF line endings (`.gitattributes`;
-  `tests/unit/windows-scripts.test.ts` checks). `stop` only kills the app's own process tree: from
-  the server's `node.exe` up through its launchers (npm, `cross-env`, `start.cmd`/`Start.cmd`), never
-  the terminal, editor or Explorer above them. The scripts serve two kinds of copy, told apart by
+  `.command` files for Finder; `tests/unit/unix-scripts.test.ts` checks them). `app.ps1` is Windows
+  PowerShell 5.1, plain ASCII and CRLF (`tests/unit/windows-scripts.test.ts` checks); it and `stop`
+  have rules of their own in `.claude/rules/scripts.md`. The scripts serve two kinds of copy, told apart by
   `server\index.ts`: the source (installs everything, runs `npm run dev`) and a ready-to-run build
   (`npm ci --omit=dev`, `npm start`)
 - `.github/workflows/install.yml` — after every push to `main`, builds the app on GitHub and
@@ -338,9 +337,9 @@ What each file does, and the function and constant names to look for. This was C
   `package*.json`, the Windows and Unix scripts and `scripts/install/` (README with the build filled in,
   `.gitignore`, `Start/Stop/Update.cmd` shortcuts — one line each, as `Update.cmd` replaces them
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
-  (no history to merge). Never commit to `install` by hand
+  (no history to merge); it's only ever written by the workflow (`.claude/rules/scripts.md`)
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
-  lint, type-check, dependency licences, unit tests + the music and history API tests) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
+  lint, type-check, dependency licences, the core-flows and instructions checks, unit tests + the music and history API tests) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
   10×), and on pull requests. The YouTube API and browser tests aren't run there (GitHub's machines
   get refused)
 - `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
@@ -354,6 +353,13 @@ What each file does, and the function and constant names to look for. This was C
 - `.claude/skills/` — `verify` (runs `npm run verify`, before each commit), `refactor` (measure,
   then at most three behaviour-preserving cleanups) and `backlog` (files, triages and works the
   `debt`/`decision` issues; records decisions in `docs/decisions.md`)
+- `.claude/rules/` — the rules for each area, which Claude Code loads only while it works on the
+  files a rule file's `paths:` globs match (the list: [Conventions and gotchas](#conventions-and-gotchas)).
+  `CLAUDE.md`, sent with every request, keeps only what holds everywhere.
+  `scripts/instructions.ts` (`npm run instructions`, in verify) keeps them small and scoped, with
+  the pure rules in `scripts/instructions-rules.ts` (`tests/unit/instructions.test.ts`): `CLAUDE.md`
+  within `CLAUDE_MD_MAX_WORDS` (600) words, each rules file within `RULES_FILE_MAX_WORDS` (500),
+  each with `paths:` whose globs all match files git tracks (`git ls-files`, `path.matchesGlob`)
 - `scripts/yt-dlp.mjs` — the `postinstall`: on macOS/Linux, swaps youtube-dl-exec's Python yt-dlp
   (needs Python 3.10+) for yt-dlp's standalone build (`yt-dlp_macos`, `yt-dlp_linux[_aarch64]`,
   musl builds); a no-op on Windows (`yt-dlp.exe` is standalone). `--update` (`npm run
@@ -386,135 +392,21 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 
 ## Conventions and gotchas
 
-The project's rules in full, with the reasons behind them. CLAUDE.md keeps a one-line version of each; when a rule changes, change both.
+The project's rules and pitfalls, with the reasons behind them, are kept by area in `.claude/rules/`. Claude Code loads each file only while it reads or edits one of the files named in the `paths:` list at its top; the few rules that hold everywhere are in `CLAUDE.md`. They apply to anyone changing the code: read the area's file before changing it. `npm run instructions` (part of `npm run verify`) keeps `CLAUDE.md` within 600 words and each rules file within 500, scoped to files git tracks.
 
-- Keep everything cross-platform: set env vars in npm scripts with `cross-env`, never a bare
-  `VAR=value` prefix; no `reusePort` in `listen()` (fails with ENOTSUP on Windows).
-- Downloads stream yt-dlp stdout → ffmpeg stdin → response: `bestaudio` (best free stream — on
-  YouTube usually Opus ~130 kbps, on SoundCloud MP3 or Opus; no Premium/cookies) → 320k CBR MP3,
-  LAME `-q 2`. CBR is deliberate: a streamed VBR file has no seek header, so players show the wrong
-  duration. The MP3's ID3v2.3 tag (with the cover) is the app's own (`id3v2Tag()`; ffmpeg runs with
-  `-id3v2_version 0` and writes none — its mp3 muxer has no `-write_id3v2`): ffmpeg writes a tag
-  with a picture by seeking back to fix its size, which a stream can't — the tag said size 0. A
-  streamed .m4a can't hold a cover (its header goes out before any picture), so it has none.
-- A download (or save) owns two child processes, started by `startAudioPipeline()` in `audio.ts`,
-  which swallows EPIPE on `ffmpeg.stdin` and kills yt-dlp once ffmpeg is done. The routes watch `res`
-  "close" from the very start and call `stop()` on cancel. Unhandled stream errors or a missed kill
-  mean a crashed server or processes left running forever, so re-test cancel paths after edits.
-- `?format=original` (the "Original audio" toggle) skips re-encoding: ffmpeg `-c:a copy` into `.opus`
-  (Ogg) for Opus, fragmented `.m4a` for AAC, `.mp3` for MP3 (SoundCloud's), `.mka` otherwise. The metadata pass uses the same
-  `bestaudio` selector and the stream is pinned to its `format_id`, so container and codec match.
-  The format enum and `buildDownloadUrl()` live in `shared/routes.ts`.
-- Covers: a download never waits more than `COVER_WAIT_MS` for its cover, nor fails without one.
-  Only fixed hosts are fetched (see `server/cover.ts`); the Spotify cover URL is checked against them.
-- History changes (`DELETE /api/downloads[/:id]`, `POST /api/downloads/restore`) are allowed from any
-  device using the app, from its own page only (`sameOriginOnly()` in `local-only.ts`): the history
-  is shared like the downloads. Removing never touches files. Restore re-ids an entry whose id was
-  reused meanwhile (ids are max+1, so they restart after Clear).
-- The history search has no API: the page filters what `/api/downloads` returns. Keep that endpoint
-  cheap (it's polled while a download runs) — the request log truncates JSON bodies to 200 chars.
-- A download is added to the history only after it fully succeeds (both processes exit 0 and the
-  response `finish`es) — never on cancel or failure. The page polls `/api/downloads` until it appears.
-- Headers go out with the first chunk of audio, so failures before any audio become a `502`; don't
-  write to `res` before the pipeline produces output.
-- Download names: always `safeFileName()` + `res.attachment()` (ASCII `filename` plus UTF-8
-  `filename*`), so accents and non-Latin titles survive. Linux Chromium with no UTF-8 locale
-  (`LANG` unset) can't use non-ASCII file names — run such browsers with `LANG=C.UTF-8`.
-- Search spawns yt-dlp directly (no shell) with the query after `--` (`ytsearch12:`/`scsearch12:`);
-  keep it that way so search text can't become a command or a yt-dlp option. Results carry their own
-  title/thumbnail, so picking one needs no `/api/video/info` call. Only canonical links reach yt-dlp
-  for a download or save: `audioLinkOf()` rebuilds a YouTube video's from its id and a SoundCloud
-  track's from its number, and turns anything else down with a `400` (look-alike hosts,
-  credentials, http:, sets, users' pages, odd encodings — `soundcloud.test.ts` lists them).
-- A download with `spotifyId` is tagged with it — ID3 `TXXX:spotify_id` (MP3), `SPOTIFY_ID` (.opus/.mka),
-  or the song's link as the comment of an .m4a (the ipod muxer drops custom keys; `use_metadata_tags`
-  breaks the standard ones) — and with Spotify's title/artists (`spotifySongTags()`, ≤5 s, else
-  YouTube's). That tag is how the playlist panel recognises the app's own files after a rename.
-- `music-metadata` is ESM-only and describes `parseFile` only under the "node" exports condition, which
-  TypeScript's `bundler` resolution ignores: `library.ts` loads it with `import()` and types it by hand.
-  Regexes with the `u` flag (`\p{L}`) must be built with `new RegExp(...)`: tsc refuses the literal at
-  this project's default ES5 target.
-- Never slow the app down (the owner's rule, Oct 11, 2026): no cooldowns, queues or concurrency caps
-  of our own — parallel work runs one per CPU core (`cpuCores()`, `mapAtOnce()`), never capped by a
-  number we picked — and pacing only to a service's published limit (YouTube and SoundCloud publish
-  none). When a source refuses or fails, switch to the next source for that data at once; wait only
-  when there's no other source, and then on its own, honouring `Retry-After`. Cache answers that
-  don't change; results say which source they came from (`source`), errors say what to do. Test
-  against stand-ins, never the live services. What stays is what holds nothing back: the timeouts
-  that end a hung process or request, `retryWhenBusy()` for Windows' brief file locks, and one
-  writer per JSON file (history, settings, health report).
-- "Download all" works on as many songs at once as the app's computer has CPU cores (the page gets
-  `cpuCores` from `/api/settings`; it may be on a phone), and never downloads a match that isn't the
-  same length as the Spotify song (a song whose length Spotify's fallback didn't give is "check"):
-  unattended picks must be near-certain. A save YouTube refuses switches that song to SoundCloud
-  alone, once, at once. Stop or a folder problem aborts every song in flight (their pipelines are
-  killed and `.part` files deleted). `youtube-limits.ts` has the 10-minute cache, the refusal memory
-  that makes searches hedge, the background yt-dlp self-update (at most once an hour: `yt-dlp -U`
-  asks GitHub's API, which allows 60 unauthenticated requests an hour), and
-  `data/source-health.json` says how the sources have been answering. A new yt-dlp call to YouTube
-  goes through `youtubeGuard.run()`; a new route that can hit YouTube answers `YouTubeRefused` with
-  `sendRefused()`, at once. `docs/sources.md` is the register to update when a source or fallback
-  changes.
-- Spotify: only a validated kind (track/playlist/album) and 22-character id go into the embed URL we
-  fetch, and only a validated code into a short link's (no user-controlled URLs are ever fetched).
-  If Spotify links break, check the embed page's `__NEXT_DATA__` shape first (`parseEmbedPage()`,
-  `parsePlaylistPage()`); the cloud workspace can't reach Spotify. No sign-in on purpose: since Feb
-  2026 Spotify's Web API Development Mode needs the app owner to have Premium, and the app must stay
-  free — so only public playlists. Past a playlist's first 100 songs the app pages
-  `api.spotify.com/v1/playlists/<validated id>/tracks` with the embed page's anonymous pass (the
-  owner's choice: an app's own key can't read other people's playlists since Feb 2026); keep that
-  pass server-side, and any failure falls back to the first 100. With no other source for those
-  songs, the app waits on its own (the owner's decisions of Oct 12, 2026): a 429 is remembered until
-  its Retry-After and the open panel asks again then by itself; a failure without one, a minute later.
-- "Save to" folder: download links stay real `<a href download>` elements — `startDownload()` only
-  calls `preventDefault()` (and `POST /api/video/save` instead) when a folder is set — so the default
-  path and its tests are unchanged. Anything that reads or writes the user's disk must sit behind
-  `localOnly()`. A save's lifetime is its connection: aborting the fetch (Cancel, closing the tab)
-  kills the pipeline and deletes the `.part` file, so re-test cancel paths after edits here too.
-- Music player: songs play untouched (the browser decodes the file, like VLC). Start a song inside the
-  click that asked for it — `player.play()` calls `audio.play()` synchronously; phones refuse `play()`
-  outside a tap, so don't move it into an effect — and keep the one `<audio>` element, which may then
-  move on by itself. The Save to folder's songs are local-only (`/api/music…` behind `localOnly()`)
-  and asked for by id, never by path. Songs picked on another device never reach the server. A
-  folder song the browser can't play (`canPlayType()` says "", or it fails to load) is converted to
-  FLAC; re-test skipping during a conversion after edits (ffmpeg must stop, no `.part` left).
-  Playwright's WebKit on Windows plays media through Media Foundation: opening a song blocks the page
-  for several seconds (give such clicks a long timeout), it can't play blob: URLs, and it plays WMA
-  but not Ogg/Opus or AIFF — `player.spec.ts` asks the browser instead of assuming.
-- Every feature must work in current Chrome, Edge, Firefox and Safari (oldest: Chrome/Edge 111,
-  Firefox 128, Safari 16.4 — Vite 8's build target and Tailwind CSS 4's minimum). No browser-only APIs,
-  and no `for await` over streams — `tests/unit/browser-support.test.ts` checks. Playwright runs every test in Chrome and WebKit, and
-  in Firefox only via `E2E_BROWSERS`: on this Windows 10 PC Playwright's Firefox and Chromium builds
-  fail to start (side-by-side configuration error), which is also why Chrome is the installed one
-  (`channel: "chrome"`). The installed Firefox works over BiDi (`channel: "moz-firefox"`), but BiDi's
-  `fill()` doesn't reach React inputs — type with `pressSequentially()` there. Playwright's WebKit on
-  Windows draws in software and waits for 5 still frames before each click (1 elsewhere), so keep
-  the page still when nothing's happening: a never-ending animation (the hero's dot used to pulse)
-  repaints it every frame, and with a `blur(120px)` background glow (now a gradient, `.ambient-glow`)
-  each repaint took ~1 s — clicks took ~10 s and long tests timed out. No endless decorative
-  animations or big `blur()` areas. Slow frames delay network answers too, so a late answer must
-  never undo what the user did meanwhile.
-- yt-dlp needs a JavaScript runtime for YouTube; we pass `--js-runtimes node` via `YT_DLP_BASE_FLAGS`.
-- If extraction suddenly breaks, update yt-dlp before debugging code: `npm run update-yt-dlp`.
-- Prettier config is in `.prettierrc` (`endOfLine: auto`, so CRLF checkouts on Windows are fine).
-- Dependencies: runtime imports only in `dependencies`, everything else in `devDependencies`.
-  `npm audit` should stay at 0. Use npm 11+ (npm 10 crashes resolving this tree from scratch and drops
-  the lockfile's `libc` fields). `allowScripts` in package.json approves, by name, the install scripts
-  the app needs — esbuild, ffmpeg-static (ffmpeg), youtube-dl-exec (yt-dlp); npm 12 blocks all others.
-  Everything is on its newest version except TypeScript (6.0: typescript-eslint supports < 6.1, not
-  the native TypeScript 7 yet) and `@types/node` (follows the Node the app runs on, 24).
-- Tailwind CSS 4: no `tailwind.config.ts` — the theme is `@theme` in `client/src/index.css`, which
-  scans `client/` only (`source('..')`); custom classes are `@utility`; animations come from
-  `tw-animate-css`; the plugin is `@tailwindcss/vite` (no PostCSS config). Zod 4: messages go in an
-  `error` option, errors are `.issues`, `z.record()` takes a key schema.
-- Don't make Vite errors exit the process (the old Replit template did) — a refused request or a
-  half-saved file would kill the dev server.
-- The dev server sends files by their path (`/@fs/<path>`) to any device that can reach it, so
-  `vite.config.ts`'s `server.fs` allows only `client/`, `shared/` and `node_modules/` (Vite's
-  pre-bundled packages are in `node_modules/.vite`) and denies dotfiles — never `data/`. Its deny
-  list replaces Vite's defaults, so it repeats them. `server/vite.ts` spreads `viteConfig.server`
-  into its own options: never replace it. A new folder the page loads files from goes in `allow`
-  (`tests/unit/dev-server.test.ts` checks).
+| File                                                                 | Area                                                                                                                      |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [`downloads.md`](.claude/rules/downloads.md)                         | the audio pipeline (yt-dlp → ffmpeg): formats, the MP3 and its tags, covers, cancels, `502`s, file names                  |
+| [`history.md`](.claude/rules/history.md)                             | the download history (Recent Extractions): who may change it, keeping `/api/downloads` cheap                              |
+| [`outside-sources.md`](.claude/rules/outside-sources.md)             | YouTube, SoundCloud and yt-dlp: "never slow the app down" in full, `youtubeGuard`, source health, search, canonical links |
+| [`spotify-and-playlists.md`](.claude/rules/spotify-and-playlists.md) | Spotify (validated ids, no sign-in, songs past 100) and "Download all"                                                    |
+| [`save-to-folder.md`](.claude/rules/save-to-folder.md)               | Save to folder: real download links, a save's lifetime, `music-metadata` in `library.ts`                                  |
+| [`music-player.md`](.claude/rules/music-player.md)                   | the music player: playing inside the click, one `<audio>`, local-only songs, FLAC, WebKit on Windows                      |
+| [`browsers.md`](.claude/rules/browsers.md)                           | supported browsers and the Playwright tests                                                                               |
+| [`scripts.md`](.claude/rules/scripts.md)                             | the run scripts (Windows, macOS, Linux), the install branch, the owner's PC                                               |
+| [`dev-server.md`](.claude/rules/dev-server.md)                       | the server's startup and the dev server (Vite's `server.fs`)                                                              |
+| [`dependencies.md`](.claude/rules/dependencies.md)                   | dependencies, licences, npm versions, npm scripts, Prettier                                                               |
+| [`code.md`](.claude/rules/code.md)                                   | TypeScript, Zod 4 and Tailwind CSS 4 quirks                                                                               |
 
 ---
 
@@ -527,9 +419,8 @@ The install details CLAUDE.md summarises.
   `PLAYER_CACHE_DIR`); shell variables override it. Delete `data/history.json` to clear the history.
 - The API tests point `HISTORY_FILE`/`SETTINGS_FILE`/`SOURCE_HEALTH_FILE` at a temp folder, and the
   Playwright config starts its own server on port 5099 with a temp history, settings and health
-  file, so tests never touch the real ones. A unit test that makes the app record a source-health
-  event (a stubbed Spotify fetch, a route through `youtubeGuard`, a SoundCloud search or look-up)
-  sets `SOURCE_HEALTH_FILE` too, or hands the code a stand-in health store.
+  file, so tests never touch the real ones (a unit test that records source health does the same:
+  `.claude/rules/outside-sources.md`).
 - `npm install` needs `YOUTUBE_DL_SKIP_PYTHON_CHECK=1` in the environment on a system without Python
   3.9+: youtube-dl-exec's installer demands it though the app doesn't use Python (`yt-dlp.exe` on
   Windows; `scripts/yt-dlp.mjs` installs the standalone build on macOS/Linux afterwards). Don't use
@@ -537,10 +428,8 @@ The install details CLAUDE.md summarises.
   `node scripts/yt-dlp.mjs` runs again; `npm run update-yt-dlp` updates it in place.
 - In PowerShell, `npm` may be blocked by the script execution policy — use `npm.cmd` (or `cmd.exe`).
 - If `npm install` skips dev dependencies, `NODE_ENV=production` is set in that shell — unset it.
-- This PC: Node 24.19, npm 12.2 (blocks install scripts not in `allowScripts`), Git 2.55. npm 10
-  rewrote `package-lock.json` without the `libc` fields — never use it on this repo. winget's
-  msstore source fails with a certificate error here: use `--source winget`. Git's installer stops
-  while anything from Git's folder runs (Git Bash, even a `sleep`).
+- The owner's PC (versions, winget, Git's installer): `.claude/rules/scripts.md` and
+  `.claude/rules/dependencies.md`.
 
 ### The stack, in short
 
@@ -562,9 +451,12 @@ The install details CLAUDE.md summarises.
 - `npm run verify` — the one check before a change is done: `prettier --check`, `eslint`, `tsc`,
   `npm run licenses` (every dependency must carry a free, open-source licence; `ffmpeg-static`, GPL like
   ffmpeg itself, is the one agreed exception, so a new copyleft or non-open package fails the check rather
-  than widening the list), `npm run core-flows`, then the unit tests and the music and history API tests (no network). CI runs the same script on every push and pull
+  than widening the list), `npm run core-flows`, `npm run instructions`, then the unit tests and the music and history API tests (no network). CI runs the same script on every push and pull
   request
 - `npm run core-flows` — checks `docs/core-flows.md` against the tests (one line when all is well)
+- `npm run instructions` — checks Claude's instructions: `CLAUDE.md` within 600 words, each
+  `.claude/rules/` file within 500 and with `paths:` globs that each match a file git tracks (one
+  line when all is well)
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
   `scripts\windows\start.cmd` (`scripts/unix/start.sh` on macOS and Linux) does the same with install checks and opens the browser
 - `npm run check` — type-check
@@ -1192,17 +1084,18 @@ npm start                        # serves dist/ on http://localhost:5000
 
 ### Wired-up npm scripts
 
-| Script               | What it does                                                                                                                                                                                                                                             |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm run dev`        | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode.                                                                                                                                                                        |
-| `npm run build`      | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).                                                                                                                                                                            |
-| `npm start`          | Runs the production build from `dist/index.cjs` (production mode is baked in).                                                                                                                                                                           |
-| `npm run licenses`   | Checks that every dependency carries a free, open-source licence (MIT, Apache-2.0, BSD, ISC, MPL-2.0 and the like). `ffmpeg-static` is GPL, like ffmpeg itself, and is the one agreed exception; any other copyleft or non-open licence fails the check. |
-| `npm run core-flows` | Checks `docs/core-flows.md`: every core flow names an existing unit, integration and UI test, or a counted gap.                                                                                                                                          |
-| `npm run check`      | Type-checks the entire project with `tsc`.                                                                                                                                                                                                               |
-| `npm run verify`     | The one check before a change is done, and what CI runs: Prettier, ESLint, `tsc`, the licence and core-flows checks, then the unit tests and the music player's API test (no network).                                                                   |
-| `npm run coverage`   | Runs the unit tests with V8 coverage of `client/src`, `server` and `shared` (not the shadcn/ui components): a text summary, and an HTML report in `reports/coverage/` (git-ignored).                                                                     |
-| `npm run clean`      | Removes what test runs leave behind (see [Cleaning up after tests](#cleaning-up-after-tests)).                                                                                                                                                           |
+| Script                 | What it does                                                                                                                                                                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run dev`          | Starts the dev server (Express + Vite middleware) via `tsx`, in development mode.                                                                                                                                                                        |
+| `npm run build`        | Runs `scripts/build.ts` to bundle the client (Vite) and the server (esbuild).                                                                                                                                                                            |
+| `npm start`            | Runs the production build from `dist/index.cjs` (production mode is baked in).                                                                                                                                                                           |
+| `npm run licenses`     | Checks that every dependency carries a free, open-source licence (MIT, Apache-2.0, BSD, ISC, MPL-2.0 and the like). `ffmpeg-static` is GPL, like ffmpeg itself, and is the one agreed exception; any other copyleft or non-open licence fails the check. |
+| `npm run core-flows`   | Checks `docs/core-flows.md`: every core flow names an existing unit, integration and UI test, or a counted gap.                                                                                                                                          |
+| `npm run instructions` | Checks Claude's instructions: `CLAUDE.md` within 600 words; each `.claude/rules/` file within 500, with `paths:` globs that each match a file git tracks.                                                                                                |
+| `npm run check`        | Type-checks the entire project with `tsc`.                                                                                                                                                                                                               |
+| `npm run verify`       | The one check before a change is done, and what CI runs: Prettier, ESLint, `tsc`, the licence, core-flows and instructions checks, then the unit tests and the music player's and the history's API tests (no network).                                  |
+| `npm run coverage`     | Runs the unit tests with V8 coverage of `client/src`, `server` and `shared` (not the shadcn/ui components): a text summary, and an HTML report in `reports/coverage/` (git-ignored).                                                                     |
+| `npm run clean`        | Removes what test runs leave behind (see [Cleaning up after tests](#cleaning-up-after-tests)).                                                                                                                                                           |
 
 ### Tests, linting, and formatting
 
@@ -1232,7 +1125,7 @@ The project ships with two end-to-end test suites that exercise the real app aga
 
 ### Continuous integration
 
-`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. The other API and browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
+`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. The other API and browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
 
 Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups; and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The two Claude workflows sign in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and skip with a warning, still green, when it isn't set.
 
@@ -1286,6 +1179,7 @@ tests/
 │   ├── clean-script.test.ts     # scripts/clean.ts + leftovers.ts: every temp name the tests use; what a run deletes as it starts
 │   ├── windows-scripts.test.ts  # the Windows scripts and the install branch's shortcuts: ASCII, CRLF, one line each
 │   ├── dev-server.test.ts       # the dev server sends the page's files, never data/, dotfiles or the rest
+│   ├── instructions.test.ts     # scripts/instructions-rules.ts: CLAUDE.md's and the rules files' sizes, paths: globs
 │   └── host-check.test.ts       # DNS-rebinding protection
 └── utils/
     ├── mp3.ts                    # MP3 validator
