@@ -58,10 +58,11 @@ export function playlistMoreNote(playlist: SpotifyPlaylist, now = new Date()): s
         count > 100
           ? `more than these ${count.toLocaleString("en")} songs`
           : "more of this playlist";
-      // A time that has passed came back from asking at it: the page asks again in a minute.
+      // Once the time has passed, the page is asking — or, refused again with
+      // the same time (the app's clock a little behind), waits a minute more.
       const when = !retryAt
         ? ""
-        : ` The app asks again by itself ${retryAt > now ? aboutWhen(retryAt, now) : "in a minute"}, and the rest appear here then.`;
+        : ` The app asks again by itself ${retryAt > now ? aboutWhen(retryAt, now) : "shortly"}, and the rest appear here then.`;
       return `Spotify isn't sharing ${what} right now (too many requests from this computer).${when}`;
     }
     case "failed": {

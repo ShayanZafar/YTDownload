@@ -84,11 +84,12 @@ describe("playlistMoreNote", () => {
     expect(playlistMoreNote(playlist(300, { reason: "refused", retryAt }), NOW)).toMatch(
       /^Spotify isn't sharing more than these 300 songs right now/,
     );
-    // Asked at that time and still refused with it (the app's clock a little
-    // behind this one): no time that has passed, but when it asks again.
+    // Once that time has passed — the page asking, or, refused again with it
+    // (the app's clock a little behind this one), waiting a minute more — no
+    // time that has passed.
     const passed = at(-0.01).toISOString();
     expect(playlistMoreNote(playlist(100, { reason: "refused", retryAt: passed }), NOW)).toBe(
-      "Spotify isn't sharing more of this playlist right now (too many requests from this computer). The app asks again by itself in a minute, and the rest appear here then.",
+      "Spotify isn't sharing more of this playlist right now (too many requests from this computer). The app asks again by itself shortly, and the rest appear here then.",
     );
   });
 
