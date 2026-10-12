@@ -2,8 +2,8 @@ import os from "os";
 
 /**
  * How many things the app does at once wherever it can: one per CPU core of
- * the computer it runs on — never a number of our own (see CLAUDE.md: never
- * slow the app down). "Download all" works on this many songs at once (the
+ * the computer it runs on — never a number of our own (never slow the app
+ * down: .claude/rules/outside-sources.md). "Download all" works on this many songs at once (the
  * page learns it from GET /api/settings: it may be on a phone, whose own count
  * says nothing about this computer); the Save to folder's tags are read, and
  * a long Spotify playlist's pages fetched, this many at a time.

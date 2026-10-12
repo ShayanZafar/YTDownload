@@ -19,7 +19,7 @@ pass. The app then:
 4. hides the refusals in source health: they're counted under `spotify` with the embed page's
    successes, so the report says "All sources healthy".
 
-The owner's rule (CLAUDE.md, Third-party calls): when there's no other source, wait on your own,
+The owner's rule (never slow the app down, `.claude/rules/outside-sources.md`): when there's no other source, wait on your own,
 honouring `Retry-After`, so nobody has to restart anything. Songs past 100 have no other source.
 
 ## What changes
@@ -71,8 +71,8 @@ honouring `Retry-After`, so nobody has to restart anything. Songs past 100 have 
 
 ### Docs
 
-`docs/sources.md` (the new source and the 429 behaviour), CLAUDE.md's `server/spotify.ts` and
-`server/source-health.ts` entries, README's playlist section (the list can fill in later).
+`docs/sources.md` (the new source and the 429 behaviour), the `server/spotify.ts` and
+`server/source-health.ts` entries in TECHNICAL.md's File-by-file reference, README's playlist section (the list can fill in later).
 
 ## Acceptance criteria
 
