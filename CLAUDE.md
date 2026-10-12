@@ -50,7 +50,9 @@ youtube-dl-exec` on macOS/Linux. Never use npm 10 on this repo (drops the lockfi
 - Only canonical links reach yt-dlp (`audioLinkOf()`); search passes the query after `--`, no shell.
 - New YouTube calls go through `youtubeGuard.run()`; routes answer `YouTubeRefused` with
   `sendRefused()`. Update `docs/sources.md` when a source or fallback changes.
-- Spotify: only validated ids/codes go into fetched URLs; no sign-in (the app stays free).
+- Spotify: only validated ids/codes go into fetched URLs; no sign-in (the app stays free). Songs
+  past a playlist's first 100 have no other source: a 429 is waited out until its `Retry-After`
+  (`webApiRefusal`) and the open panel asks again by itself (the owner's decisions, Oct 12, 2026).
 - Anything that reads or writes the user's disk sits behind `localOnly()`; folder songs are asked
   for by id, never by path. Download links stay real `<a href download>` elements.
 - Player: `audio.play()` runs synchronously inside the click; keep the one `<audio>` element.

@@ -143,12 +143,16 @@ What each file does, and the function and constant names to look for. This was C
   `npm run update-yt-dlp` runs; never through a shell) at most once an hour, 2-minute limit, one
   log line at the start and one at the end; a failed update counts as the hour's try
 - `server/source-health.ts` — records every attempt against `youtube` (primary for audio),
-  `soundcloud` (its fallback), `spotify` (primary for song details) and `spotify-oembed` (its
-  fallback) — ok, or throttled / blocked / error with a note; the last 24 h, ≤500 events, in
-  memory — and writes the report to `data/source-health.json` (`SOURCE_HEALTH_FILE`; debounced,
-  temp file + rename): per source `role`/`for`/`ok`/`failed`/`throttled`/`lastOk`/`lastError`, `unreliable`
-  (a primary with ≥5 attempts and under half successful, and every fallback for its job
-  unreliable too — or none) and a one-sentence `summary`. `GET /api/health/sources` serves it
+  `soundcloud` (its fallback), `spotify` (primary for song details), `spotify-oembed` (its
+  fallback) and `spotify-web-api` (primary for a playlist's songs past 100; no fallback) — ok, or
+  throttled / blocked / error with a note, and a 429's Retry-After (`until`); the last 24 h, ≤500
+  events, in memory — and writes the report to `data/source-health.json` (`SOURCE_HEALTH_FILE`;
+  debounced, temp file + rename): per source
+  `role`/`for`/`ok`/`failed`/`throttled`/`lastOk`/`lastError`/`refusedUntil`, `unreliable` (a
+  primary with ≥5 attempts and under half successful, or refusing the app for more than another
+  hour — `REFUSED_FOR_MS`, the owner's decision of Oct 12, 2026 — and every fallback for its job
+  unreliable too, or none) and a one-sentence `summary`; such a refusal also rewrites the file
+  when it stops counting and when it ends. `GET /api/health/sources` serves it
   (not local-only; no paths in it). Pure parts unit-tested with a fake clock
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete onto a name
@@ -210,8 +214,11 @@ What each file does, and the function and constant names to look for. This was C
   (`parsePlaylistPage()`; Spotify lists at most 100 songs of a playlist there), and past 100 the
   rest from the Web API with the embed page's anonymous pass (`readEmbedAccessToken()`,
   `fetchMorePlaylistSongs()`: the first page gives the total, the rest are asked for together, one
-  per CPU core; ≤`SPOTIFY_PLAYLIST_MAX_SONGS`; Spotify's own playlists answer 404 and stay at 100 →
-  `maybeMore`)
+  per CPU core; ≤`SPOTIFY_PLAYLIST_MAX_SONGS`). Why it stopped short goes in the answer's `more`
+  (`reason`: `refused` — a 429 with Retry-After, `parseRetryAfter()` — `failed`, `spotify-own` —
+  Spotify's own playlists answer 404 — or `limit`; `retryAt`, `note`) next to `maybeMore`. A
+  refusal is the route's quota, not one pass's: `webApiRefusal` remembers it until its Retry-After,
+  and meanwhile playlists open with their first 100 songs without asking the Web API
   `spotify.link` short links: `resolveShortLink()` asks Spotify's short-link host where it leads
   (redirects followed only between `spotify.link`/`spotify.app.link`); `GET /api/spotify/link`
   tells the page where one leads, so it can search or open the playlist panel
@@ -273,9 +280,13 @@ What each file does, and the function and constant names to look for. This was C
   searched)
 - `client/src/components/spotify-playlist.tsx` — the playlist panel (Spotify playlists and albums,
   and YouTube playlists — `source`; `usePlaylist()` picks the endpoint from the link): lists the songs
-  (filter); picking a Spotify song searches its song link, picking a video opens it. With a Save to
+  (filter); picking a Spotify song searches its song link, picking a video opens it. Under a
+  playlist it couldn't list to the end, a note says why and when the app asks again
+  (`playlistMoreNote()` in `lib/playlist-more.ts`), and `usePlaylist()` asks again by itself at
+  `more.retryAt` (`hooks/use-ask-again-at.ts`; a tab asleep then asks once it's shown), the rest
+  joining the list in place. With a Save to
   folder: In folder marks and counts (`hooks/use-songs-in-folder.ts`, refetched on focus and after
-  saves), a Not in folder view, tick boxes and Download (`hooks/use-download-all.ts`:
+  saves; when more songs arrive, the last answer stands meanwhile and Download waits for the new one), a Not in folder view, tick boxes and Download (`hooks/use-download-all.ts`:
   `downloadSongs()` works on as many songs at once as the app's computer has CPU cores
   (`cpuCores` from `/api/settings`) — search, `confidentMatch()` (same length as on Spotify) or mark
   "check", then `saveOnServer()`, and after a save YouTube refused, the same on SoundCloud alone; a
@@ -350,7 +361,8 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
 - `client/public/` — `manifest.webmanifest` and the icons (tab, phones' home screens), drawn by
   `scripts/make-icons.ts` with Chrome (`npx tsx scripts/make-icons.ts`; `tests/unit/web-app.test.ts`)
 - `tests/unit` (no network: yt-dlp, SoundCloud and Spotify played by stand-ins — `audio-routes.test.ts`
-  runs the real routes and pipeline with a Node process writing ffmpeg-made audio), `tests/api`
+  runs the real routes and pipeline with a Node process writing ffmpeg-made audio, and
+  `spotify-routes.test.ts` the playlist route with a stand-in Spotify), `tests/api`
   (Vitest + Supertest, real YouTube, SoundCloud — `soundcloud.e2e.test.ts` — and Spotify), `tests/browser`
   (Playwright, in Chrome and WebKit; Firefox on request). The player's tests (`music*.test.ts`,
   `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed. Tests name their temp
@@ -367,7 +379,7 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   `scripts/core-flows-rules.ts` (`tests/unit/core-flows.test.ts`): each named test exists, unit and
   integration tests are ones verify runs, UI tests are `tests/browser` specs, and the gaps equal
   the allowed count. Integration means real routes/pipeline with stand-ins (`audio-routes.test.ts`,
-  the music and history API tests); a browser test counts only if it runs on stand-ins (`page.route`,
+  `spotify-routes.test.ts`, the music and history API tests); a browser test counts only if it runs on stand-ins (`page.route`,
   ffmpeg-made songs) — several in `download.spec.ts` need live YouTube or Spotify and don't
 
 ---
@@ -451,7 +463,9 @@ The project's rules in full, with the reasons behind them. CLAUDE.md keeps a one
   free — so only public playlists. Past a playlist's first 100 songs the app pages
   `api.spotify.com/v1/playlists/<validated id>/tracks` with the embed page's anonymous pass (the
   owner's choice: an app's own key can't read other people's playlists since Feb 2026); keep that
-  pass server-side, and any failure falls back to the first 100.
+  pass server-side, and any failure falls back to the first 100. With no other source for those
+  songs, the app waits on its own (the owner's decisions of Oct 12, 2026): a 429 is remembered until
+  its Retry-After and the open panel asks again then by itself; a failure without one, a minute later.
 - "Save to" folder: download links stay real `<a href download>` elements — `startDownload()` only
   calls `preventDefault()` (and `POST /api/video/save` instead) when a folder is set — so the default
   path and its tests are unchanged. Anything that reads or writes the user's disk must sit behind

@@ -638,6 +638,7 @@ export default function Home() {
               ? {
                   path: saveTo.folder,
                   songs: folderSongs.data,
+                  isOutdated: folderSongs.isPlaceholderData,
                   isChecking: folderSongs.isFetching,
                   error: folderSongs.error,
                 }

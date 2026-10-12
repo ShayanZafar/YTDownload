@@ -339,3 +339,220 @@ test.describe("a YouTube playlist", () => {
     ]);
   });
 });
+
+// A long Spotify playlist that Spotify wouldn't share past 100 songs: the
+// answers are the test's own (no Spotify); the Save to folder, and the check
+// of which songs are in it, are real.
+test.describe("a long Spotify playlist", () => {
+  const ID = "1aBcDeFgHiJkLmNoPqRsTu";
+  const SPOTIFY_LINK = `https://open.spotify.com/playlist/${ID}`;
+  // The first 100 are "Song n", the ones that come later "Encore n".
+  const song = (n: number) => {
+    const id = `${String(n).padStart(4, "0")}Foc5Q5nqNiosCNqttz`.slice(0, 22);
+    return {
+      id,
+      url: `https://open.spotify.com/track/${id}`,
+      title: n < 100 ? `Song ${n}` : `Encore ${n}`,
+      artists: "Band",
+      duration: 200,
+      explicit: false,
+    };
+  };
+  const answer = (songs: number, more?: Record<string, string>) => ({
+    source: "spotify",
+    kind: "playlist",
+    id: ID,
+    url: SPOTIFY_LINK,
+    name: "Trance Legends",
+    by: "Shayan",
+    image: null,
+    tracks: Array.from({ length: songs }, (_, n) => song(n)),
+    maybeMore: more !== undefined,
+    ...(more && { more }),
+  });
+  const inSeconds = (seconds: number) => new Date(Date.now() + seconds * 1000).toISOString();
+
+  /**
+   * The playlist route: first Spotify's refusal (asking again in 2 seconds),
+   * then — once the test lets it — the whole playlist.
+   */
+  async function refusedThenWhole(page: import("@playwright/test").Page) {
+    let asked = 0;
+    let letThrough!: () => void;
+    const held = new Promise<void>((resolve) => (letThrough = resolve));
+    await page.route("**/api/spotify/playlist?*", async (route) => {
+      asked++;
+      if (asked === 1) {
+        return route.fulfill({ json: answer(100, { reason: "refused", retryAt: inSeconds(2) }) });
+      }
+      await held;
+      await route.fulfill({ json: answer(150) });
+    });
+    return { asked: () => asked, letThrough };
+  }
+
+  /** Holds the page's looks through the folder (the real route) while the test says. */
+  async function folderChecks(page: import("@playwright/test").Page) {
+    let held: Promise<void> | undefined;
+    let release = () => {};
+    let waiting = 0;
+    await page.route("**/api/folders/songs", async (route) => {
+      if (held) {
+        waiting++;
+        await held;
+      }
+      await route.continue();
+    });
+    return {
+      hold() {
+        held = new Promise((resolve) => (release = resolve));
+      },
+      release() {
+        held = undefined;
+        release();
+      },
+      waiting: () => waiting,
+    };
+  }
+
+  let folder: string | undefined;
+  test.beforeEach(async ({ request }) => {
+    folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-sp-playlist-"));
+    // One of the songs that come later is in the folder already, named as the app names it.
+    await fs.writeFile(path.join(folder, "Band - Encore 140.mp3"), "");
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+  });
+  test.afterEach(async ({ page, request }) => {
+    await page.close();
+    await request.put("/api/settings", { data: { saveFolder: null } });
+    if (folder)
+      await fs.rm(folder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    folder = undefined;
+  });
+
+  const open = async (page: import("@playwright/test").Page) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Playlist", exact: true }).click();
+    await page.getByRole("textbox", { name: /playlist link/i }).fill(SPOTIFY_LINK);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+    return page.getByRole("region", { name: /spotify playlist/i });
+  };
+
+  test("fills in by itself when Spotify refused the rest, keeping the filter and ticks", async ({
+    page,
+  }) => {
+    const spotify = await refusedThenWhole(page);
+    const checks = await folderChecks(page);
+    const panel = await open(page);
+    const name = path.basename(folder!);
+    await expect(
+      panel.getByText(`by Shayan · 100 songs · 0 in “${name}” · 100 missing`),
+    ).toBeVisible({ timeout: 30_000 });
+    // The time Spotify gave, or "shortly" once it has passed (2 seconds go by
+    // quickly in a slow browser).
+    await expect(panel.getByTestId("playlist-more")).toHaveText(
+      /^Spotify isn't sharing more of this playlist right now \(too many requests from this computer\)\. The app asks again by itself ((tomorrow )?at about .+|shortly), and the rest appear here then\.$/,
+    );
+
+    // While it waits: a filter, and a song unticked.
+    const filter = panel.getByRole("searchbox", { name: "Filter the playlist's songs" });
+    await filter.fill("12");
+    await expect(panel.getByRole("checkbox")).toHaveCount(1);
+    await panel.getByRole("checkbox", { name: "Download “Song 12”" }).uncheck();
+
+    // At the time Spotify gave, the page asks again by itself; the rest arrive.
+    await expect.poll(spotify.asked, { timeout: 20_000 }).toBe(2);
+    checks.hold();
+    spotify.letThrough();
+    // Song 12, Encore 112 and Encore 120–129.
+    await expect(panel.getByRole("checkbox")).toHaveCount(12, { timeout: 20_000 });
+    await expect(filter).toHaveValue("12");
+    await expect(panel.getByRole("checkbox", { name: "Download “Song 12”" })).not.toBeChecked();
+    await expect(panel.getByRole("checkbox", { name: "Download “Encore 125”" })).toBeChecked();
+    await expect(panel.getByTestId("playlist-more")).toHaveCount(0);
+    // Until the folder has been looked through for the new songs, nothing can
+    // be downloaded: some of them may be there already.
+    await expect.poll(checks.waiting, { timeout: 20_000 }).toBeGreaterThan(0);
+    const download = panel.getByRole("button", { name: /^Download\b/ });
+    await expect(download).toBeDisabled();
+    checks.release();
+    await expect(download).toBeEnabled({ timeout: 30_000 });
+
+    // The folder was looked through for the new songs too.
+    await filter.fill("");
+    await expect(
+      panel.getByText(`by Shayan · 150 songs · 1 in “${name}” · 149 missing`),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      panel.getByRole("button", { name: /^encore 140.*in the folder as/i }),
+    ).toBeVisible();
+    expect(spotify.asked()).toBe(2);
+  });
+
+  test("another playlist never shows the last one's folder marks while its own are looked for", async ({
+    page,
+  }) => {
+    const OTHER = "9zYxWvUtSrQpOnMlKjIhGf";
+    const OTHER_LINK = `https://open.spotify.com/playlist/${OTHER}`;
+    await page.route("**/api/spotify/playlist?*", (route) =>
+      route.fulfill({
+        json: new URL(route.request().url()).searchParams.get("link")?.includes(OTHER)
+          ? {
+              ...answer(0),
+              id: OTHER,
+              url: OTHER_LINK,
+              name: "Encores",
+              tracks: [song(140), song(141)],
+            }
+          : answer(150),
+      }),
+    );
+    const checks = await folderChecks(page);
+    const panel = await open(page);
+    const name = path.basename(folder!);
+    await expect(
+      panel.getByText(`by Shayan · 150 songs · 1 in “${name}” · 149 missing`),
+    ).toBeVisible({ timeout: 30_000 });
+
+    checks.hold();
+    await page.getByRole("textbox", { name: /playlist link/i }).fill(OTHER_LINK);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+    await expect(panel.getByRole("heading", { name: "Encores" })).toBeVisible({ timeout: 30_000 });
+    await expect.poll(checks.waiting, { timeout: 20_000 }).toBeGreaterThan(0);
+    await expect(panel.getByText(`by Shayan · 2 songs · checking “${name}”…`)).toBeVisible();
+    await expect(panel.getByRole("button", { name: /^Download\b/ })).toHaveCount(0);
+
+    checks.release();
+    await expect(panel.getByText(`by Shayan · 2 songs · 1 in “${name}” · 1 missing`)).toBeVisible({
+      timeout: 30_000,
+    });
+  });
+
+  test("after Untick all, the songs that arrive later are unticked too", async ({ page }) => {
+    const spotify = await refusedThenWhole(page);
+    const panel = await open(page);
+    await expect(panel.getByRole("checkbox", { checked: true })).toHaveCount(100, {
+      timeout: 30_000,
+    });
+    await panel.getByRole("button", { name: "Untick all" }).click();
+    await expect(panel.getByRole("checkbox", { checked: true })).toHaveCount(0);
+
+    await expect.poll(spotify.asked, { timeout: 20_000 }).toBe(2);
+    spotify.letThrough();
+    await expect(panel.getByRole("checkbox")).toHaveCount(149, { timeout: 30_000 });
+    await expect(panel.getByRole("checkbox", { checked: true })).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: "Tick all" })).toBeVisible();
+  });
+
+  test("says what failed, and that the app tries again in a minute", async ({ page }) => {
+    await page.route("**/api/spotify/playlist?*", (route) =>
+      route.fulfill({
+        json: answer(100, { reason: "failed", note: "HTTP 503", retryAt: inSeconds(60) }),
+      }),
+    );
+    const panel = await open(page);
+    await expect(panel.getByTestId("playlist-more")).toHaveText(
+      "Couldn't get the rest of this playlist from Spotify (HTTP 503). The app tries again in a minute.",
+    );
+  });
+});

@@ -1,7 +1,7 @@
 /**
  * How the outside sources the app depends on have been answering: every
- * attempt against YouTube and SoundCloud (through yt-dlp) and Spotify is
- * recorded here, and the last 24 hours are summed up in
+ * attempt against YouTube and SoundCloud (through yt-dlp) and Spotify (its
+ * embed pages, oEmbed endpoint and Web API) is recorded here, and the last 24 hours are summed up in
  * `data/source-health.json` (or wherever SOURCE_HEALTH_FILE points) and at
  * `GET /api/health/sources`, so that
  * someone — or a tool watching the app — can tell "YouTube is limiting this
@@ -26,6 +26,8 @@ export const SOURCES = {
   soundcloud: { role: "fallback", for: "audio", name: "SoundCloud" },
   spotify: { role: "primary", for: "song details", name: "Spotify" },
   "spotify-oembed": { role: "fallback", for: "song details", name: "Spotify oEmbed" },
+  // Nothing stands in for it: songs past a playlist's first 100 wait for it.
+  "spotify-web-api": { role: "primary", for: "playlist songs past 100", name: "Spotify Web API" },
 } as const satisfies Record<string, { role: "primary" | "fallback"; for: string; name: string }>;
 
 export type SourceName = keyof typeof SOURCES;
@@ -41,6 +43,8 @@ export type HealthEvent = {
   kind?: FailureKind;
   /** What went wrong, in a few words (never a path or a secret). */
   note?: string;
+  /** For a refusal: until when the source said to wait (its Retry-After, ms since the epoch). */
+  until?: number;
 };
 
 /** How far back the report looks. */
@@ -51,8 +55,16 @@ export const MAX_EVENTS = 500;
 export const MIN_ATTEMPTS = 5;
 /** …and fewer than this share of them must have worked. */
 export const UNRELIABLE_BELOW = 0.5;
+/**
+ * A source that has told the app to wait longer than this (a 429's
+ * Retry-After) is unreliable however few the attempts: while refused, the
+ * app asks it about once a refusal, so it never reaches MIN_ATTEMPTS.
+ */
+export const REFUSED_FOR_MS = 60 * 60_000;
 /** The file is rewritten at most this often. */
 export const WRITE_EVERY_MS = 5_000;
+/** The longest a timer can wait. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const NOTE_MAX_CHARS = 200;
 
 export function sourceHealthFilePath(): string {
@@ -85,16 +97,27 @@ export function pruneEvents(events: HealthEvent[], now: number): HealthEvent[] {
   return events.filter((event) => event.t > since).slice(-MAX_EVENTS);
 }
 
-/** Is a source failing more often than not? Only once there's enough to go on. */
-export function isUnreliable(health: Pick<SourceHealth, "ok" | "failed">): boolean {
+/**
+ * Is a source failing more often than not (only once there's enough to go
+ * on), or refusing the app for more than another hour?
+ */
+export function isUnreliable(
+  health: Pick<SourceHealth, "ok" | "failed"> & Partial<Pick<SourceHealth, "refusedUntil">>,
+  now = Date.now(),
+): boolean {
+  const refusedUntil = health.refusedUntil ? Date.parse(health.refusedUntil) : NaN;
+  if (refusedUntil - now > REFUSED_FOR_MS) return true;
   const attempts = health.ok + health.failed;
   return attempts >= MIN_ATTEMPTS && health.ok / attempts < UNRELIABLE_BELOW;
 }
 
-function summarizeSource(source: SourceName, events: HealthEvent[]): SourceHealth {
+function summarizeSource(source: SourceName, events: HealthEvent[], now: number): SourceHealth {
   const own = events.filter((event) => event.source === source);
   const lastOk = own.filter((event) => event.ok).at(-1);
   const lastFailed = own.filter((event) => !event.ok).at(-1);
+  // Still refused: the last answer said to wait, and the time hasn't come.
+  const last = own.at(-1);
+  const refusedUntil = last && !last.ok && last.until && last.until > now ? last.until : undefined;
   return {
     role: SOURCES[source].role,
     for: SOURCES[source].for,
@@ -103,6 +126,7 @@ function summarizeSource(source: SourceName, events: HealthEvent[]): SourceHealt
     throttled: own.filter((event) => !event.ok && event.kind === "throttled").length,
     lastOk: lastOk ? new Date(lastOk.t).toISOString() : null,
     lastError: lastFailed ? lastFailed.note || lastFailed.kind || "failed" : null,
+    refusedUntil: refusedUntil ? new Date(refusedUntil).toISOString() : null,
   };
 }
 
@@ -112,27 +136,38 @@ const sourceNames = () => Object.keys(SOURCES) as SourceName[];
  * Can't the app do some job any more? That's when the job's primary source is
  * unreliable and so is every fallback for it — or it has no fallback at all.
  */
-export function anyJobUnreliable(sources: Record<SourceName, SourceHealth>): boolean {
+export function anyJobUnreliable(
+  sources: Record<SourceName, SourceHealth>,
+  now = Date.now(),
+): boolean {
   return sourceNames().some((primary) => {
-    if (SOURCES[primary].role !== "primary" || !isUnreliable(sources[primary])) return false;
+    if (SOURCES[primary].role !== "primary" || !isUnreliable(sources[primary], now)) return false;
     const fallbacks = sourceNames().filter(
       (name) => SOURCES[name].role === "fallback" && SOURCES[name].for === SOURCES[primary].for,
     );
-    return fallbacks.every((name) => isUnreliable(sources[name]));
+    return fallbacks.every((name) => isUnreliable(sources[name], now));
   });
 }
 
 /**
- * One sentence a person can read: the unreliable sources, with their counts
- * and last error — "YouTube: 2 of 20 requests succeeded in the last 24 h
- * (last error: HTTP Error 429)." — or "All sources healthy."
+ * One sentence a person can read: the unreliable sources, with their counts,
+ * last error and until when one refuses the app — "YouTube: 2 of 20 requests
+ * succeeded in the last 24 h (last error: HTTP Error 429)." — or "All
+ * sources healthy."
  */
-export function summarySentence(sources: Record<SourceName, SourceHealth>): string {
+export function summarySentence(
+  sources: Record<SourceName, SourceHealth>,
+  now = Date.now(),
+): string {
   const parts = sourceNames()
-    .filter((name) => isUnreliable(sources[name]))
+    .filter((name) => isUnreliable(sources[name], now))
     .map((name) => {
-      const { ok, failed, lastError } = sources[name];
-      const error = lastError ? ` (last error: ${lastError})` : "";
+      const { ok, failed, lastError, refusedUntil } = sources[name];
+      const notes = [
+        lastError && `last error: ${lastError}`,
+        refusedUntil && `refused until ${refusedUntil}`,
+      ].filter(Boolean);
+      const error = notes.length > 0 ? ` (${notes.join("; ")})` : "";
       return `${SOURCES[name].name}: ${ok} of ${ok + failed} requests succeeded in the last 24 h${error}`;
     });
   return parts.length > 0 ? `${parts.join("; ")}.` : "All sources healthy.";
@@ -142,12 +177,15 @@ export function summarySentence(sources: Record<SourceName, SourceHealth>): stri
 export function buildReport(events: HealthEvent[], now: number): SourceHealthReport {
   const recent = pruneEvents(events, now);
   const sources = Object.fromEntries(
-    (Object.keys(SOURCES) as SourceName[]).map((name) => [name, summarizeSource(name, recent)]),
+    (Object.keys(SOURCES) as SourceName[]).map((name) => [
+      name,
+      summarizeSource(name, recent, now),
+    ]),
   ) as Record<SourceName, SourceHealth>;
   return {
     updatedAt: new Date(now).toISOString(),
-    unreliable: anyJobUnreliable(sources),
-    summary: summarySentence(sources),
+    unreliable: anyJobUnreliable(sources, now),
+    summary: summarySentence(sources, now),
     sources,
   };
 }
@@ -180,15 +218,39 @@ export class SourceHealthStore {
     this.writeEveryMs = writeEveryMs;
   }
 
-  /** An attempt against a source: how it went, and for a failure, why. */
-  record(source: SourceName, ok: boolean, failure: { kind?: FailureKind; note?: string } = {}) {
+  /**
+   * An attempt against a source: how it went, and for a failure, why — and
+   * for a refusal, until when the source said to wait.
+   */
+  record(
+    source: SourceName,
+    ok: boolean,
+    failure: { kind?: FailureKind; note?: string; until?: number } = {},
+  ) {
     const event: HealthEvent = { t: this.now(), source, ok };
     if (!ok) {
       event.kind = failure.kind ?? "error";
       if (failure.note) event.note = cleanNote(failure.note);
+      if (failure.until) event.until = failure.until;
     }
     this.events = pruneEvents([...this.events, event], event.t);
     this.scheduleWrite();
+    if (event.until) this.rewriteAsRefusalRunsOut(event.until);
+  }
+
+  /**
+   * While refused, the app asks nothing, so only the clock changes the report
+   * of a refusal long enough to count as unreliable: when it stops counting
+   * (its last hour) and when it ends. The file is rewritten then too.
+   */
+  private rewriteAsRefusalRunsOut(until: number) {
+    if (until - this.now() <= REFUSED_FOR_MS) return;
+    for (const at of [until - REFUSED_FOR_MS, until]) {
+      const wait = at - this.now() + 1;
+      if (wait > 0 && wait <= MAX_TIMER_MS) {
+        setTimeout(() => this.scheduleWrite(), wait).unref();
+      }
+    }
   }
 
   report(now = this.now()): SourceHealthReport {
