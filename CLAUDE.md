@@ -33,8 +33,9 @@ TypeScript (`server/`); schemas and API contracts in `shared/`; no database, jus
 - `npm run core-flows`, `npm run instructions`, `npm run coverage`, `npm run check`,
   `npm run update-yt-dlp`, `npm run clean`.
 - Install: `npm install` (Node 24 LTS, npm 11+; never npm 10, which drops the lockfile's `libc`
-  fields). Without Python 3.9+, set `YOUTUBE_DL_SKIP_PYTHON_CHECK=1`. In PowerShell, `npm.cmd`.
-  `.env`: optional (TECHNICAL.md › Environment Variables).
+  fields). Without Python 3.9+, set `YOUTUBE_DL_SKIP_PYTHON_CHECK=1`. On macOS/Linux, never
+  `npm rebuild youtube-dl-exec`. In PowerShell, `npm.cmd`. `.env`: optional (TECHNICAL.md ›
+  Environment Variables).
 
 ## Rules everywhere
 
@@ -65,4 +66,4 @@ TypeScript (`server/`); schemas and API contracts in `shared/`; no database, jus
 - After each completed milestone (a feature, fix or cleanup, done and tested), commit it alone to
   `main` with a descriptive message, without asking first, and push to `origin/main`; never
   half-finished work. Each push rebuilds the `install` branch PCs update from, untested, so push
-  only what passes `npm run verify`.
+  only what passes `npm run verify`. Never commit to `install` by hand.

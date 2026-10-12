@@ -27,6 +27,6 @@ paths:
   24.19, npm 12.2.
 - Everything is on its newest version except TypeScript (6.0: typescript-eslint supports < 6.1, not
   the native TypeScript 7 yet) and `@types/node` (follows the Node the app runs on, 24).
-- Don't use `npm rebuild youtube-dl-exec` on macOS/Linux — it brings back the Python yt-dlp until
-  `node scripts/yt-dlp.mjs` runs again; `npm run update-yt-dlp` updates it in place.
+- Why CLAUDE.md rules out `npm rebuild youtube-dl-exec` on macOS/Linux: it brings back the Python
+  yt-dlp until `node scripts/yt-dlp.mjs` runs again; `npm run update-yt-dlp` updates it in place.
 - Prettier config is in `.prettierrc` (`endOfLine: auto`, so CRLF checkouts on Windows are fine).

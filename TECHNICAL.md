@@ -337,7 +337,7 @@ What each file does, and the function and constant names to look for. This was C
   `package*.json`, the Windows and Unix scripts and `scripts/install/` (README with the build filled in,
   `.gitignore`, `Start/Stop/Update.cmd` shortcuts — one line each, as `Update.cmd` replaces them
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
-  (no history to merge); it's only ever written by the workflow (`.claude/rules/scripts.md`)
+  (no history to merge); it's only ever written by the workflow (`CLAUDE.md` › Workflow)
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
   lint, type-check, dependency licences, the core-flows and instructions checks, unit tests + the music and history API tests) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
   10×), and on pull requests. The YouTube API and browser tests aren't run there (GitHub's machines
@@ -403,7 +403,7 @@ The project's rules and pitfalls, with the reasons behind them, are kept by area
 | [`save-to-folder.md`](.claude/rules/save-to-folder.md)               | Save to folder: real download links, a save's lifetime, `music-metadata` in `library.ts`                                  |
 | [`music-player.md`](.claude/rules/music-player.md)                   | the music player: playing inside the click, one `<audio>`, local-only songs, FLAC, WebKit on Windows                      |
 | [`browsers.md`](.claude/rules/browsers.md)                           | supported browsers and the Playwright tests                                                                               |
-| [`scripts.md`](.claude/rules/scripts.md)                             | the run scripts (Windows, macOS, Linux), the install branch, the owner's PC                                               |
+| [`scripts.md`](.claude/rules/scripts.md)                             | the run scripts (Windows, macOS, Linux) and the owner's PC                                                                |
 | [`dev-server.md`](.claude/rules/dev-server.md)                       | the server's startup and the dev server (Vite's `server.fs`)                                                              |
 | [`dependencies.md`](.claude/rules/dependencies.md)                   | dependencies, licences, npm versions, npm scripts, Prettier                                                               |
 | [`code.md`](.claude/rules/code.md)                                   | TypeScript, Zod 4 and Tailwind CSS 4 quirks                                                                               |

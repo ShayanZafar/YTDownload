@@ -4,6 +4,7 @@ import {
   RULES_FILE_MAX_WORDS,
   checkInstructions,
   countWords,
+  expandBraces,
   matchesAny,
   rulePaths,
   splitFrontmatter,
@@ -116,6 +117,36 @@ describe("matchesAny", () => {
   });
 });
 
+describe("expandBraces", () => {
+  it("gives each alternative of a brace group", () => {
+    expect(expandBraces("tests/unit/{a,b,c}.test.ts")).toEqual([
+      "tests/unit/a.test.ts",
+      "tests/unit/b.test.ts",
+      "tests/unit/c.test.ts",
+    ]);
+  });
+
+  it("expands several groups and nested ones", () => {
+    expect(expandBraces("{server,shared}/{a,b}.ts")).toEqual([
+      "server/a.ts",
+      "server/b.ts",
+      "shared/a.ts",
+      "shared/b.ts",
+    ]);
+    expect(expandBraces("client/**/*.{ts,{tsx,css}}")).toEqual([
+      "client/**/*.ts",
+      "client/**/*.tsx",
+      "client/**/*.css",
+    ]);
+  });
+
+  it("leaves a glob without a group, or with a one-item group, as it is", () => {
+    expect(expandBraces("server/**")).toEqual(["server/**"]);
+    expect(expandBraces("server/{a}.ts")).toEqual(["server/{a}.ts"]);
+    expect(expandBraces("{a}/{b,c}.ts")).toEqual(["{a}/b.ts", "{a}/c.ts"]);
+  });
+});
+
 describe("checkInstructions", () => {
   it("passes small, scoped instructions and reports their sizes", () => {
     const report = checkInstructions(input());
@@ -174,6 +205,19 @@ describe("checkInstructions", () => {
     expect(report.problems).toEqual([
       expect.stringContaining('.claude/rules/a.md: "server/video*.ts" matches no file git tracks'),
       expect.stringContaining('.claude/rules/a.md: "docs/*.md" matches no file git tracks'),
+    ]);
+  });
+
+  it("fails a brace group when any one alternative matches nothing, a renamed file say", () => {
+    const text = rules(
+      'paths:\n  - "tests/unit/{audio,video,image}.test.ts"\n  - "server/{audio,audio-source}.ts"',
+    );
+    const report = checkInstructions(input({ rulesFiles: [{ file: ".claude/rules/a.md", text }] }));
+    expect(report.globs).toBe(2);
+    expect(report.problems).toEqual([
+      '.claude/rules/a.md: "tests/unit/{audio,video,image}.test.ts" (its "tests/unit/video.test.ts", ' +
+        '"tests/unit/image.test.ts") matches no file git tracks, so it never loads the rules for ' +
+        "it: fix the glob or remove it.",
     ]);
   });
 

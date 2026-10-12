@@ -6,8 +6,8 @@ import path from "path";
  * reads or edits a file its `paths:` globs match. Long instructions get followed less carefully,
  * so the check keeps them small and scoped: CLAUDE.md within CLAUDE_MD_MAX_WORDS, each rules file
  * within RULES_FILE_MAX_WORDS, and every rules file with `paths:` (without them it would load with
- * every request too) whose globs each match a file git tracks (a glob that matches nothing means
- * the rules never load for what they're about). Pure: the caller hands it the files' text and the
+ * every request too) whose globs each match a file git tracks, every alternative of a `{a,b}`
+ * group included (a glob that matches nothing means the rules never load for what they're about). Pure: the caller hands it the files' text and the
  * list of tracked files.
  */
 
@@ -121,6 +121,51 @@ export function matchesAny(glob: string, files: string[]): boolean {
   return files.some((file) => path.posix.matchesGlob(file, glob));
 }
 
+/** Splits a brace group's inside on the commas outside nested braces. */
+function splitAlternatives(inside: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const char of inside) {
+    if (char === "{") depth++;
+    else if (char === "}") depth = Math.max(0, depth - 1);
+    else if (char === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
+/**
+ * A glob with its brace groups expanded (`tests/{a,b}.ts` → `tests/a.ts`, `tests/b.ts`; nested and
+ * several groups too), so each alternative can be checked on its own: a glob passes only when every
+ * one of them matches a file, and a renamed file doesn't hide behind the others. A group without a
+ * comma (`{a}`) is left as it is.
+ */
+export function expandBraces(glob: string): string[] {
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < glob.length; i++) {
+    if (glob[i] === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (glob[i] === "}" && depth > 0) {
+      depth--;
+      if (depth > 0) continue;
+      const alternatives = splitAlternatives(glob.slice(start + 1, i));
+      if (alternatives.length < 2) continue;
+      const before = glob.slice(0, start);
+      const after = glob.slice(i + 1);
+      return alternatives.flatMap((alternative) => expandBraces(before + alternative + after));
+    }
+  }
+  return [glob];
+}
+
 /** Checks CLAUDE.md and the .claude/rules files; `problems` is empty when all is well. */
 export function checkInstructions(input: InstructionsInput): InstructionsReport {
   const problems: string[] = [];
@@ -156,12 +201,17 @@ export function checkInstructions(input: InstructionsInput): InstructionsReport 
     }
     globs += paths.length;
     for (const glob of paths) {
-      if (!matchesAny(glob, input.tracked)) {
-        problems.push(
-          `${file}: "${glob}" matches no file git tracks, so it never loads the rules: ` +
-            "fix the glob or remove it.",
-        );
-      }
+      const alternatives = expandBraces(glob);
+      const dead = alternatives.filter((alternative) => !matchesAny(alternative, input.tracked));
+      if (dead.length === 0) continue;
+      const which =
+        alternatives.length === 1
+          ? ""
+          : ` (its ${dead.map((alternative) => `"${alternative}"`).join(", ")})`;
+      problems.push(
+        `${file}: "${glob}"${which} matches no file git tracks, so it never loads the rules ` +
+          "for it: fix the glob or remove it.",
+      );
     }
   }
 

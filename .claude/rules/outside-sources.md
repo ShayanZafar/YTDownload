@@ -1,8 +1,7 @@
 ---
 paths:
-  - "server/{youtube-limits,yt-dlp-update,source-health,search,soundcloud,cpu-cores}.ts"
-  - "server/{audio,audio-source,youtube-playlist,youtube-url,spotify,lyrics,cover,routes}.ts"
-  - "shared/{soundcloud,youtube}-link.ts"
+  - "server/**"
+  - "shared/**"
   - "client/src/hooks/use-download-all.ts"
   - "scripts/yt-dlp.mjs"
   - "docs/sources.md"
