@@ -5,3 +5,5 @@ Choices the owner made, or that took their default after 7 days without an answe
 Decisions made before Oct 12, 2026 are recorded inline in CLAUDE.md with their dates.
 
 <!-- Format: - YYYY-MM-DD — <decision>. Why: <reason>. (#n) -->
+
+- 2026-10-12 — Delete the stray branch `cursor/paste-link-from-message` (done; its tip was e4418d7). Why: `main` shipped the same Paste feature another way (36a5d07) and has its own ignore rules, so the branch was superseded. (#16)
