@@ -54,6 +54,8 @@ When the owner answers (a comment by ShayanZafar picking an option or saying wha
 
 Never ask again about anything in `docs/decisions.md`. Decisions made before Oct 12, 2026 are recorded inline in CLAUDE.md with their dates.
 
+**Acting on answers at once.** The Claude Backlog workflow (`.github/workflows/claude-backlog.yml`) runs this section as soon as the owner comments on a `decision` or `debt` issue, and opens the pull request; the weekly triage is the safety net. It also records any decision the owner closed with an answer that has no line in `docs/decisions.md` yet.
+
 ## Weekly triage
 
 Run in this order and change nothing that isn't due:
