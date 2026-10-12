@@ -57,7 +57,7 @@ function makeSong(file: string, seconds: number): Promise<void> {
   });
 }
 
-// Opening a song can block WebKit on Windows for several seconds (see CLAUDE.md).
+// Opening a song can block WebKit on Windows for several seconds (see TECHNICAL.md › Conventions and gotchas).
 const START_SONG = { timeout: 90_000 };
 
 test.describe("a YouTube playlist", () => {
@@ -243,6 +243,64 @@ test.describe("a YouTube playlist", () => {
     expect(searches).toBe(0);
   });
 
+  test("with a Save to folder, each tick box changes its own song, and Download saves just the ticked ones", async ({
+    page,
+    request,
+  }) => {
+    folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-yt-playlist-"));
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    await page.route("**/api/youtube/playlist?*", (route) => route.fulfill({ json: PLAYLIST }));
+    const saved: string[] = [];
+    await page.route("**/api/video/save", async (route) => {
+      const body = route.request().postDataJSON() as { url: string };
+      saved.push(body.url);
+      const video = videos.find(([id]) => body.url.endsWith(id));
+      const fileName = `${video?.[1]}.mp3`;
+      await route.fulfill({
+        contentType: "application/x-ndjson",
+        body: [
+          JSON.stringify({ type: "done", fileName, folder, path: fileName, bytes: 2048 }),
+          "",
+        ].join("\n"),
+      });
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Playlist", exact: true }).click();
+    await page.getByRole("textbox", { name: /playlist link/i }).fill(LINK);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+
+    const panel = page.getByRole("region", { name: /youtube playlist/i });
+    const download = (n: string) => panel.getByRole("button", { name: `Download ${n}` });
+    await expect(download("3 songs")).toBeVisible({ timeout: 30_000 });
+
+    // Each tick box changes only its own song, every time it's clicked.
+    const tick = (title: string) => panel.getByRole("checkbox", { name: `Download “${title}”` });
+    await tick("Never Gonna Give You Up").click();
+    await expect(tick("Never Gonna Give You Up")).not.toBeChecked();
+    await expect(download("2 songs")).toBeVisible();
+    await tick("Me at the zoo").click();
+    await expect(download("1 song")).toBeVisible();
+    await tick("Never Gonna Give You Up").click();
+    await expect(tick("Never Gonna Give You Up")).toBeChecked();
+    await expect(tick("Me at the zoo")).not.toBeChecked();
+    await expect(tick("Bohemian Rhapsody")).toBeChecked();
+    await expect(download("2 songs")).toBeVisible();
+
+    await download("2 songs").click();
+    await expect(
+      panel.getByRole("button", { name: /^bohemian rhapsody.*saved as/i }),
+    ).toBeVisible();
+    await expect(
+      panel.getByRole("button", { name: /^never gonna give you up.*saved as/i }),
+    ).toBeVisible();
+    expect(saved.sort()).toEqual([
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "https://www.youtube.com/watch?v=fJ9rUzIMcZQ",
+    ]);
+    await expect(tick("Me at the zoo")).not.toBeChecked();
+  });
+
   test("with a Save to folder, plays the songs in it in the playlist's order, and saves a playlist file", async ({
     page,
     request,
@@ -390,8 +448,10 @@ test.describe("a long Spotify playlist", () => {
     await expect(
       panel.getByText(`by Shayan · 100 songs · 0 in “${name}” · 100 missing`),
     ).toBeVisible({ timeout: 30_000 });
+    // The time Spotify gave, or "shortly" once it has passed (2 seconds go by
+    // quickly in a slow browser).
     await expect(panel.getByTestId("playlist-more")).toHaveText(
-      /^Spotify isn't sharing more of this playlist right now \(too many requests from this computer\)\. The app asks again by itself (tomorrow )?at about .+, and the rest appear here then\.$/,
+      /^Spotify isn't sharing more of this playlist right now \(too many requests from this computer\)\. The app asks again by itself ((tomorrow )?at about .+|shortly), and the rest appear here then\.$/,
     );
 
     // While it waits: a filter, and a song unticked.

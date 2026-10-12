@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -183,6 +183,136 @@ function markFor(
   return undefined;
 }
 
+type SongRowProps = {
+  track: SpotifyPlaylistTrack;
+  /** Its place in the playlist, from 1. */
+  number: number;
+  /** Its matches are showing (or being looked for). */
+  active: boolean;
+  searching: boolean;
+  isYouTube: boolean;
+  /** Folder mode: a tick box for the songs not in the folder. */
+  withTick: boolean;
+  /** The song's file in the folder ("" when just saved), or undefined when it isn't there. */
+  inFolderFile: string | undefined;
+  status: SongStatus | undefined;
+  /** In the download history (marked when there's no Save to folder). */
+  downloaded: boolean;
+  ticked: boolean;
+  /** Download is running: the ticks can't change. */
+  running: boolean;
+  onPick: (track: SpotifyPlaylistTrack) => void;
+  onToggle: (id: string) => void;
+};
+
+/** A song in the list: click it to find it (or open the video); tick it for Download. */
+const SongRow = memo(function SongRow({
+  track,
+  number,
+  active,
+  searching,
+  isYouTube,
+  withTick,
+  inFolderFile,
+  status,
+  downloaded,
+  ticked,
+  running,
+  onPick,
+  onToggle,
+}: SongRowProps) {
+  const here = inFolderFile !== undefined;
+  const mark = markFor(status, here ? { file: inFolderFile } : undefined, downloaded);
+  return (
+    <li className="flex items-center">
+      {withTick && (
+        <span className="flex w-10 shrink-0 justify-end">
+          {!here && (
+            <input
+              type="checkbox"
+              checked={ticked}
+              disabled={running}
+              onChange={() => onToggle(track.id)}
+              aria-label={`Download “${track.title}”`}
+              className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-default"
+            />
+          )}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={() => onPick(track)}
+        aria-pressed={active}
+        aria-label={[
+          track.title,
+          track.artists && `by ${track.artists}`,
+          track.duration != null && formatDuration(track.duration),
+          mark?.detail,
+        ]
+          .filter(Boolean)
+          .join(", ")}
+        title={isYouTube ? "Open this video" : "Find this song on YouTube"}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-3 py-2.5 pr-4 text-left transition-colors",
+          withTick ? "pl-3" : "pl-4",
+          active ? "bg-primary/5" : "hover:bg-secondary/40",
+        )}
+      >
+        <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+          {number}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-medium text-foreground">{track.title}</span>
+            {track.explicit && (
+              <span
+                title="Explicit"
+                className="shrink-0 rounded-sm bg-muted-foreground/20 px-1 text-[9px] font-bold leading-4 text-muted-foreground"
+              >
+                E
+              </span>
+            )}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">{track.artists}</span>
+        </span>
+        {mark && (
+          <span
+            title={mark.detail}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums",
+              mark.className,
+            )}
+          >
+            <mark.Icon className={cn("h-4 w-4", mark.spin && "animate-spin")} />
+            <span className="hidden sm:inline">{mark.text}</span>
+            {mark.label && (
+              <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground">
+                {mark.label}
+              </span>
+            )}
+          </span>
+        )}
+        {track.duration != null && (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {formatDuration(track.duration)}
+          </span>
+        )}
+        {isYouTube ? (
+          <ChevronRight
+            className={cn("h-4 w-4 shrink-0", active ? "text-primary" : "text-muted-foreground/60")}
+          />
+        ) : searching ? (
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+        ) : (
+          <Search
+            className={cn("h-4 w-4 shrink-0", active ? "text-primary" : "text-muted-foreground/60")}
+          />
+        )}
+      </button>
+    </li>
+  );
+});
+
 /**
  * The songs in a Spotify playlist or album, or the videos in a YouTube
  * playlist. Clicking a Spotify song looks for it on YouTube, exactly like
@@ -264,6 +394,19 @@ export function SpotifyPlaylistPanel({
     setTickAllSaid(on);
   };
   const moreNote = playlist ? playlistMoreNote(playlist) : null;
+
+  // The rows' clicks, which never change (they call the latest onPick and
+  // isTicked), so a row draws again only when its own song, mark or tick does:
+  // a song's Download progress redraws that row, not the whole list.
+  const latest = useRef({ onPick, isTicked });
+  useLayoutEffect(() => {
+    latest.current = { onPick, isTicked };
+  });
+  const pickSong = useCallback((track: SpotifyPlaylistTrack) => latest.current.onPick(track), []);
+  const toggleSong = useCallback((id: string) => {
+    const on = !latest.current.isTicked(id);
+    setChoices((current) => ({ ...current, [id]: on }));
+  }, []);
 
   const shown = useMemo(
     () =>
@@ -563,115 +706,24 @@ export function SpotifyPlaylistPanel({
         ) : playlist && shown.length > 0 ? (
           <ol className="max-h-104 divide-y divide-border/60 overflow-y-auto">
             {shown.map(({ track, index }) => {
-              const active = track.id === activeTrackId;
               const here = inFolder(track.id);
-              const mark = markFor(
-                statusOf(track.id),
-                here,
-                !folder && downloadedIds.has(track.id),
-              );
               return (
-                <li key={`${index}-${track.id}`} className="flex items-center">
-                  {found && (
-                    <span className="flex w-10 shrink-0 justify-end">
-                      {!here && (
-                        <input
-                          type="checkbox"
-                          checked={isTicked(track.id)}
-                          disabled={running}
-                          onChange={() =>
-                            setChoices((current) => ({
-                              ...current,
-                              [track.id]: !isTicked(track.id),
-                            }))
-                          }
-                          aria-label={`Download “${track.title}”`}
-                          className="h-4 w-4 cursor-pointer accent-primary disabled:cursor-default"
-                        />
-                      )}
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => onPick(track)}
-                    aria-pressed={active}
-                    aria-label={[
-                      track.title,
-                      track.artists && `by ${track.artists}`,
-                      track.duration != null && formatDuration(track.duration),
-                      mark?.detail,
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                    title={isYouTube ? "Open this video" : "Find this song on YouTube"}
-                    className={cn(
-                      "flex min-w-0 flex-1 items-center gap-3 py-2.5 pr-4 text-left transition-colors",
-                      found ? "pl-3" : "pl-4",
-                      active ? "bg-primary/5" : "hover:bg-secondary/40",
-                    )}
-                  >
-                    <span className="w-6 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                      {index + 1}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-1.5">
-                        <span className="truncate text-sm font-medium text-foreground">
-                          {track.title}
-                        </span>
-                        {track.explicit && (
-                          <span
-                            title="Explicit"
-                            className="shrink-0 rounded-sm bg-muted-foreground/20 px-1 text-[9px] font-bold leading-4 text-muted-foreground"
-                          >
-                            E
-                          </span>
-                        )}
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {track.artists}
-                      </span>
-                    </span>
-                    {mark && (
-                      <span
-                        title={mark.detail}
-                        className={cn(
-                          "inline-flex shrink-0 items-center gap-1 text-xs font-medium tabular-nums",
-                          mark.className,
-                        )}
-                      >
-                        <mark.Icon className={cn("h-4 w-4", mark.spin && "animate-spin")} />
-                        <span className="hidden sm:inline">{mark.text}</span>
-                        {mark.label && (
-                          <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-semibold text-foreground">
-                            {mark.label}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                    {track.duration != null && (
-                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                        {formatDuration(track.duration)}
-                      </span>
-                    )}
-                    {isYouTube ? (
-                      <ChevronRight
-                        className={cn(
-                          "h-4 w-4 shrink-0",
-                          active ? "text-primary" : "text-muted-foreground/60",
-                        )}
-                      />
-                    ) : active && isSearching ? (
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-                    ) : (
-                      <Search
-                        className={cn(
-                          "h-4 w-4 shrink-0",
-                          active ? "text-primary" : "text-muted-foreground/60",
-                        )}
-                      />
-                    )}
-                  </button>
-                </li>
+                <SongRow
+                  key={`${index}-${track.id}`}
+                  track={track}
+                  number={index + 1}
+                  active={track.id === activeTrackId}
+                  searching={track.id === activeTrackId && isSearching}
+                  isYouTube={isYouTube}
+                  withTick={found !== undefined}
+                  inFolderFile={here?.file}
+                  status={statusOf(track.id)}
+                  downloaded={!folder && downloadedIds.has(track.id)}
+                  ticked={isTicked(track.id)}
+                  running={running}
+                  onPick={pickSong}
+                  onToggle={toggleSong}
+                />
               );
             })}
           </ol>
