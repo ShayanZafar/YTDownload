@@ -245,8 +245,10 @@ rejected), and `LEARNING.md` maps the stack onto .NET concepts.
   get refused)
 - `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
   marked ready; not drafts, forks or Dependabot's) with inline comments, on a different model.
-  `claude-refactor.yml` — monthly, runs the `/refactor` skill and opens a pull request. Both need
-  the `CLAUDE_CODE_OAUTH_TOKEN` secret and skip, green, without it. `.github/dependabot.yml` —
+  `claude-refactor.yml` — monthly, runs the `/refactor` skill and opens a pull request.
+  `claude-backlog.yml` — when the owner comments on a `decision` or `debt` issue, records the
+  answer in `docs/decisions.md`, does the work it calls for and opens a pull request (`backlog`
+  skill). All three need the `CLAUDE_CODE_OAUTH_TOKEN` secret and skip, green, without it. `.github/dependabot.yml` —
   monthly grouped npm and Actions updates (TypeScript majors by hand);
   `.github/pull_request_template.md` — the PR checklist
 - `.claude/skills/` — `verify` (runs `npm run verify`, before each commit), `refactor` (measure,
