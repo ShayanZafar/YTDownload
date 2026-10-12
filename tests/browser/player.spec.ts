@@ -118,6 +118,66 @@ test.describe("Music player (browser)", () => {
     await expect.poll(() => audio(page)).toMatchObject({ paused: true, hasSource: false });
   });
 
+  test.describe("with a long folder", () => {
+    // 150 songs (copies of one song, named "Song 001" to "Song 150"), for the
+    // list's Show more. A minute long, so none ends mid-test, and tiny.
+    let manySongs: string;
+
+    test.beforeAll(async () => {
+      manySongs = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-player-test-"));
+      const song = path.join(manySongs, "Song 001.mp3");
+      await ffmpeg([
+        ...["-f", "lavfi", "-i", "sine=frequency=550:duration=60"],
+        ...["-ar", "8000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "8k", song],
+      ]);
+      for (let n = 2; n <= 150; n++) {
+        await fs.copyFile(song, path.join(manySongs, `Song ${String(n).padStart(3, "0")}.mp3`));
+      }
+    });
+
+    test.afterAll(async () => {
+      if (manySongs) await fs.rm(manySongs, { recursive: true, force: true });
+    });
+
+    test("lists it 100 songs at a time, and plays on from the song clicked", async ({
+      page,
+      request,
+    }) => {
+      await request.put("/api/settings", { data: { saveFolder: manySongs } });
+      await page.goto("/");
+      const library = page.getByRole("region", { name: "Your music" });
+      const songs = library.getByRole("listitem");
+      const player = page.getByRole("region", { name: "Music player" });
+      const upNext = page.getByRole("region", { name: "Up next" });
+      const comingUp = upNext.getByRole("button", { name: /^Play “.+” now/ });
+
+      await expect(library.getByText("150 songs")).toBeVisible();
+      await library.getByLabel("Order songs by").selectOption("title");
+      await expect(songs).toHaveCount(100);
+      await expect(songs.last()).toContainText("Song 100");
+
+      // Show more lists the rest; their songs play like the first 100.
+      await library.getByRole("button", { name: "Show more (50 more)" }).click();
+      await expect(songs).toHaveCount(150);
+      await expect(library.getByRole("button", { name: /^Show more/ })).toBeHidden();
+      await library.getByRole("button", { name: /^Play “Song 120”/ }).click(START_SONG);
+      await expect(player.getByTestId("player-title")).toHaveText("Song 120");
+      await player.getByRole("button", { name: "Up next" }).click();
+      await expect(comingUp.first()).toHaveAccessibleName(/^Play “Song 121” now/);
+
+      // A filtered list plays on through the songs it shows: "13" finds Song
+      // 013, 113 and 130 to 139, so after 113 comes 130.
+      await library.getByLabel("Filter your music").fill("13");
+      await expect(songs).toHaveCount(12);
+      await library.getByRole("button", { name: /^Play “Song 113”/ }).click(START_SONG);
+      await expect(player.getByTestId("player-title")).toHaveText("Song 113");
+      await expect(comingUp).toHaveCount(10);
+      await expect(comingUp.first()).toHaveAccessibleName(/^Play “Song 130” now/);
+      await expect(comingUp.last()).toHaveAccessibleName(/^Play “Song 139” now/);
+      await player.getByRole("button", { name: "Close the player" }).click(START_SONG);
+    });
+  });
+
   test("on a phone, plays songs picked on the phone — nothing is uploaded", async ({
     page,
     browserName,

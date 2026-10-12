@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import {
   AlertCircle,
   Disc3,
@@ -68,6 +77,124 @@ function unplayableNote(tracks: PlayerTrack[]): string {
   return `${countSongs(tracks.length)} can't play in this browser${kinds.length ? ` (${kinds.join(", ")})` : ""}.`;
 }
 
+/** Play next, or Add to queue (at the end). */
+type Enqueue = "next" | "last";
+
+type SongRowProps = {
+  track: PlayerTrack;
+  /** Its place in the list, from 1. */
+  number: number;
+  isCurrent: boolean;
+  isPlaying: boolean;
+  /** Can this browser play it? */
+  ok: boolean;
+  onPlay: (track: PlayerTrack) => void;
+  onEnqueue: (track: PlayerTrack, where: Enqueue) => void;
+};
+
+/** A song in the list: click it to play the list from there, or line it up. */
+const SongRow = memo(function SongRow({
+  track,
+  number,
+  isCurrent,
+  isPlaying,
+  ok,
+  onPlay,
+  onEnqueue,
+}: SongRowProps) {
+  const byline = [track.artist, track.album].filter(Boolean).join(" · ");
+  return (
+    <li className={cn("flex items-center", isCurrent && "bg-primary/5")}>
+      <button
+        type="button"
+        onClick={() => onPlay(track)}
+        disabled={!ok}
+        aria-current={isCurrent ? "true" : undefined}
+        aria-label={[
+          `${isPlaying ? "Pause" : "Play"} “${track.title}”`,
+          track.artist && `by ${track.artist}`,
+          track.duration != null && formatDuration(track.duration),
+          !ok && "this browser can't play it",
+        ]
+          .filter(Boolean)
+          .join(", ")}
+        title={track.fileName}
+        className={cn(
+          "group flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+          ok ? "pr-2" : "pr-4",
+          !isCurrent && "enabled:hover:bg-secondary/40",
+        )}
+      >
+        <span className="flex w-6 shrink-0 justify-end text-xs tabular-nums text-muted-foreground">
+          {isCurrent ? (
+            isPlaying ? (
+              <span className="flex h-3.5 items-end gap-[2px]" aria-hidden="true">
+                <span className="w-[3px] animate-[pulse_0.9s_ease-in-out_infinite] rounded-sm bg-primary h-full" />
+                <span className="w-[3px] animate-[pulse_0.9s_ease-in-out_0.3s_infinite] rounded-sm bg-primary h-2/3" />
+                <span className="w-[3px] animate-[pulse_0.9s_ease-in-out_0.6s_infinite] rounded-sm bg-primary h-5/6" />
+              </span>
+            ) : (
+              <Pause className="h-3.5 w-3.5 text-primary" />
+            )
+          ) : (
+            number
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span
+            className={cn(
+              "block truncate text-sm font-medium",
+              isCurrent ? "text-primary" : "text-foreground",
+            )}
+          >
+            {track.title}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">
+            {ok ? byline || " " : "Can't play in this browser"}
+          </span>
+        </span>
+        {track.duration != null && (
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {formatDuration(track.duration)}
+          </span>
+        )}
+        {ok &&
+          (isPlaying ? (
+            <Pause className="h-4 w-4 shrink-0 text-primary" />
+          ) : (
+            <Play
+              className={cn(
+                "h-4 w-4 shrink-0",
+                isCurrent ? "text-primary" : "text-muted-foreground/50 group-hover:text-foreground",
+              )}
+            />
+          ))}
+      </button>
+      {ok && (
+        <span className="flex shrink-0 items-center pr-2">
+          {(
+            [
+              ["next", ListStart, "Play next"],
+              ["last", ListEnd, "Add to queue"],
+            ] as const
+          ).map(([where, Icon, label]) => (
+            <button
+              key={where}
+              type="button"
+              onClick={() => onEnqueue(track, where)}
+              aria-label={`${label}: “${track.title}”`}
+              title={label}
+              className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors"
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          ))}
+        </span>
+      )}
+    </li>
+  );
+});
+
 /**
  * "Your music": the songs the player can play. In a browser on the computer
  * running the app, those are the songs in the Save to folder (the app plays
@@ -136,7 +263,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   };
 
   // Play next / Add to queue: after the current song, or at the end.
-  const enqueue = (track: PlayerTrack, where: "next" | "last") => {
+  const enqueue = (track: PlayerTrack, where: Enqueue) => {
     const playing = player.current !== null;
     player.enqueue([track], where);
     // It plays now, or Up next shows it.
@@ -146,6 +273,19 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
       description: `“${track.title}”${track.artist ? ` by ${track.artist}` : ""}`,
     });
   };
+
+  // The rows' clicks, which never change (they call the latest playFrom and
+  // enqueue), so a row draws again only when its song, place or playing
+  // state does: Show more draws just the new rows, however long the list is.
+  const actions = useRef({ playFrom, enqueue });
+  useLayoutEffect(() => {
+    actions.current = { playFrom, enqueue };
+  });
+  const onPlay = useCallback((track: PlayerTrack) => actions.current.playFrom(track), []);
+  const onEnqueue = useCallback(
+    (track: PlayerTrack, where: Enqueue) => actions.current.enqueue(track, where),
+    [],
+  );
 
   const onPicked = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -383,103 +523,17 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
           <ol className="max-h-112 divide-y divide-border/60 overflow-y-auto">
             {listed.map((track, index) => {
               const isCurrent = player.current?.key === track.key;
-              const isPlaying = isCurrent && player.status === "playing";
-              const ok = canPlayHere(track);
-              const byline = [track.artist, track.album].filter(Boolean).join(" · ");
               return (
-                <li
+                <SongRow
                   key={track.key}
-                  className={cn("flex items-center", isCurrent && "bg-primary/5")}
-                >
-                  <button
-                    type="button"
-                    onClick={() => playFrom(track)}
-                    disabled={!ok}
-                    aria-current={isCurrent ? "true" : undefined}
-                    aria-label={[
-                      `${isPlaying ? "Pause" : "Play"} “${track.title}”`,
-                      track.artist && `by ${track.artist}`,
-                      track.duration != null && formatDuration(track.duration),
-                      !ok && "this browser can't play it",
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                    title={track.fileName}
-                    className={cn(
-                      "group flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
-                      ok ? "pr-2" : "pr-4",
-                      !isCurrent && "enabled:hover:bg-secondary/40",
-                    )}
-                  >
-                    <span className="flex w-6 shrink-0 justify-end text-xs tabular-nums text-muted-foreground">
-                      {isCurrent ? (
-                        isPlaying ? (
-                          <span className="flex h-3.5 items-end gap-[2px]" aria-hidden="true">
-                            <span className="w-[3px] animate-[pulse_0.9s_ease-in-out_infinite] rounded-sm bg-primary h-full" />
-                            <span className="w-[3px] animate-[pulse_0.9s_ease-in-out_0.3s_infinite] rounded-sm bg-primary h-2/3" />
-                            <span className="w-[3px] animate-[pulse_0.9s_ease-in-out_0.6s_infinite] rounded-sm bg-primary h-5/6" />
-                          </span>
-                        ) : (
-                          <Pause className="h-3.5 w-3.5 text-primary" />
-                        )
-                      ) : (
-                        index + 1
-                      )}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span
-                        className={cn(
-                          "block truncate text-sm font-medium",
-                          isCurrent ? "text-primary" : "text-foreground",
-                        )}
-                      >
-                        {track.title}
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {ok ? byline || " " : "Can't play in this browser"}
-                      </span>
-                    </span>
-                    {track.duration != null && (
-                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                        {formatDuration(track.duration)}
-                      </span>
-                    )}
-                    {ok &&
-                      (isPlaying ? (
-                        <Pause className="h-4 w-4 shrink-0 text-primary" />
-                      ) : (
-                        <Play
-                          className={cn(
-                            "h-4 w-4 shrink-0",
-                            isCurrent
-                              ? "text-primary"
-                              : "text-muted-foreground/50 group-hover:text-foreground",
-                          )}
-                        />
-                      ))}
-                  </button>
-                  {ok && (
-                    <span className="flex shrink-0 items-center pr-2">
-                      {(
-                        [
-                          ["next", ListStart, "Play next"],
-                          ["last", ListEnd, "Add to queue"],
-                        ] as const
-                      ).map(([where, Icon, label]) => (
-                        <button
-                          key={where}
-                          type="button"
-                          onClick={() => enqueue(track, where)}
-                          aria-label={`${label}: “${track.title}”`}
-                          title={label}
-                          className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors"
-                        >
-                          <Icon className="h-4 w-4" />
-                        </button>
-                      ))}
-                    </span>
-                  )}
-                </li>
+                  track={track}
+                  number={index + 1}
+                  isCurrent={isCurrent}
+                  isPlaying={isCurrent && player.status === "playing"}
+                  ok={canPlayHere(track)}
+                  onPlay={onPlay}
+                  onEnqueue={onEnqueue}
+                />
               );
             })}
           </ol>
