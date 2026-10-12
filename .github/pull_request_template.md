@@ -8,6 +8,7 @@
 
 - [ ] The verify check passes locally (formatting, lint, types, tests)
 - [ ] Tests describe the new behaviour and were written before the code that makes them pass
+- [ ] A changed or new core flow has unit, integration and UI tests named in docs/core-flows.md
 - [ ] `/code-review` was run and its findings were addressed
 - [ ] `/security-review` was run if this touches auth, files, network, shell commands or user input
 - [ ] No unrelated changes are mixed in
