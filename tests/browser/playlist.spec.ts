@@ -57,7 +57,7 @@ function makeSong(file: string, seconds: number): Promise<void> {
   });
 }
 
-// Opening a song can block WebKit on Windows for several seconds (see CLAUDE.md).
+// Opening a song can block WebKit on Windows for several seconds (see TECHNICAL.md › Conventions and gotchas).
 const START_SONG = { timeout: 90_000 };
 
 test.describe("a YouTube playlist", () => {

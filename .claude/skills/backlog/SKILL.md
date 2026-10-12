@@ -52,7 +52,7 @@ When the owner answers (a comment by ShayanZafar picking an option or saying wha
 4. Comment on the issue that it's recorded, linking that pull request, and close it (`state_reason: completed`).
 5. If the decision calls for work: do it in its own pull request when it's small and clear (see Working), otherwise file it as `debt` and link the decision.
 
-Never ask again about anything in `docs/decisions.md`. Decisions made before Oct 12, 2026 are recorded inline in CLAUDE.md with their dates.
+Never ask again about anything in `docs/decisions.md`. Decisions made before Oct 12, 2026 are recorded inline, with their dates, in CLAUDE.md and in TECHNICAL.md's Conventions and gotchas.
 
 **Acting on answers at once.** The Claude Backlog workflow (`.github/workflows/claude-backlog.yml`) runs this section as soon as the owner comments on a `decision` or `debt` issue, and opens the pull request; the weekly triage is the safety net. It also records any decision the owner closed with an answer that has no line in `docs/decisions.md` yet.
 
