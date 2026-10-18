@@ -37,6 +37,14 @@ const VIDEO = `https://www.youtube.com/watch?v=${VIDEO_ID}`;
 const downloadLink = (page: Page) =>
   page.locator('a[href^="/api/video/download"]', { hasText: /download audio/i });
 
+/**
+ * The name the browser saves a download under, given the name the app sends. Playwright's WebKit
+ * on Linux (WebKitGTK) puts underscores for the spaces of a name it's sent (both with and without
+ * `filename*`); every other engine, and WebKit elsewhere, keeps the name as sent.
+ */
+const savedName = (sent: string, browserName: string) =>
+  browserName === "webkit" && process.platform === "linux" ? sent.replaceAll(" ", "_") : sent;
+
 /** The rows of Recent Extractions that match `text`. */
 const historyRows = (page: Page, text: RegExp) =>
   page
@@ -97,6 +105,7 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
   test("pastes a YouTube link, renames it, and the browser saves the MP3, then lists it", async ({
     page,
     front,
+    browserName,
   }) => {
     const pasted = `https://youtu.be/${VIDEO_ID}?si=shared`;
     const videos = await answerVideoInfo(page, "Me at the zoo");
@@ -134,7 +143,9 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     const downloadStarted = page.waitForEvent("download");
     await downloadLink(page).click();
     const download = await downloadStarted;
-    expect(download.suggestedFilename()).toBe("Zoo clip - the first video.mp3");
+    expect(download.suggestedFilename()).toBe(
+      savedName("Zoo clip - the first video.mp3", browserName),
+    );
     const saved = path.join(await deletedAfterTest("yt-audio-e2e-download-"), "song.mp3");
     await download.saveAs(saved);
     const verdict = await verifyMp3File(saved);
@@ -149,6 +160,7 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
   test("a pasted Spotify song link is searched for, and the same-length match downloads under the song's name", async ({
     page,
     front,
+    browserName,
   }) => {
     const SONG = "4u7EnebtmKWzUH433cf5Qv";
     const link = `https://open.spotify.com/track/${SONG}?si=e2e`;
@@ -227,7 +239,9 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     const downloadStarted = page.waitForEvent("download");
     await downloadLink(page).click();
     const download = await downloadStarted;
-    expect(download.suggestedFilename()).toBe("Queen - Bohemian Rhapsody.mp3");
+    expect(download.suggestedFilename()).toBe(
+      savedName("Queen - Bohemian Rhapsody.mp3", browserName),
+    );
     await expect.poll(() => downloads).toHaveLength(1);
     expect(downloads).toEqual([
       {
@@ -344,6 +358,7 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
   test("when YouTube can't answer a search, SoundCloud's tracks are offered and download the same way", async ({
     page,
     front,
+    browserName,
   }) => {
     const TRACK = "https://api.soundcloud.com/tracks/300000002";
     const searches: Record<string, string>[] = [];
@@ -407,7 +422,7 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     const downloadStarted = page.waitForEvent("download");
     await downloadLink(page).click();
     const download = await downloadStarted;
-    expect(download.suggestedFilename()).toBe("One More Time.mp3");
+    expect(download.suggestedFilename()).toBe(savedName("One More Time.mp3", browserName));
     const saved = path.join(await deletedAfterTest("yt-audio-e2e-download-"), "track.mp3");
     await download.saveAs(saved);
     expect((await verifyMp3File(saved)).isValid).toBe(true);
