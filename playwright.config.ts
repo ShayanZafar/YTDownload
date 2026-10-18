@@ -16,6 +16,12 @@ const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 // ("side-by-side configuration is incorrect").
 const BROWSERS = (process.env.E2E_BROWSERS ?? "chrome,webkit").split(",").map((b) => b.trim());
 
+// Tests tagged @live use the real YouTube, Spotify and SoundCloud, which often
+// refuse GitHub's machines and change by the day: they run only with
+// E2E_LIVE=1 (`npm run e2e:live` runs just them). Every other test uses
+// stand-ins (tests/browser/stand-ins.ts) and runs on every pull request.
+const LIVE = Boolean(process.env.E2E_LIVE);
+
 export default defineConfig({
   testDir: "./tests/browser",
   timeout: 120_000,
@@ -24,6 +30,7 @@ export default defineConfig({
   retries: 1,
   workers: 1,
   reporter: "list",
+  grepInvert: LIVE ? undefined : /@live/,
   // Deletes what earlier runs that were stopped part-way left in the temp folder.
   globalSetup: "./scripts/leftovers.ts",
   // Deletes the test server's files once it has stopped.

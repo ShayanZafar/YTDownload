@@ -4,7 +4,8 @@
  * tests that cover it at three levels: unit (one module, no network), integration (several parts
  * together through the real routes and pipeline, outside services played by stand-ins) and UI (a
  * real browser driving the running app). A missing level is a gap, written "—". The check fails
- * when a flow lacks a level without saying so, when a named test no longer exists, or when the
+ * when a flow lacks a level without saying so, when a named test no longer exists, when a UI test
+ * is one of the @live ones (the real services: pull requests don't run them), or when the
  * number of gaps differs from the "Gaps allowed: N" line, which only ever goes down. Pure: the
  * caller hands it the file's text and a way to read the test files.
  */
@@ -63,15 +64,36 @@ export function tableCells(line: string): string[] {
     .map((cell) => cell.trim());
 }
 
+/**
+ * Where `source` declares a test (or describe) whose first argument is the quoted `title` (on
+ * the call's line, or the next, as Prettier puts a long one): what comes after the title, up to
+ * the test's body — its options, such as tags. Undefined when there's no such test.
+ */
+function declarationOf(source: string, title: string): string | undefined {
+  const quoted = ['"', "'", "`"].map((q) => q + title.replaceAll(q, `\\${q}`) + q);
+  for (const call of source.matchAll(TEST_CALL)) {
+    const rest = source.slice(call.index + call[0].length).trimStart();
+    const q = quoted.find((candidate) => rest.startsWith(candidate));
+    if (q === undefined) continue;
+    const after = rest.slice(q.length);
+    const body = after.search(/=>|\bfunction\b/);
+    return body === -1 ? after : after.slice(0, body);
+  }
+  return undefined;
+}
+
 /** Whether `source` declares a test (or describe) whose first argument is the quoted `title`. */
 export function declaresTest(source: string, title: string): boolean {
-  const quoted = ['"', "'", "`"].map((q) => q + title.replaceAll(q, `\\${q}`) + q);
-  return source.split(/\r?\n/).some((line) =>
-    [...line.matchAll(TEST_CALL)].some((call) => {
-      const after = call.index + call[0].length;
-      return quoted.some((q) => line.slice(after).trimStart().startsWith(q));
-    }),
-  );
+  return declarationOf(source, title) !== undefined;
+}
+
+/** The tag of the browser tests that use the real YouTube, Spotify or SoundCloud (playwright.config.ts). */
+export const LIVE_TAG = "@live";
+
+/** Whether the test titled `title` in `source` is tagged @live (`{ tag: "@live" }` or in a list). */
+export function isLiveTest(source: string, title: string): boolean {
+  const options = declarationOf(source, title);
+  return options !== undefined && new RegExp(`["'\`]${LIVE_TAG}["'\`]`).test(options);
 }
 
 /** Checks docs/core-flows.md's text; `problems` is empty when all is well. */
@@ -150,6 +172,12 @@ function refProblem(ref: TestRef, level: Level, options: CheckOptions): string |
   }
   if (level === "UI" && !/^tests\/browser\/.+\.spec\.ts$/.test(ref.file)) {
     return `${ref.file} isn't a browser test (tests/browser/*.spec.ts).`;
+  }
+  if (level === "UI" && isLiveTest(source, ref.title)) {
+    return (
+      `${ref.file} › ${ref.title} is tagged ${LIVE_TAG}: it uses the real YouTube, Spotify or ` +
+      "SoundCloud, so pull requests don't run it. Name a test that uses stand-ins."
+    );
   }
   if (level !== "UI" && !options.runsInVerify(ref.file)) {
     return `npm run verify doesn't run ${ref.file}: unit and integration tests must run on every change, without the network.`;

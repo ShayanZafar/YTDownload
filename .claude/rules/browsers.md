@@ -23,3 +23,7 @@ paths:
   endless decorative animations or big `blur()` areas.
 - Slow frames delay network answers too, so a late answer must never undo what the user did
   meanwhile.
+- Browser tests run on stand-ins (`tests/browser/stand-ins.ts`: `page.route()` answers, ffmpeg-made
+  songs, `stayOffline()`, and `startFront()` for a file the browser downloads, which `page.route()`
+  doesn't see in Chrome). One that needs the real YouTube, Spotify or SoundCloud is tagged
+  `{ tag: "@live" }`: left out of the usual run and CI, and never a core flow's UI test.

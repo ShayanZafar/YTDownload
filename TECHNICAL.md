@@ -340,8 +340,9 @@ What each file does, and the function and constant names to look for. This was C
   (no history to merge); it's only ever written by the workflow (`CLAUDE.md` › Workflow)
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
   lint, type-check, dependency licences, the core-flows and instructions checks, unit tests + the music and history API tests) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
-  10×), and on pull requests. The YouTube API and browser tests aren't run there (GitHub's machines
-  get refused)
+  10×), and on pull requests; its `browser` job runs the Playwright tests (Chrome and WebKit, on
+  Linux) with stand-ins for YouTube, Spotify and SoundCloud. The YouTube API tests and the `@live`
+  browser tests aren't run there (GitHub's machines get refused)
 - `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
   marked ready; not drafts, forks or Dependabot's) with inline comments, on a different model.
   `claude-refactor.yml` — monthly, runs the `/refactor` skill and opens a pull request.
@@ -370,7 +371,9 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   runs the real routes and pipeline with a Node process writing ffmpeg-made audio, and
   `spotify-routes.test.ts` the playlist route with a stand-in Spotify), `tests/api`
   (Vitest + Supertest, real YouTube, SoundCloud — `soundcloud.e2e.test.ts` — and Spotify), `tests/browser`
-  (Playwright, in Chrome and WebKit; Firefox on request). The player's tests (`music*.test.ts`,
+  (Playwright, in Chrome and WebKit; Firefox on request; `stand-ins.ts` has their stand-ins for
+  YouTube, Spotify and SoundCloud, and the tests tagged `@live` use the real ones and run only with
+  `npm run e2e:live`). The player's tests (`music*.test.ts`,
   `player.spec.ts`) make their own songs with ffmpeg — no YouTube needed. Tests name their temp
   files `yt-audio-<what>-` + `fs.mkdtemp()`'s suffix and delete them afterwards; each run's
   `globalSetup` (`scripts/leftovers.ts`) deletes what stopped runs left (a Playwright run's server
@@ -383,10 +386,11 @@ update-yt-dlp`) runs `yt-dlp -U`. Plain JS, no packages — the install branch s
   an integration and a UI test (`file` › exact title), `—` for a gap, and `Gaps allowed: N`.
   `scripts/core-flows.ts` (`npm run core-flows`, in verify) checks it, with the pure rules in
   `scripts/core-flows-rules.ts` (`tests/unit/core-flows.test.ts`): each named test exists, unit and
-  integration tests are ones verify runs, UI tests are `tests/browser` specs, and the gaps equal
-  the allowed count. Integration means real routes/pipeline with stand-ins (`audio-routes.test.ts`,
-  `spotify-routes.test.ts`, the music and history API tests); a browser test counts only if it runs on stand-ins (`page.route`,
-  ffmpeg-made songs) — several in `download.spec.ts` need live YouTube or Spotify and don't
+  integration tests are ones verify runs, UI tests are `tests/browser` specs not tagged `@live`, and
+  the gaps equal the allowed count. Integration means real routes/pipeline with stand-ins
+  (`audio-routes.test.ts`, `spotify-routes.test.ts`, the music and history API tests); a browser
+  test counts only if it runs on stand-ins (`page.route`, the stand-in front of `stand-ins.ts`,
+  ffmpeg-made songs) — the `@live` ones in `download.spec.ts` use live YouTube or Spotify and don't
 
 ---
 
@@ -464,7 +468,8 @@ The install details CLAUDE.md summarises.
 - `npx vitest run tests/api` — end-to-end API tests (needs internet)
 - `npx playwright test` — browser tests in installed Google Chrome and WebKit (starts its own server on
   port 5099); `--project=chrome|webkit` for one; `E2E_BROWSERS=chrome,webkit,firefox` adds Firefox.
-  First time: `npx playwright install chrome webkit firefox`
+  First time: `npx playwright install chrome webkit firefox`. The `@live` ones (real YouTube and
+  Spotify) are left out; `npm run e2e:live` runs just them
 - `npx eslint .` and `npx prettier --check .`
 - `npm run coverage` — the unit tests with V8 coverage of `client/src`, `server` and `shared` (not
   `components/ui`): a text summary and an HTML report in `reports/coverage/` (git-ignored)
@@ -1101,17 +1106,18 @@ npm start                        # serves dist/ on http://localhost:5000
 
 These tools are installed and configured but have no shortcut script in `package.json` yet — invoke them directly. If you want the short forms (`npm test`, `npm run lint`, etc.) you can add them yourself; suggested entries are listed in the last column.
 
-| Long form                   | What it does                                                       | Suggested script entry                 |
-| --------------------------- | ------------------------------------------------------------------ | -------------------------------------- |
-| `npx vitest run`            | Runs the entire Vitest suite (unit + API) once.                    | `"test": "vitest run"`                 |
-| `npx vitest`                | Runs Vitest in watch mode for fast TDD.                            | `"test:watch": "vitest"`               |
-| `npx vitest run tests/unit` | Runs only the unit tests (pure helpers, no network, milliseconds). | `"test:unit": "vitest run tests/unit"` |
-| `npx vitest run tests/api`  | Runs only the API end-to-end tests (real HTTP, real YouTube).      | `"test:api": "vitest run tests/api"`   |
-| `npx playwright test`       | Runs the Playwright browser end-to-end tests.                      | `"test:e2e": "playwright test"`        |
-| `npx eslint .`              | Lints the codebase. Currently: 0 errors, 3 minor warnings.         | `"lint": "eslint ."`                   |
-| `npx eslint . --fix`        | Auto-fixes any lint issues that ESLint can fix safely.             | `"lint:fix": "eslint . --fix"`         |
-| `npx prettier --check .`    | Verifies all source files are formatted (use in CI).               | `"format:check": "prettier --check ."` |
-| `npx prettier --write .`    | Reformats all source files to the project Prettier style.          | `"format": "prettier --write ."`       |
+| Long form                   | What it does                                                            | Suggested script entry                                            |
+| --------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `npx vitest run`            | Runs the entire Vitest suite (unit + API) once.                         | `"test": "vitest run"`                                            |
+| `npx vitest`                | Runs Vitest in watch mode for fast TDD.                                 | `"test:watch": "vitest"`                                          |
+| `npx vitest run tests/unit` | Runs only the unit tests (pure helpers, no network, milliseconds).      | `"test:unit": "vitest run tests/unit"`                            |
+| `npx vitest run tests/api`  | Runs only the API end-to-end tests (real HTTP, real YouTube).           | `"test:api": "vitest run tests/api"`                              |
+| `npx playwright test`       | Runs the Playwright browser tests, on stand-ins (not the `@live` ones). | `"test:e2e": "playwright test"`                                   |
+| `npm run e2e:live`          | Runs only the `@live` browser tests, against real YouTube and Spotify.  | `"e2e:live": "cross-env E2E_LIVE=1 playwright test --grep @live"` |
+| `npx eslint .`              | Lints the codebase. Currently: 0 errors, 3 minor warnings.              | `"lint": "eslint ."`                                              |
+| `npx eslint . --fix`        | Auto-fixes any lint issues that ESLint can fix safely.                  | `"lint:fix": "eslint . --fix"`                                    |
+| `npx prettier --check .`    | Verifies all source files are formatted (use in CI).                    | `"format:check": "prettier --check ."`                            |
+| `npx prettier --write .`    | Reformats all source files to the project Prettier style.               | `"format": "prettier --write ."`                                  |
 
 ---
 
@@ -1121,11 +1127,11 @@ The project ships with two end-to-end test suites that exercise the real app aga
 
 ### Core flows
 
-`docs/core-flows.md` lists the core flows — what a person relies on the app for — and, for each, a test at three levels: unit (one module, no network), integration (several parts together through the real routes and pipeline, with yt-dlp, Spotify and LRCLIB played by stand-ins: `tests/unit/audio-routes.test.ts` and the music and history API tests) and UI (a Playwright spec driving the running app on stand-ins — `page.route` answers or ffmpeg-made songs; the specs that download from YouTube or ask Spotify for real don't count). A level with no test yet is a gap, `—`, and the file records how many are allowed. `npm run core-flows`, part of `npm run verify`, fails when a named test no longer exists, a unit or integration test isn't one verify runs, a UI test isn't a browser spec, or the gap count differs from `Gaps allowed` — which only goes down. The rules are in `scripts/core-flows-rules.ts`, unit-tested in `tests/unit/core-flows.test.ts`.
+`docs/core-flows.md` lists the core flows — what a person relies on the app for — and, for each, a test at three levels: unit (one module, no network), integration (several parts together through the real routes and pipeline, with yt-dlp, Spotify and LRCLIB played by stand-ins: `tests/unit/audio-routes.test.ts` and the music and history API tests) and UI (a Playwright spec driving the running app on stand-ins — `page.route` answers, `tests/browser/stand-ins.ts`'s front for browser downloads, or ffmpeg-made songs; the `@live` tests, which download from YouTube or ask Spotify for real, don't count). A level with no test yet is a gap, `—`, and the file records how many are allowed. `npm run core-flows`, part of `npm run verify`, fails when a named test no longer exists, a unit or integration test isn't one verify runs, a UI test isn't a browser spec or is tagged `@live`, or the gap count differs from `Gaps allowed` — which only goes down. The rules are in `scripts/core-flows-rules.ts`, unit-tested in `tests/unit/core-flows.test.ts`.
 
 ### Continuous integration
 
-`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. The other API and browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
+`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. A second job, `browser`, runs the Playwright tests on Linux in Chrome (the runner's Google Chrome) and WebKit (`npx playwright install --with-deps chromium webkit`), with YouTube, Spotify and SoundCloud played by stand-ins. The other API tests and the `@live` browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
 
 Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups; and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The two Claude workflows sign in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and skip with a warning, still green, when it isn't set.
 
@@ -1139,7 +1145,9 @@ tests/
 │   ├── music.e2e.test.ts        # the music player's routes, on real files (no internet needed)
 │   └── history.e2e.test.ts      # removing, clearing and restoring the history; the lyrics route (no internet needed)
 ├── browser/
-│   ├── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request)
+│   ├── download.spec.ts         # Playwright, drives the real UI in Chrome and WebKit (Firefox on request); @live: real YouTube and Spotify
+│   ├── get-a-song.spec.ts       # a pasted YouTube or Spotify link, Save to, SoundCloud — downloaded from stand-ins
+│   ├── stand-ins.ts             # the stand-ins: ffmpeg-made songs, no other sites, a front that answers browser downloads
 │   ├── player.spec.ts           # the music player: the folder's songs, songs picked on a phone, lyrics (stand-in answers)
 │   ├── history.spec.ts          # Recent Extractions: removing a song and clearing the list, with Undo
 │   ├── playlist.spec.ts         # YouTube playlists in the panel: open, save the rest, play, save a playlist file
@@ -1153,7 +1161,7 @@ tests/
 │   ├── lyrics.test.ts           # LRC lines, what's asked of LRCLIB, picking the right result, the line being sung
 │   ├── search.test.ts           # search ranking + "official" detection
 │   ├── soundcloud.test.ts       # SoundCloud: canonical links (and what's turned down), previews, hedged searches
-│   ├── audio-routes.test.ts     # the routes that ask YouTube/SoundCloud, yt-dlp played by stand-ins: refusals, cancels, saves at once
+│   ├── audio-routes.test.ts     # the routes that ask YouTube/SoundCloud, yt-dlp played by stand-ins: refusals, cancels, saves at once, a Spotify song link (stand-in Spotify), a YouTube playlist
 │   ├── youtube-limits.test.ts   # the guard: error kinds, the cache, refusals answered at once, the hedging window, self-update
 │   ├── source-health.test.ts    # the source-health report: counts, "unreliable", the file
 │   ├── cpu-cores.test.ts        # one per CPU core: cpuCores(), mapAtOnce()
@@ -1224,6 +1232,8 @@ The tests point `HISTORY_FILE`, `SETTINGS_FILE` and `SOURCE_HEALTH_FILE` at a te
 
 Drives the app in real browser engines, headless, running every test in each: your installed Google Chrome and WebKit (the engine behind Safari) by default, plus Firefox if you ask for it (below). `playwright.config.ts` starts its own copy with `npm run dev` on port 5099 with a throwaway `HISTORY_FILE`, `SETTINGS_FILE` and `PLAYER_CACHE_DIR`, so the tests never touch your real history or settings and can run while your own copy is up on port 5000. Those files are named after the run (`tests/browser/test-server-files.ts`), which deletes them as it ends — once Playwright has stopped that copy, and never another run's. Set `E2E_BASE_URL` to test an already-running server instead.
 
+Every test runs on stand-ins for YouTube, Spotify and SoundCloud, except those tagged `@live` (items 1–6, 8 and the first part of 9 below), which download from YouTube and ask Spotify for real. They're left out unless `E2E_LIVE=1` is set: `npm run e2e:live` runs just them. The stand-ins are in `tests/browser/stand-ins.ts`: the app's answers that need an outside service come from the test (`page.route()`), songs are made with ffmpeg, every request the page makes to another site is turned away, and a browser download — which Playwright's routing doesn't see in Chrome — is answered by a small stand-in front the page is opened through, which passes everything else on to the app unchanged. `get-a-song.spec.ts` covers the same flows as the `@live` tests that way (item 18).
+
 What it checks:
 
 1. The hero loads, the URL input accepts the test video URL, and clicking **Extract** renders a preview card with the title, thumbnail, and a download link. Renaming the title in place ("Zoo clip: the first video") makes the download "Zoo clip - the first video.mp3".
@@ -1243,6 +1253,7 @@ What it checks:
 15. **The video preview** (`video-preview.spec.ts`, with the search answered by the test and a stand-in for YouTube's embedded player, so nothing reaches YouTube): a search result's thumbnail opens its video under it, playing, without choosing it; another result's thumbnail swaps the player over; **Choose this one** picks it for download while the video keeps playing; and **Close preview**, or the thumbnail again, closes it.
 16. **Lyrics** (in `player.spec.ts`, with made-up answers served in place of `/api/lyrics`): the player bar's **Lyrics** button asks for the song's title, artist and length, lists the lines, marks the one being sung as the song plays, and clicking a line plays from there; Up next opens in its place, and a song with no lyrics says so.
 17. **Managing the history** (`history.spec.ts`, against the test server's own history, filled for the test and put back after): removing a song takes it out of the list and the app's history, and **Undo** puts it back in its place; **Clear history** asks first (Cancel keeps everything), empties the list, and **Undo** brings it all back.
+18. **Getting a song, on stand-ins** (`get-a-song.spec.ts`): a pasted `youtu.be` link opens the video; renamed, its download is "Zoo clip - the first video.mp3", a valid MP3, asked for under that name, and it then shows in Recent Extractions by itself. A pasted Spotify song link switches to **Search by song**, picks the match marked **Same length**, names it "Queen - Bohemian Rhapsody" and downloads it with its `spotifyId`. **Save to**: a folder made and chosen in the app's folder browser (a real temporary folder), a save cancelled part-way (the page calls the app's save off), then a whole one — "Saved to “Test Music”", nothing through the browser's downloads — listed in the history, the folder remembered after a reload. When YouTube can't answer a search, SoundCloud's tracks are shown as such; one picked downloads by its canonical link, and Recent Extractions says it's from SoundCloud.
 
 The Chrome tests use your installed Google Chrome (`channel: "chrome"` in `playwright.config.ts`) — the browser the app is actually used in; WebKit and Firefox are Playwright's own builds. Install whichever are missing (free, one time):
 

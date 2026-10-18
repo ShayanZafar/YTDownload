@@ -7,7 +7,9 @@
 #
 # The API and browser tests that talk to YouTube aren't run here — YouTube
 # often refuses GitHub's machines — but the music player's API test is: it
-# makes its own songs.
+# makes its own songs. The browser tests (Playwright, in Chrome and WebKit)
+# run in their own job, with YouTube, Spotify and SoundCloud played by
+# stand-ins; the @live ones, which use the real services, are left out.
 name: Tests
 
 on:
@@ -61,3 +63,29 @@ jobs:
       # types, then the unit tests and the music API test.
       - name: Verify
         run: npm run verify
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      YOUTUBE_DL_SKIP_PYTHON_CHECK: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # Google Chrome comes with GitHub's Ubuntu machines (the "chrome" project
+      # uses it); this adds Playwright's WebKit and what both need to run.
+      - name: Browsers
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Browser tests
+        run: npx playwright test
