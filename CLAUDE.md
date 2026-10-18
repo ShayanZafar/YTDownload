@@ -11,7 +11,7 @@ Instructions for Claude are this file (≤600 words, checked by `npm run verify`
 is documentation, read when needed:
 
 - `TECHNICAL.md` — architecture, API, tests, deployment. Its **File-by-file reference** says what
-  every file does: read it before changing code you haven't seen.
+  every file does: before changing code you haven't seen, search it for that file's entry.
 - `docs/`: `sources.md` (outside sources, fallbacks), `core-flows.md` (flows and their tests),
   `decisions.md`, `specs/`.
 - `README.md` (user guide), `docs/run/README.md` (running it), `LEARNING.md` (the stack for .NET
