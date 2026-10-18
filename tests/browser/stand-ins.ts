@@ -69,13 +69,17 @@ export const queryOf = (route: Route) => new URL(route.request().url()).searchPa
 
 /**
  * The headers the app answers a download with (`GET /api/video/download`): an MP3, under the
- * name it was asked to save it as (as `res.attachment()` writes it: a plain and a UTF-8 name).
+ * name it was asked to save it as, written as `res.attachment()` writes it — a plain name, and a
+ * UTF-8 one (`filename*`) only when the name isn't plain ASCII.
  */
 export function downloadHeaders(fileName: string) {
-  const plain = fileName.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "");
+  const plain = fileName.replace(/[^\x20-\x7e]/g, "?").replace(/["\\]/g, "\\$&");
+  const utf8 = !/[^\x20-\x7e]/.test(fileName)
+    ? ""
+    : `; filename*=UTF-8''${encodeURIComponent(fileName).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
   return {
     "Content-Type": "audio/mpeg",
-    "Content-Disposition": `attachment; filename="${plain}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+    "Content-Disposition": `attachment; filename="${plain}"${utf8}`,
   };
 }
 
