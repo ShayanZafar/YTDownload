@@ -27,6 +27,18 @@ const FILES: Record<string, string> = {
     'test.describe("page", () => {',
     '  test("shows it in the browser", async ({ page }) => {',
     "  });",
+    '  test("plays it from YouTube for real", { tag: "@live" }, async ({ page }) => {',
+    "  });",
+    "  test(",
+    '    "opens the real Spotify",',
+    '    { tag: ["@slow", "@live"] },',
+    "    async ({ page }) => {",
+    '      await page.goto("/?tag=@live");',
+    "    },",
+    "  );",
+    '  test("mentions @live only in its body", async ({ page }) => {',
+    '    await page.goto("/?tag=@live");',
+    "  });",
     "});",
   ].join("\n"),
 };
@@ -146,6 +158,33 @@ describe("checkCoreFlows", () => {
     ]);
   });
 
+  it("fails on a UI test tagged @live: it uses the real services, so pull requests don't run it", () => {
+    const report = checkCoreFlows(
+      doc(
+        [
+          [
+            "Do the thing",
+            UNIT,
+            INTEGRATION,
+            [
+              "`tests/browser/c.spec.ts` › plays it from YouTube for real",
+              "`tests/browser/c.spec.ts` › opens the real Spotify",
+              "`tests/browser/c.spec.ts` › mentions @live only in its body",
+            ].join("<br>"),
+          ],
+        ],
+        0,
+      ),
+      options,
+    );
+    const why =
+      "is tagged @live: it uses the real YouTube, Spotify or SoundCloud, so pull requests don't run it. Name a test that uses stand-ins.";
+    expect(report.problems).toEqual([
+      `"Do the thing", UI: tests/browser/c.spec.ts › plays it from YouTube for real ${why}`,
+      `"Do the thing", UI: tests/browser/c.spec.ts › opens the real Spotify ${why}`,
+    ]);
+  });
+
   it("asks for the gap count to come down when a gap is closed", () => {
     const report = checkCoreFlows(GOOD.replace("Gaps allowed: 1", "Gaps allowed: 3"), options);
     expect(report.problems).toEqual([
@@ -170,6 +209,11 @@ describe("declaresTest", () => {
     expect(declaresTest("it.skip(`adds one`, () => {", "adds one")).toBe(true);
     expect(declaresTest('it.each(["a", "b"])("adds one", (x) => {', "adds one")).toBe(true);
     expect(declaresTest('it("says \\"hi\\"", () => {', 'says "hi"')).toBe(true);
+  });
+
+  it("finds a title Prettier has put on the line after the call", () => {
+    expect(declaresTest('test(\n  "plays it",\n  { tag: "@live" },\n', "plays it")).toBe(true);
+    expect(declaresTest('test(\r\n    "plays it",', "plays it")).toBe(true);
   });
 
   it("doesn't take part of a title, another argument or a string elsewhere for it", () => {
