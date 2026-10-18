@@ -11,6 +11,7 @@ import { REFUSED_MESSAGE, searchCacheKey, youtubeGuard } from "../../server/yout
 import { soundCloudCache } from "../../server/search";
 import { PREVIEW_ONLY } from "../../server/soundcloud";
 import { sourceHealth } from "../../server/source-health";
+import { spotifyTrackCache } from "../../server/spotify";
 import { FFMPEG_PATH } from "../../server/audio";
 import { errorSchemas } from "../../shared/routes";
 import { sourceHealthReportSchema } from "../../shared/schema";
@@ -90,6 +91,76 @@ const YOUTUBE_ENTRIES = [
   },
 ];
 const isYouTubeSearch = (args: string[]) => args.at(-1)!.startsWith("ytsearch");
+
+// A Spotify song (Queen – Bohemian Rhapsody), as Spotify's own pages describe it.
+const SONG = "4u7EnebtmKWzUH433cf5Qv";
+const SONG_LINK = `https://open.spotify.com/track/${SONG}?si=9f0c1d2e3a4b5c6d`;
+/** The song's embed page: its title, artists and length (354.32 s). */
+const songEmbedPage = `<!DOCTYPE html><html><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(
+  {
+    props: {
+      pageProps: {
+        state: {
+          data: {
+            entity: {
+              type: "track",
+              name: "Bohemian Rhapsody - Remastered 2011",
+              id: SONG,
+              artists: [{ name: "Queen", uri: "spotify:artist:1dfeR4HaWDbWqFHLkxsg1d" }],
+              duration: 354320,
+            },
+          },
+        },
+      },
+    },
+    page: "/track/[id]",
+  },
+)}</script></body></html>`;
+/** The song's own page, as Spotify sends it to a link preview: its album details. */
+const songPage = `<html><head>
+  <meta property="og:description" content="Queen · A Night At The Opera (2011 Remaster) · Song · 1975"/>
+  <meta name="music:album:track" content="11"/>
+  <meta name="music:release_date" content="1975-11-21"/>
+</head></html>`;
+/** YouTube's search for the song: the official video (with an intro) first, the same-length upload after. */
+const SONG_ENTRIES = [
+  {
+    id: "fJ9rUzIMcZQ",
+    title: "Queen – Bohemian Rhapsody (Official Video Remastered)",
+    duration: 412,
+    channel: "Queen Official",
+    channel_is_verified: true,
+  },
+  {
+    id: "yk3prd8GER4",
+    title: "Bohemian Rhapsody (Remastered 2011)",
+    duration: 355,
+    channel: "Queen - Topic",
+  },
+];
+
+/** Spotify played by a stand-in: the song's embed page and its own page; nothing else. */
+function standInSpotify() {
+  const fetch = vi.fn(async (url: string) => {
+    if (url === `https://open.spotify.com/embed/track/${SONG}`) return new Response(songEmbedPage);
+    if (url === `https://open.spotify.com/track/${SONG}`) return new Response(songPage);
+    throw new TypeError(`fetch failed: nothing stands in for ${url}`);
+  });
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+// music-metadata is ESM-only and types parseFile under the "node" condition only (see library.ts).
+type Tags = {
+  common: { title?: string; artist?: string; album?: string; track: { no: number | null } };
+  native: Record<string, { id: string; value: unknown }[]>;
+};
+const readTags = async (file: string): Promise<Tags> => {
+  const mm = (await import("music-metadata")) as unknown as {
+    parseFile: (file: string) => Promise<Tags>;
+  };
+  return mm.parseFile(file);
+};
 const BOT_CHECK = "Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies";
 const TOO_MANY = "HTTP Error 429: Too Many Requests";
 
@@ -205,6 +276,8 @@ beforeEach(() => {
 afterEach(() => {
   youtubeGuard.reset();
   soundCloudCache.clear();
+  spotifyTrackCache.clear();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   coverFor.mockClear();
   fake.videoInfo.mockReset();
@@ -674,6 +747,139 @@ describe("several saves at once (Download all runs one per CPU core)", () => {
     expect((await verifyMp3File(path.join(folder, "Carries on.mp3"))).isValid).toBe(true);
     expect(await fs.readdir(folder)).toEqual(["Carries on.mp3"]);
     await fs.rm(path.join(folder, "Carries on.mp3"));
+  });
+});
+
+describe("a Spotify song link (Spotify played by a stand-in fetch)", () => {
+  it("is looked up on Spotify, then found on YouTube, the same-length upload first", async () => {
+    const fetch = standInSpotify();
+    fake.runJson.mockResolvedValue({ entries: SONG_ENTRIES });
+    const res = await request(app).get("/api/search").query({ q: SONG_LINK });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.spotify).toMatchObject({
+      id: SONG,
+      url: `https://open.spotify.com/track/${SONG}`,
+      title: "Bohemian Rhapsody - Remastered 2011",
+      artists: ["Queen"],
+      duration: 354,
+    });
+    expect(res.body.source).toBe("youtube");
+    expect(res.body.results.map((r: { id: string }) => r.id)).toEqual([
+      "yk3prd8GER4",
+      "fJ9rUzIMcZQ",
+    ]);
+    // YouTube is asked for the song by its artist and title, never for the link…
+    expect(fake.runJson).toHaveBeenCalledTimes(1);
+    expect(fake.runJson.mock.calls[0][0].at(-1)).toBe("ytsearch12:Queen Bohemian Rhapsody audio");
+    // …and Spotify only for the song's own embed page, built from its id (not the link pasted).
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      `https://open.spotify.com/embed/track/${SONG}`,
+    ]);
+  });
+
+  it("its download is tagged with Spotify's title, artists, album and song id", async () => {
+    standInSpotify();
+    const before = (await historyOf(VIDEO)).length;
+    const res = await request(app)
+      .get("/api/video/download")
+      .query({ url: VIDEO, spotifyId: SONG, name: "Queen - Bohemian Rhapsody" })
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    expect(res.headers["content-disposition"]).toContain("Queen - Bohemian Rhapsody.mp3");
+    const file = path.join(dir, "spotify-song.mp3");
+    await fs.writeFile(file, res.body as Buffer);
+    expect((await verifyMp3File(file)).isValid).toBe(true);
+    const { common, native } = await readTags(file);
+    expect(common).toMatchObject({
+      title: "Bohemian Rhapsody",
+      artist: "Queen",
+      album: "A Night At The Opera (2011 Remaster)",
+      track: { no: 11 },
+    });
+    expect(native["ID3v2.3"]).toContainEqual({ id: "TXXX:spotify_id", value: SONG });
+    const rows = await waitForHistory(VIDEO, before + 1);
+    expect(rows[0]).toMatchObject({ spotifyId: SONG, title: "Tone" });
+  });
+
+  it("a link that isn't a song is turned down, without asking Spotify or YouTube", async () => {
+    const fetch = standInSpotify();
+    const res = await request(app)
+      .get("/api/search")
+      .query({ q: "https://open.spotify.com/artist/1dfeR4HaWDbWqFHLkxsg1d" });
+    expect(res.status).toBe(400);
+    expect(res.body.field).toBe("q");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(fake.runJson).not.toHaveBeenCalled();
+  });
+});
+
+describe("a YouTube playlist (yt-dlp's listing played by a stand-in)", () => {
+  const LIST = "PLbpi6ZahtOH6Blw3RGYpWkSByi_T7Rygb";
+  const flatPlaylist = {
+    _type: "playlist",
+    id: LIST,
+    title: "Road Trip",
+    channel: "Moomoo",
+    playlist_count: 2,
+    thumbnails: [{ url: "https://i.ytimg.com/pl/large.jpg", width: 480 }],
+    entries: [
+      { _type: "url", id: "jNQXAC9IVRw", title: "Me at the zoo", duration: 19.0, channel: "jawed" },
+      {
+        _type: "url",
+        id: "fJ9rUzIMcZQ",
+        title: "Queen – Bohemian Rhapsody (Official Video Remastered)",
+        duration: 359.0,
+        channel: "Queen Official",
+      },
+    ],
+  };
+
+  it("lists its videos for the panel, asking yt-dlp for the playlist's own link only", async () => {
+    fake.runJson.mockResolvedValue(flatPlaylist);
+    const res = await request(app)
+      .get("/api/youtube/playlist")
+      .query({ link: `youtube.com/playlist?list=${LIST}&si=shared` });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toMatchObject({
+      source: "youtube",
+      kind: "playlist",
+      id: LIST,
+      url: `https://www.youtube.com/playlist?list=${LIST}`,
+      name: "Road Trip",
+      by: "Moomoo",
+    });
+    expect(res.body.tracks).toEqual([
+      expect.objectContaining({
+        id: "jNQXAC9IVRw",
+        url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        title: "Me at the zoo",
+        artists: "jawed",
+        duration: 19,
+      }),
+      expect.objectContaining({ id: "fJ9rUzIMcZQ", artists: "Queen Official", duration: 359 }),
+    ]);
+    const args = fake.runJson.mock.calls[0][0] as string[];
+    expect(args).toContain("--flat-playlist");
+    expect(args.slice(-2)).toEqual(["--", `https://www.youtube.com/playlist?list=${LIST}`]);
+
+    // Opened again soon after: the same answer, without asking YouTube again.
+    const again = await request(app).get("/api/youtube/playlist").query({ link: res.body.url });
+    expect(again.body).toEqual(res.body);
+    expect(fake.runJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("a link that isn't a playlist it can open is explained, without asking YouTube", async () => {
+    const res = await request(app)
+      .get("/api/youtube/playlist")
+      .query({ link: "https://www.youtube.com/playlist?list=WL" });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/only you can see/);
+    expect(fake.runJson).not.toHaveBeenCalled();
   });
 });
 
