@@ -118,6 +118,54 @@ test.describe("Music player (browser)", () => {
     await expect.poll(() => audio(page)).toMatchObject({ paused: true, hasSource: false });
   });
 
+  test("a seek past where a cut-short file stops stays on that song, and says so", async ({
+    page,
+    request,
+  }) => {
+    // A download that stopped part-way: the file says the song is 8 minutes
+    // long, but has only its first part. Then a second song, after it.
+    const cutShort = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-player-test-"));
+    try {
+      const whole = path.join(cutShort, "whole.m4a");
+      await ffmpeg([
+        ...["-f", "lavfi", "-i", "sine=frequency=440:duration=480"],
+        ...["-c:a", "aac", "-b:a", "64k", "-movflags", "+faststart", whole],
+      ]);
+      const bytes = await fs.readFile(whole);
+      await fs.rm(whole);
+      await fs.writeFile(
+        path.join(cutShort, "A Cut Short.m4a"),
+        bytes.subarray(0, bytes.length / 8),
+      );
+      await ffmpeg([
+        ...["-f", "lavfi", "-i", "sine=frequency=550:duration=60"],
+        ...["-c:a", "libmp3lame", "-b:a", "64k", path.join(cutShort, "B After It.mp3")],
+      ]);
+      await request.put("/api/settings", { data: { saveFolder: cutShort } });
+      await page.goto("/");
+      const library = page.getByRole("region", { name: "Your music" });
+      await library.getByRole("combobox", { name: "Order songs by" }).selectOption("title");
+      await library.getByRole("button", { name: /^Play “A Cut Short”/ }).click(START_SONG);
+      const player = page.getByRole("region", { name: "Music player" });
+      await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+
+      // Halfway: past where the file stops. It stays on the song, paused, and says why.
+      await player.getByRole("slider", { name: "Seek" }).fill("240");
+      await expect(player.getByRole("alert")).toContainText("The file stops before 4:00");
+      await expect(player.getByTestId("player-title")).toHaveText("A Cut Short");
+      await expect.poll(() => audio(page)).toMatchObject({ paused: true });
+
+      // An earlier point plays.
+      await player.getByRole("slider", { name: "Seek" }).fill("5");
+      await player.getByRole("button", { name: "Play", exact: true }).click(START_SONG);
+      await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+      await expect(player.getByRole("alert")).toBeHidden();
+      await expect(player.getByTestId("player-title")).toHaveText("A Cut Short");
+    } finally {
+      await fs.rm(cutShort, { recursive: true, force: true });
+    }
+  });
+
   test.describe("with a long folder", () => {
     // 150 songs (copies of one song, named "Song 001" to "Song 150"), for the
     // list's Show more. A minute long, so none ends mid-test, and tiny.
