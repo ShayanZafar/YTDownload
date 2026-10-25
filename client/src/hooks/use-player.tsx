@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { readDeviceCover } from "@/lib/device-music";
+import { formatDuration } from "@/lib/format";
 import {
   EMPTY_QUEUE,
   RESTART_AFTER_SECONDS,
@@ -22,6 +23,7 @@ import {
   queueWithout,
   queueWithoutSong,
   repeatModes,
+  seekRanOffTheEnd,
   shuffledOrder,
   upNext,
   type PlayerTrack,
@@ -60,6 +62,8 @@ export type Player = {
   converting: boolean;
   /** Why the current song couldn't play. */
   error: string | null;
+  /** Something to know about the current song that doesn't stop it playing (its file stops early, say). */
+  warning: string | null;
   /** The current song's cover picture, if it has one (a folder song's may turn out empty). */
   cover: string | null;
   shuffle: boolean;
@@ -187,6 +191,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     restored ? (currentOf(restored.queue)?.duration ?? null) : null,
   );
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const [cover, setCover] = useState<string | null>(null);
   const [shuffle, setShuffleState] = useState(() => stored("player-shuffle") === "on");
@@ -217,6 +222,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Where the current song starts when it's loaded (a remembered song, say).
   const resumeAt = useRef(restored?.time ?? 0);
   const skipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Where the last seek asked to go, until the song gets there.
+  const seekAsked = useRef<number | null>(null);
 
   const current = currentOf(queue) ?? null;
 
@@ -252,6 +259,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       if (!element) return;
       clearTimeout(skipTimer.current);
       resumeAt.current = 0;
+      seekAsked.current = null;
       letGoOfObjectUrl();
       let src: string;
       let converted = false;
@@ -265,6 +273,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const attempt = { key: track.key, src, converted, startAt };
       loaded.current = attempt;
       setError(null);
+      setWarning(null);
       setTime(startAt);
       setDuration(track.duration);
       setConverting(converted);
@@ -310,9 +319,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       goTo(previousPosition(q.position, q.order.length, r));
     };
 
+    /** A seek got somewhere: where it was asked to, or (a file cut short) the end. */
+    const seeked = () => {
+      const element = audio();
+      const asked = seekAsked.current;
+      if (!element || asked === null) return;
+      if (!seekRanOffTheEnd(asked, element.currentTime, element.duration)) seekAsked.current = null;
+    };
+
     /** The song ended by itself: the next one, the same one again, or stop. */
     const ended = () => {
       const element = audio();
+      const asked = seekAsked.current;
+      seekAsked.current = null;
+      if (
+        element &&
+        asked !== null &&
+        seekRanOffTheEnd(asked, element.currentTime, element.duration)
+      ) {
+        // The file stops before where the seek asked for: it stays on this song.
+        setStatus("paused");
+        setWarning(
+          `The file stops before ${formatDuration(asked)} (cut short?): pick an earlier point.`,
+        );
+        return;
+      }
       const { queue: q, repeat: r } = latest.current;
       const position = nextPosition(q.position, q.order.length, r);
       if (position === null) {
@@ -375,6 +406,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       setUpNextOpen(false);
       setStatus("idle");
       setError(null);
+      setWarning(null);
       setConverting(false);
       setTime(0);
       setDuration(null);
@@ -408,7 +440,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return;
       }
       const end = Number.isFinite(element.duration) ? element.duration : seconds;
-      element.currentTime = Math.max(0, Math.min(seconds, end));
+      seekAsked.current = Math.max(0, Math.min(seconds, end));
+      element.currentTime = seekAsked.current;
       setTime(element.currentTime);
     };
 
@@ -505,6 +538,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       },
       close,
       // For the audio element's events (below).
+      seeked,
       ended,
       failed,
     };
@@ -518,6 +552,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const handlers: Record<string, () => void> = {
       playing: () => {
         failuresInARow.current = 0;
+        setWarning(null);
         setStatus("playing");
         setConverting(false);
       },
@@ -530,6 +565,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       durationchange: () => {
         if (Number.isFinite(element.duration)) setDuration(element.duration);
       },
+      seeked: actions.seeked,
       ended: actions.ended,
       error: actions.failed,
       volumechange: () => {
@@ -660,6 +696,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       status,
       converting,
       error,
+      warning,
       cover,
       shuffle,
       repeat,
@@ -692,6 +729,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       status,
       converting,
       error,
+      warning,
       cover,
       shuffle,
       repeat,

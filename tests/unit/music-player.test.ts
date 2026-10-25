@@ -17,6 +17,7 @@ import {
   queueWith,
   queueWithout,
   queueWithoutSong,
+  seekRanOffTheEnd,
   shuffledOrder,
   sortTracks,
   upNext,
@@ -168,6 +169,20 @@ describe("what plays next", () => {
     expect(previousPosition(2, 3, "off")).toBe(1);
     expect(previousPosition(0, 3, "off")).toBe(0);
     expect(previousPosition(0, 3, "all")).toBe(2);
+  });
+
+  it("doesn't take a seek past where a cut-short file stops for the song ending", () => {
+    // A 7:50 song whose file stops at 0:44: asked for 3:55, the browser lands at the end.
+    expect(seekRanOffTheEnd(235, 470, 470)).toBe(true);
+    expect(seekRanOffTheEnd(235, 469.8, 470)).toBe(true);
+    // A seek that got where it was asked (near enough), or one to the very end.
+    expect(seekRanOffTheEnd(235, 235, 470)).toBe(false);
+    expect(seekRanOffTheEnd(235, 233.9, 470)).toBe(false);
+    expect(seekRanOffTheEnd(469.5, 470, 470)).toBe(false);
+    expect(seekRanOffTheEnd(470, 470, 470)).toBe(false);
+    // No length known yet.
+    expect(seekRanOffTheEnd(10, 0, NaN)).toBe(false);
+    expect(seekRanOffTheEnd(10, Infinity, Infinity)).toBe(false);
   });
 });
 
