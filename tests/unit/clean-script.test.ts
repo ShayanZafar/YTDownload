@@ -32,12 +32,12 @@ const mkdtempPrefixes = testFiles.flatMap((text) =>
 // The Playwright test server's files, named after the run's process id.
 const playwrightNames = [
   ...read("../browser/test-server-files.ts").matchAll(/os\.tmpdir\(\),\s*`([^`]+)`/g),
-].map((m) => m[1].replace("${process.pid}", "13128"));
+].map((m) => m[1].replace("${run}", "13128"));
 
 describe("npm run clean", () => {
   it("finds the names the tests use", () => {
     expect(mkdtempPrefixes.length).toBeGreaterThan(10);
-    expect(playwrightNames).toHaveLength(4);
+    expect(playwrightNames).toHaveLength(5);
   });
 
   it("recognises every temp folder a test makes", () => {
@@ -49,12 +49,13 @@ describe("npm run clean", () => {
     }
   });
 
-  it("recognises the Playwright test server's history, settings, health report and player cache", () => {
+  it("recognises the Playwright test server's history, settings, health report, player cache and bin", () => {
     expect(playwrightNames).toEqual([
       "yt-audio-e2e-history-13128.json",
       "yt-audio-e2e-settings-13128.json",
       "yt-audio-e2e-health-13128.json",
       "yt-audio-e2e-player-13128",
+      "yt-audio-e2e-trash-13128",
     ]);
     for (const name of playwrightNames) expect(isTestLeftover(name)).toBe(true);
   });

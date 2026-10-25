@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   audioSources,
+  deletedSongSchema,
   downloadSchema,
   folderEntrySchema,
   lyricsSchema,
@@ -9,6 +10,7 @@ import {
   songDetailsSchema,
   songDetailsWrittenSchema,
   songLookupSchema,
+  noBinSchema,
   playlistFileSongSchema,
   saveSettingsSchema,
   savedPlaylistFileSchema,
@@ -356,6 +358,17 @@ export const api = {
       path: "/api/music/:id/details" as const,
       input: songDetailsSchema,
       responses: { 200: songDetailsWrittenSchema },
+    },
+    /**
+     * Deletes a song from the folder: to the Recycle Bin / Trash, so it can be
+     * put back from there — or for good, only when `permanently` says so
+     * (a drive with no bin answers `409` with `noBin` instead).
+     */
+    remove: {
+      method: "DELETE" as const,
+      path: "/api/music/:id" as const,
+      input: z.object({ permanently: z.boolean().optional() }),
+      responses: { 200: deletedSongSchema, 409: noBinSchema },
     },
   },
 };

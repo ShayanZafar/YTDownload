@@ -11,17 +11,20 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
+  Trash2,
   Volume1,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
+import { DeleteSongDialog } from "@/components/delete-song-dialog";
 import { LyricsPanel } from "@/components/lyrics-panel";
 import { UpNext } from "@/components/up-next";
 import { usePlayer, usePlayerTime } from "@/hooks/use-player";
 import { usePlayerShortcuts } from "@/hooks/use-player-shortcuts";
 import { useToast } from "@/hooks/use-toast";
 import { formatDuration } from "@/lib/format";
+import type { PlayerTrack } from "@/lib/music";
 import { cn } from "@/lib/utils";
 
 const repeatLabels = {
@@ -54,6 +57,11 @@ export function PlayerBar() {
   // The lyrics open in the same place as Up next: one at a time.
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  // The song "Delete from folder" is asking about (it stays open after the next song starts).
+  const [deleting, setDeleting] = useState<(PlayerTrack & { source: "folder" }) | null>(null);
+  const deleteDialog = deleting && (
+    <DeleteSongDialog track={deleting} onClose={() => setDeleting(null)} />
+  );
   // A note in the corner would cover Up next, which shows what it said anyway.
   const { dismiss } = useToast();
   const toggleUpNext = () => {
@@ -81,7 +89,7 @@ export function PlayerBar() {
     };
   }, [visible]);
 
-  if (!current) return null;
+  if (!current) return deleteDialog;
 
   const length = duration ?? current.duration;
   const playing = status === "playing";
@@ -276,6 +284,17 @@ export function PlayerBar() {
             >
               <ListMusic className="h-4 w-4" />
             </button>
+            {current.source === "folder" && (
+              <button
+                type="button"
+                onClick={() => setDeleting(current)}
+                aria-label="Delete from folder"
+                title="Delete this song from the folder"
+                className={cn(iconButton, "hover:text-destructive")}
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
             <button
               type="button"
               onClick={player.close}
@@ -288,6 +307,7 @@ export function PlayerBar() {
           </div>
         </div>
       </section>
+      {deleteDialog}
     </>
   );
 }
