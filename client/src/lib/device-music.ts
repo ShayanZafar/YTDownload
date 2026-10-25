@@ -6,6 +6,7 @@
  * are picked.
  */
 import type { IAudioMetadata, IOptions } from "music-metadata";
+import { genresOf } from "@shared/audio-types";
 import type { PlayerTrack } from "@/lib/music";
 
 type Reader = {
@@ -19,7 +20,9 @@ type Reader = {
 let reader: Promise<Reader> | undefined;
 const loadReader = (): Promise<Reader> => (reader ??= import("music-metadata"));
 
-export type DeviceTags = Pick<PlayerTrack, "artist" | "album" | "duration"> & { title?: string };
+export type DeviceTags = Pick<PlayerTrack, "artist" | "album" | "genres" | "year" | "duration"> & {
+  title?: string;
+};
 
 /** A picked song's tags. A file with none (or that can't be read) just keeps its file name. */
 export async function readDeviceTags(file: File): Promise<DeviceTags> {
@@ -32,11 +35,13 @@ export async function readDeviceTags(file: File): Promise<DeviceTags> {
       title: common.title?.trim() || undefined,
       artist: artist?.trim() || common.albumartist?.trim() || null,
       album: common.album?.trim() || null,
+      genres: genresOf(common.genre),
+      year: common.year && common.year > 0 ? common.year : null,
       duration:
         duration !== undefined && Number.isFinite(duration) && duration > 0 ? duration : null,
     };
   } catch {
-    return { artist: null, album: null, duration: null };
+    return { artist: null, album: null, genres: [], year: null, duration: null };
   }
 }
 

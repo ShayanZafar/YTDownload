@@ -7,6 +7,9 @@ import {
   lyricsSchema,
   folderListingSchema,
   musicLibrarySchema,
+  songDetailsSchema,
+  songDetailsWrittenSchema,
+  songLookupSchema,
   trimInputSchema,
   trimUndoSchema,
   trimmedSongSchema,
@@ -366,6 +369,22 @@ export const api = {
       path: "/api/music/trim/undo" as const,
       input: trimUndoSchema,
       responses: { 200: trimmedSongSchema.pick({ id: true, duration: true }) },
+    },
+    /**
+     * Fill in details: what a song's tags lack, and what the music catalogues
+     * (iTunes, then Deezer) have for it. Nothing is written.
+     */
+    lookUpDetails: {
+      method: "GET" as const,
+      path: "/api/music/:id/details" as const,
+      responses: { 200: songLookupSchema },
+    },
+    /** Writes the details a song still lacks into its file; tags it has stay as they are. */
+    writeDetails: {
+      method: "POST" as const,
+      path: "/api/music/:id/details" as const,
+      input: songDetailsSchema,
+      responses: { 200: songDetailsWrittenSchema },
     },
     /**
      * Deletes a song from the folder: to the Recycle Bin / Trash, so it can be

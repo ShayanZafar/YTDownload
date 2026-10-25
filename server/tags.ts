@@ -110,12 +110,12 @@ export function jpegSize(jpeg: Buffer): { width: number; height: number } | unde
 }
 
 /**
- * The cover as an Ogg file holds it: a FLAC picture block (front cover,
- * JPEG), base64-encoded into a METADATA_BLOCK_PICTURE comment.
+ * The cover as an Ogg file holds it: a FLAC picture block (front cover, a
+ * JPEG unless `type` says), base64-encoded into a METADATA_BLOCK_PICTURE comment.
  */
-export function flacPictureBlock(jpeg: Buffer): string {
+export function flacPictureBlock(jpeg: Buffer, type = "image/jpeg"): string {
   const size = jpegSize(jpeg) ?? { width: 0, height: 0 };
-  const mime = Buffer.from("image/jpeg", "latin1");
+  const mime = Buffer.from(type, "latin1");
   const header = Buffer.alloc(8);
   header.writeUInt32BE(3, 0); // the front cover
   header.writeUInt32BE(mime.length, 4);

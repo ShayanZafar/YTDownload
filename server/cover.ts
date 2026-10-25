@@ -6,14 +6,16 @@
  * which every player shows.
  *
  * Only YouTube's thumbnail host (at an address built from the validated video
- * id), Spotify's image hosts and SoundCloud's (a validated 500×500 artwork
- * address, shared/soundcloud-link.ts) are ever fetched. A cover that can't be had
+ * id), Spotify's image hosts, SoundCloud's (a validated 500×500 artwork
+ * address, shared/soundcloud-link.ts) and the music catalogues' (iTunes and
+ * Deezer, for a song's missing details: catalogues.ts) are ever fetched. A cover that can't be had
  * quickly is simply left out: the download never waits on it for long or
  * fails because of it.
  */
 import { spawn } from "child_process";
 import { isSoundCloudArtworkUrl } from "@shared/soundcloud-link";
 import { FFMPEG_PATH } from "./audio";
+import { isCatalogueCoverUrl } from "./catalogues";
 import { jpegSize } from "./tags";
 
 /** The cover's largest side, in pixels. */
@@ -29,12 +31,13 @@ const SPOTIFY_COVER_RE =
 
 /**
  * Where a cover can come from: a Spotify album cover, a YouTube video's
- * thumbnails, or a SoundCloud track's artwork.
+ * thumbnails, a SoundCloud track's artwork, or an iTunes or Deezer album cover.
  */
 export type CoverSource =
   | { kind: "spotify"; url: string }
   | { kind: "youtube"; videoId: string }
-  | { kind: "soundcloud"; url: string };
+  | { kind: "soundcloud"; url: string }
+  | { kind: "catalogue"; url: string };
 
 /** Is this the address of a Spotify cover picture (so the app may fetch it)? */
 export const isSpotifyCoverUrl = (url: string) => SPOTIFY_COVER_RE.test(url);
@@ -73,16 +76,17 @@ export function coverArgs(kind: CoverSource["kind"]): string[] {
 
 /** The cover for a download, as a JPEG, or undefined if there's none to be had. */
 export async function fetchCover(source: CoverSource): Promise<Buffer | undefined> {
+  const allowed = {
+    spotify: isSpotifyCoverUrl,
+    soundcloud: isSoundCloudArtworkUrl,
+    catalogue: isCatalogueCoverUrl,
+  };
   const urls =
     source.kind === "youtube"
       ? youtubeThumbnailUrls(source.videoId)
-      : source.kind === "spotify"
-        ? isSpotifyCoverUrl(source.url)
-          ? [source.url]
-          : []
-        : isSoundCloudArtworkUrl(source.url)
-          ? [source.url]
-          : [];
+      : allowed[source.kind](source.url)
+        ? [source.url]
+        : [];
   for (const url of urls) {
     const picture = await fetchImage(url);
     if (picture) return squareJpeg(picture, source.kind).catch(() => undefined);

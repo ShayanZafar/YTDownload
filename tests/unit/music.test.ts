@@ -102,6 +102,8 @@ describe("toMusicTrack", () => {
       title: "Bohemian Rhapsody",
       artist: "Queen",
       album: "A Night at the Opera",
+      genres: [],
+      year: null,
       duration: 354.3,
       addedAt: "2026-10-02T12:00:00.000Z",
       size: 1000,

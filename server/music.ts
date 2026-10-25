@@ -48,6 +48,8 @@ export function toMusicTrack(folder: string, file: AudioFile, tags: FileTags): M
     title: tags.title ?? songNameOf(file.relative),
     artist: tags.trackArtist ?? null,
     album: tags.album ?? null,
+    genres: tags.genres ?? [],
+    year: tags.year ?? null,
     duration: tags.duration ?? null,
     addedAt: new Date(file.addedMs).toISOString(),
     size: file.size,

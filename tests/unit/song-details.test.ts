@@ -1,0 +1,610 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { spawn } from "child_process";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
+import { FFMPEG_PATH } from "../../server/audio";
+import {
+  CatalogueError,
+  deezerDetails,
+  deezerSongs,
+  isCatalogueCoverUrl,
+  itunesSongs,
+  lookUpSong,
+  pickMatch,
+  resetCatalogues,
+  type CatalogueSong,
+} from "../../server/catalogues";
+import { findAudioFiles, parseFile, type AudioFile } from "../../server/library";
+import {
+  canWriteDetails,
+  detailsArgs,
+  lookUpDetails,
+  rewriteProblem,
+  writeSongDetails,
+} from "../../server/song-details";
+import { genresOf } from "../../shared/audio-types";
+import {
+  NO_VALUE,
+  facetCounts,
+  filterByFacets,
+  filterTracks,
+  folderTrack,
+} from "../../client/src/lib/music";
+import { detailLabels, eachAtOnce } from "../../client/src/lib/song-details";
+
+// Fill in details: the music catalogues' answers (iTunes and Deezer, played
+// by stand-ins — no network), and writing what a song lacks into real files
+// ffmpeg makes, keeping everything they had.
+
+const COVER_URL = "https://is1-ssl.mzstatic.com/image/thumb/Music/v4/aa/bb/cc/source/600x600bb.jpg";
+
+/** An iTunes search answer with these songs. */
+const itunesAnswer = (...results: Record<string, unknown>[]) => ({
+  resultCount: results.length,
+  results: results.map((r) => ({ wrapperType: "track", kind: "song", ...r })),
+});
+
+const SINE_SONG = {
+  trackName: "Test Tone",
+  artistName: "Sine Wave",
+  collectionName: "Pure Tones",
+  primaryGenreName: "Electronic",
+  releaseDate: "1999-04-01T07:00:00Z",
+  trackNumber: 3,
+  trackTimeMillis: 3000,
+  artworkUrl100: COVER_URL.replace("600x600bb", "100x100bb"),
+};
+
+const json = (body: unknown, init: ResponseInit = {}) =>
+  new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+    ...init,
+  });
+
+describe("the catalogues' answers", () => {
+  it("read iTunes' songs: album without “- Single”, genre, year, track, a 600×600 cover", () => {
+    const [song, single] = itunesSongs(
+      itunesAnswer(SINE_SONG, {
+        ...SINE_SONG,
+        collectionName: "Test Tone - Single",
+        collectionArtistName: "Various Artists",
+      }),
+    );
+    expect(song).toEqual({
+      title: "Test Tone",
+      artist: "Sine Wave",
+      album: "Pure Tones",
+      genre: "Electronic",
+      year: 1999,
+      track: 3,
+      duration: 3,
+      coverUrl: COVER_URL,
+      compilation: false,
+      single: false,
+    });
+    expect(single).toMatchObject({ album: "Test Tone", single: true, compilation: true });
+    expect(
+      itunesSongs({ results: [{ kind: "music-video", trackName: "x", artistName: "y" }] }),
+    ).toEqual([]);
+    expect(itunesSongs("nonsense")).toEqual([]);
+  });
+
+  it("read Deezer's songs, and the genre, year and track from its song and album", () => {
+    const cover = `https://cdn-images.dzcdn.net/images/cover/${"a".repeat(32)}/1000x1000-000000-80-0-0.jpg`;
+    expect(
+      deezerSongs({
+        data: [
+          {
+            id: 42,
+            title: "Test Tone",
+            duration: 3,
+            artist: { name: "Sine Wave" },
+            album: { id: 7, title: "Pure Tones", cover_xl: cover },
+          },
+          { id: 43, title: "No artist" },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: 42,
+        albumId: 7,
+        title: "Test Tone",
+        artist: "Sine Wave",
+        album: "Pure Tones",
+        duration: 3,
+        coverUrl: cover,
+      },
+    ]);
+    expect(
+      deezerDetails(
+        { track_position: 3, release_date: "2001-01-01" },
+        {
+          genres: { data: [{ name: "Electro" }] },
+          release_date: "1999-04-01",
+          record_type: "album",
+        },
+      ),
+    ).toEqual({ track: 3, year: 1999, genre: "Electro", compilation: false, single: false });
+  });
+
+  it("only offer covers from the catalogues' own image hosts", () => {
+    expect(isCatalogueCoverUrl(COVER_URL)).toBe(true);
+    expect(
+      isCatalogueCoverUrl(
+        `https://e-cdns-images.dzcdn.net/images/cover/${"0".repeat(32)}/1000x1000-000000-80-0-0.jpg`,
+      ),
+    ).toBe(true);
+    for (const url of [
+      "https://evil.example/image/thumb/a/600x600bb.jpg",
+      "http://is1-ssl.mzstatic.com/image/thumb/a/600x600bb.jpg",
+      "https://is1-ssl.mzstatic.com.evil.example/image/thumb/a/600x600bb.jpg",
+      "https://is1-ssl.mzstatic.com/image/thumb/../../x/600x600bb.jpg",
+      "https://is1-ssl.mzstatic.com/image/thumb/a/600x600bb.jpg?x=1",
+    ]) {
+      expect(isCatalogueCoverUrl(url), url).toBe(false);
+    }
+  });
+});
+
+describe("pickMatch", () => {
+  const song = (extra: Partial<CatalogueSong>): CatalogueSong => ({
+    title: "Test Tone",
+    artist: "Sine Wave",
+    ...extra,
+  });
+
+  it("takes only the same title by the same artist", () => {
+    const search = { track: "Test Tone", artist: "Sine Wave" };
+    expect(pickMatch([song({ artist: "Square Wave" }), song({ title: "Other" })], search)).toBe(
+      undefined,
+    );
+    const cover = song({ artist: "Sine Wave & Friends", album: "Covered" });
+    expect(pickMatch([cover], search)).toBe(cover);
+    // "(Official Video)" and "feat." don't make it another song.
+    expect(
+      pickMatch([song({})], { track: "Test Tone (Official Video)", artist: "Sine Wave feat. X" }),
+    ).toBeDefined();
+  });
+
+  it("prefers the same length, then the artist's own album over a compilation or single", () => {
+    const search = { track: "Test Tone", artist: "Sine Wave" };
+    const compilation = song({ album: "Hits", compilation: true, duration: 180 });
+    const single = song({ album: "Single", single: true, duration: 180 });
+    const album = song({ album: "Album", duration: 180 });
+    const live = song({ album: "Live", duration: 240 });
+    expect(pickMatch([live, compilation, single, album], search, 180)).toBe(album);
+    expect(pickMatch([live, compilation], search, 180)).toBe(compilation);
+    expect(pickMatch([live], search, 180)).toBe(live);
+  });
+
+  it("without an artist, takes only a song the same length", () => {
+    const search = { track: "Test Tone", artist: "" };
+    expect(pickMatch([song({ duration: 200 })], search, 180)).toBe(undefined);
+    expect(pickMatch([song({ duration: 200 })], search)).toBe(undefined);
+    expect(pickMatch([song({ duration: 181 })], search, 180)).toBeDefined();
+  });
+});
+
+describe("lookUpSong", () => {
+  beforeEach(() => resetCatalogues());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("asks iTunes first, with just the title and artist", async () => {
+    const fetch = vi.fn(async (_url: string) => json(itunesAnswer(SINE_SONG)));
+    vi.stubGlobal("fetch", fetch);
+    const match = await lookUpSong({ title: "Test Tone", artist: "Sine Wave", duration: 3 });
+    expect(match).toMatchObject({ source: "itunes", song: { genre: "Electronic", track: 3 } });
+    const url = new URL(fetch.mock.calls[0][0]);
+    expect(url.origin + url.pathname).toBe("https://itunes.apple.com/search");
+    expect(url.searchParams.get("term")).toBe("Sine Wave Test Tone");
+    // Asked again: from memory.
+    await lookUpSong({ title: "Test Tone", artist: "Sine Wave", duration: 3 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("switches to Deezer at once when iTunes refuses, and skips iTunes until its time is up", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      asked.push(new URL(url).host + new URL(url).pathname);
+      if (url.startsWith("https://itunes.apple.com/")) return new Response("", { status: 403 });
+      if (url.includes("/search?")) {
+        return json({
+          data: [{ id: 42, title: "Test Tone", artist: { name: "Sine Wave" }, album: { id: 7 } }],
+        });
+      }
+      if (url.endsWith("/track/42")) return json({ track_position: 5 });
+      if (url.endsWith("/album/7")) return json({ genres: { data: [{ name: "Electro" }] } });
+      return new Response("", { status: 404 });
+    });
+    const first = await lookUpSong({ title: "Test Tone", artist: "Sine Wave" });
+    expect(first).toMatchObject({ source: "deezer", song: { genre: "Electro", track: 5 } });
+    const second = await lookUpSong({ title: "Another Tone", artist: "Sine Wave" });
+    expect(second).toBe(null); // Deezer only knows Test Tone
+    expect(asked.filter((a) => a.startsWith("itunes"))).toHaveLength(1);
+  });
+
+  it("asks Deezer for a song iTunes doesn't have", async () => {
+    vi.stubGlobal("fetch", async (url: string) =>
+      url.startsWith("https://itunes.apple.com/")
+        ? json(itunesAnswer())
+        : url.includes("/search?")
+          ? json({ data: [{ id: 1, title: "Test Tone", artist: { name: "Sine Wave" } }] })
+          : json({}),
+    );
+    expect(await lookUpSong({ title: "Test Tone", artist: "Sine Wave" })).toMatchObject({
+      source: "deezer",
+    });
+  });
+
+  it("says when neither catalogue can be reached", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(lookUpSong({ title: "Test Tone", artist: "Sine Wave" })).rejects.toThrow(
+      CatalogueError,
+    );
+  });
+});
+
+describe("genres", () => {
+  it("are each tag once, a “Rock; Pop” tag counting as two", () => {
+    expect(genresOf(["Rock; Pop", "rock", " Hip-Hop/Rap ", ""])).toEqual([
+      "Rock",
+      "Pop",
+      "Hip-Hop/Rap",
+    ]);
+    expect(genresOf(undefined)).toEqual([]);
+  });
+
+  const song = (title: string, genres: string[], extra: { artist?: string; year?: number } = {}) =>
+    folderTrack({
+      id: `id-${title}`.padEnd(22, "x").slice(0, 22),
+      path: `${title}.mp3`,
+      title,
+      artist: extra.artist ?? null,
+      album: null,
+      genres,
+      year: extra.year ?? null,
+      duration: null,
+      addedAt: "2026-10-01T10:00:00.000Z",
+      size: 1000,
+    });
+  const songs = [
+    song("A", ["Rock"], { artist: "Band", year: 1999 }),
+    song("B", ["rock", "Pop"], { artist: "Band, Singer", year: 2004 }),
+    song("C", ["Jazz"], { artist: "Trio", year: 1999 }),
+    song("D", []),
+    song("E", ["Rock"], { artist: "Singer" }),
+  ];
+
+  it("are counted, the most common first, named as most songs spell them", () => {
+    expect(facetCounts(songs, "genre")).toEqual({
+      values: [
+        { value: "Rock", count: 3 },
+        { value: "Jazz", count: 1 },
+        { value: "Pop", count: 1 },
+      ],
+      none: 1,
+    });
+  });
+
+  it("filter the songs, any spelling, or the songs without one", () => {
+    const titles = (filters: Parameters<typeof filterByFacets>[1]) =>
+      filterByFacets(songs, filters).map((t) => t.title);
+    expect(titles({ genre: "ROCK" })).toEqual(["A", "B", "E"]);
+    expect(titles({ genre: NO_VALUE })).toEqual(["D"]);
+    expect(titles({})).toHaveLength(5);
+    expect(filterTracks(songs, "jaz").map((t) => t.title)).toEqual(["C"]);
+  });
+});
+
+describe("the other filters", () => {
+  const song = (title: string, extra: { artist?: string; album?: string; year?: number }) =>
+    folderTrack({
+      id: `id-${title}`.padEnd(22, "x").slice(0, 22),
+      path: `${title}.mp3`,
+      title,
+      artist: extra.artist ?? null,
+      album: extra.album ?? null,
+      genres: [],
+      year: extra.year ?? null,
+      duration: null,
+      addedAt: "2026-10-01T10:00:00.000Z",
+      size: 1000,
+    });
+  const songs = [
+    song("A", { artist: "Band", album: "First", year: 1999 }),
+    song("B", { artist: "Band, Singer", album: "Second", year: 2004 }),
+    song("C", { artist: "Trio", album: "First", year: 1999 }),
+    song("D", {}),
+  ];
+
+  it("count artists A–Z (each of a song's artists), albums A–Z and years newest first", () => {
+    expect(facetCounts(songs, "artist").values.map((v) => `${v.value} ${v.count}`)).toEqual([
+      "Band 2",
+      "Singer 1",
+      "Trio 1",
+    ]);
+    expect(facetCounts(songs, "album").values.map((v) => v.value)).toEqual(["First", "Second"]);
+    expect(facetCounts(songs, "year")).toEqual({
+      values: [
+        { value: "2004", count: 1 },
+        { value: "1999", count: 2 },
+      ],
+      none: 1,
+    });
+  });
+
+  it("work together, and the year can be typed in the filter box", () => {
+    const titles = (filters: Parameters<typeof filterByFacets>[1]) =>
+      filterByFacets(songs, filters).map((t) => t.title);
+    expect(titles({ artist: "singer" })).toEqual(["B"]);
+    expect(titles({ album: "First", year: "1999" })).toEqual(["A", "C"]);
+    expect(titles({ album: "First", artist: "Trio" })).toEqual(["C"]);
+    expect(titles({ year: NO_VALUE })).toEqual(["D"]);
+    expect(filterTracks(songs, "2004").map((t) => t.title)).toEqual(["B"]);
+  });
+});
+
+describe("the review", () => {
+  it("lists what was found", () => {
+    expect(
+      detailLabels({ genre: "Rock", album: "Album", year: 1999, track: 3, coverUrl: COVER_URL }),
+    ).toEqual(["Genre: Rock", "Album: Album", "1999", "Track 3", "Cover"]);
+  });
+
+  it("works on that many songs at once, and starts no more once stopped", async () => {
+    let running = 0;
+    let most = 0;
+    const done: number[] = [];
+    const stop = new AbortController();
+    await eachAtOnce(
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      async (n) => {
+        most = Math.max(most, ++running);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        running--;
+        done.push(n);
+        if (n === 4) stop.abort();
+      },
+      3,
+      stop.signal,
+    );
+    expect(most).toBe(3);
+    expect(done.length).toBeLessThan(8);
+  });
+});
+
+// --- Writing into real files ----------------------------------------------------------
+
+let dir: string;
+let jpeg: Buffer;
+
+function ffmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG_PATH!, ["-hide_banner", "-loglevel", "error", "-y", ...args], {
+      windowsHide: true,
+    });
+    let err = "";
+    child.stderr.on("data", (chunk) => (err += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`ffmpeg: ${err}`))));
+  });
+}
+
+const tone = (file: string, codecArgs: string[]) =>
+  ffmpeg(["-f", "lavfi", "-i", "sine=frequency=440:duration=3", ...codecArgs, file]);
+
+/** The file as the folder scan finds it. */
+async function scanned(name: string): Promise<AudioFile> {
+  const { files } = await findAudioFiles(dir);
+  return files.find((file) => file.relative === name)!;
+}
+
+/** Every tag id the file has, by type. */
+async function tagIds(name: string) {
+  const { native } = await parseFile(path.join(dir, name), { skipCovers: true });
+  return Object.fromEntries(
+    Object.entries(native).map(([type, tags]) => [type, tags.map((t) => t.id)]),
+  );
+}
+
+beforeAll(async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-details-test-"));
+  const picture = path.join(dir, "cover.jpg.src");
+  await ffmpeg([
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=red:s=64x64",
+    "-frames:v",
+    "1",
+    "-f",
+    "mjpeg",
+    picture,
+  ]);
+  jpeg = await fs.readFile(picture);
+  // An MP3 the way the app saves them, with its Spotify song.
+  await tone(path.join(dir, "Sine Wave - Test Tone.mp3"), [
+    ...["-c:a", "libmp3lame", "-b:a", "128k", "-id3v2_version", "3"],
+    ...["-metadata", "title=Test Tone", "-metadata", "artist=Sine Wave"],
+    ...["-metadata", "spotify_id=0123456789abcdefghijkl"],
+  ]);
+  await tone(path.join(dir, "Tone.m4a"), [
+    ...["-c:a", "aac", "-metadata", "title=Test Tone", "-metadata", "artist=Sine Wave"],
+    ...["-metadata", "comment=https://open.spotify.com/track/0123456789abcdefghijkl"],
+  ]);
+  await tone(path.join(dir, "Tone.flac"), ["-c:a", "flac", "-metadata", "title=Test Tone"]);
+  await tone(path.join(dir, "Tone.opus"), [
+    ...["-c:a", "libopus", "-metadata", "title=Test Tone", "-metadata", "genre=Ambient"],
+  ]);
+  await tone(path.join(dir, "Old.wma"), ["-c:a", "wmav2"]);
+});
+
+afterAll(async () => {
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+describe("writeSongDetails", () => {
+  beforeEach(() => {
+    resetCatalogues();
+    // The cover's address answers with a picture; nothing else is reachable.
+    vi.stubGlobal("fetch", async (url: string) =>
+      url === COVER_URL
+        ? new Response(jpeg, { headers: { "content-type": "image/jpeg" } })
+        : json(itunesAnswer(SINE_SONG)),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const details = {
+    title: "Wrong Title",
+    genre: "Electronic",
+    album: "Pure Tones",
+    year: 1999,
+    track: 3,
+    coverUrl: COVER_URL,
+  };
+
+  it("adds only what an MP3 lacks, keeping its tags, audio and dates", async () => {
+    const name = "Sine Wave - Test Tone.mp3";
+    const file = await scanned(name);
+    const before = await fs.stat(file.absolute);
+    const audioBefore = await parseFile(file.absolute, { duration: true });
+
+    expect(await writeSongDetails(file, details)).toEqual([
+      "album",
+      "genre",
+      "year",
+      "track",
+      "cover",
+    ]);
+
+    const after = await fs.stat(file.absolute);
+    // To the millisecond (file systems keep finer times than a number of seconds can carry).
+    expect(Math.abs(after.mtimeMs - before.mtimeMs)).toBeLessThan(1);
+    if (before.birthtimeMs) expect(after.birthtimeMs).toBe(before.birthtimeMs);
+    const { common, format } = await parseFile(file.absolute, { duration: true });
+    expect(common).toMatchObject({
+      title: "Test Tone", // kept: it had one
+      artist: "Sine Wave",
+      album: "Pure Tones",
+      genre: ["Electronic"],
+      year: 1999,
+      track: { no: 3 },
+    });
+    expect(common.picture?.[0].format).toBe("image/jpeg");
+    expect(format.duration).toBeCloseTo(audioBefore.format.duration!, 1);
+    expect((await tagIds(name))["ID3v2.3"]).toContain("TXXX:spotify_id");
+
+    // Everything's there now: nothing more to add.
+    expect(await writeSongDetails(await scanned(name), details)).toEqual([]);
+  });
+
+  it("writes into .m4a, .flac and .opus files too, keeping an Ogg file's tags", async () => {
+    for (const name of ["Tone.m4a", "Tone.flac", "Tone.opus"]) {
+      const added = await writeSongDetails(await scanned(name), details);
+      expect(added, name).toContain("cover");
+      const { common } = await parseFile(path.join(dir, name));
+      expect(common.picture, name).toHaveLength(1);
+      expect(common.album, name).toBe("Pure Tones");
+    }
+    // The .opus had a genre: it stays.
+    const opus = await parseFile(path.join(dir, "Tone.opus"));
+    expect(opus.common.genre).toEqual(["Ambient"]);
+    expect((await parseFile(path.join(dir, "Tone.m4a"))).common.comment?.[0]).toMatchObject({
+      text: "https://open.spotify.com/track/0123456789abcdefghijkl",
+    });
+  });
+
+  it("keeps an Ogg file's cover when adding other details", async () => {
+    // Its cover went in above; it still has no artist.
+    const file = await scanned("Tone.opus");
+    expect(await writeSongDetails(file, { artist: "Sine Wave", genre: "Rock" })).toEqual([
+      "artist",
+    ]);
+    const { common } = await parseFile(file.absolute);
+    expect(common).toMatchObject({ artist: "Sine Wave", genre: ["Ambient"] });
+    expect(common.picture).toHaveLength(1);
+  });
+
+  it("won't write into a kind of file that can't hold tags", async () => {
+    expect(canWriteDetails("Old.wma")).toBe(false);
+    await expect(writeSongDetails(await scanned("Old.wma"), details)).rejects.toThrow(
+      /can't write tags into \.wma files/,
+    );
+    expect(await lookUpDetails(await scanned("Old.wma"))).toMatchObject({
+      writable: false,
+      found: null,
+    });
+  });
+
+  it("leaves the song as it was if the copy lost a tag, the audio changed or a detail is missing", () => {
+    const meta = (ids: string[], extra: Record<string, unknown> = {}, duration = 180) =>
+      ({
+        format: { codec: "MPEG 1 Layer 3", numberOfChannels: 2, duration },
+        common: { genre: ["Rock"], ...extra },
+        native: { "ID3v2.3": ids.map((id) => ({ id, value: "x" })) },
+      }) as unknown as Parameters<typeof rewriteProblem>[0];
+    const before = meta(["TIT2", "TXXX:spotify_id", "TSSE"]);
+    expect(rewriteProblem(before, meta(["TIT2", "TXXX:spotify_id", "TCON"]), ["genre"])).toBe(
+      undefined,
+    );
+    expect(rewriteProblem(before, meta(["TIT2", "TCON"]), ["genre"])).toMatch(/lose.*spotify_id/);
+    expect(rewriteProblem(before, meta(["TIT2", "TXXX:spotify_id"], {}, 120), [])).toMatch(
+      /different length/,
+    );
+    expect(
+      rewriteProblem(before, meta(["TIT2", "TXXX:spotify_id"], { genre: undefined }), ["genre"]),
+    ).toMatch(/genre didn't go in/);
+  });
+
+  it("copies the streams as they are, with the new tags on top", () => {
+    const args = detailsArgs({
+      input: "in.mp3",
+      output: "out.mp3",
+      ext: ".mp3",
+      metadata: "tags.txt",
+      cover: "cover.jpg",
+      id3: { version: 3, v1: true },
+    });
+    expect(args.join(" ")).toContain(
+      "-i in.mp3 -i cover.jpg -f ffmetadata -i tags.txt -map 0:a -map 0:v? -map 1:v -map_metadata 0 -map_metadata 2 -c copy -disposition:v:0 attached_pic -id3v2_version 3 -write_id3v1 1 -f mp3 -y out.mp3",
+    );
+  });
+});
+
+describe("lookUpDetails", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("says what a song lacks and what the catalogue has for just that", async () => {
+    resetCatalogues();
+    const name = "Bare.mp3";
+    await tone(path.join(dir, name), ["-c:a", "libmp3lame", "-b:a", "128k"]);
+    await fs.rename(path.join(dir, name), path.join(dir, "Sine Wave - Test Tone (2).mp3"));
+    vi.stubGlobal("fetch", async (url: string) =>
+      json(
+        itunesAnswer({
+          ...SINE_SONG,
+          trackName: new URL(url).searchParams.get("term")?.includes("(2)")
+            ? "Test Tone (2)"
+            : "Test Tone",
+        }),
+      ),
+    );
+    const lookup = await lookUpDetails(await scanned("Sine Wave - Test Tone (2).mp3"));
+    expect(lookup).toMatchObject({
+      missing: ["title", "artist", "album", "genre", "year", "track", "cover"],
+      writable: true,
+      source: "itunes",
+      found: {
+        title: "Test Tone (2)",
+        artist: "Sine Wave",
+        genre: "Electronic",
+        coverUrl: COVER_URL,
+      },
+    });
+  });
+});

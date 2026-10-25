@@ -55,6 +55,8 @@ const toRemembered = (track: PlayerTrack): RememberedTrack | null =>
         title: track.title,
         artist: track.artist,
         album: track.album,
+        genres: track.genres,
+        year: track.year,
         duration: track.duration,
         addedAt: new Date(track.addedAt).toISOString(),
       }

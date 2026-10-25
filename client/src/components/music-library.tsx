@@ -25,6 +25,7 @@ import {
   Search,
   Shuffle,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 import type { SaveSettings, TimeRange, TrimmedSong } from "@shared/schema";
@@ -36,11 +37,19 @@ import { useDeviceMusic } from "@/hooks/use-device-music";
 import { useFolderMusic } from "@/hooks/use-folder-music";
 import { usePlayer } from "@/hooks/use-player";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
+import { FillInDetails } from "@/components/fill-in-details";
 import { formatDuration } from "@/lib/format";
 import {
   AUDIO_FILE_ACCEPT,
+  NO_VALUE,
+  facetCounts,
+  facetLabels,
+  filterByFacets,
   filterTracks,
   folderTrack,
+  musicFacets,
+  type MusicFacet,
+  type MusicFilters,
   musicSortLabels,
   musicSorts,
   sortTracks,
@@ -243,6 +252,9 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   const device = useDeviceMusic();
   const [chosenSource, setSource] = useState<"folder" | "device">("folder");
   const [filter, setFilter] = useState("");
+  // Genre, artist, album, year: what each is set to (unset: every song).
+  const [facets, setFacets] = useState<MusicFilters>({});
+  const [fillingIn, setFillingIn] = useState(false);
   const [sort, setSort] = useStoredChoice<MusicSort>("music-sort", musicSorts, "added");
   const [limit, setLimit] = useState(PAGE);
   // The song "Delete from folder" is asking about.
@@ -275,9 +287,37 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
     };
   }, []);
 
+  // Each filter's choices, counted among the songs the other filters let through.
+  // A choice no song has any more (its songs changed, or the other list is shown) is let go.
+  const { activeFacets, facetChoices } = useMemo(() => {
+    const active: MusicFilters = {};
+    const choices = {} as Record<MusicFacet, ReturnType<typeof facetCounts>>;
+    for (const facet of musicFacets) {
+      const others = { ...facets };
+      delete others[facet];
+      choices[facet] = facetCounts(filterByFacets(tracks, others), facet);
+      const wanted = facets[facet];
+      if (wanted === undefined) continue;
+      const { values, none } = choices[facet];
+      const key = wanted.toLocaleLowerCase();
+      if (wanted === NO_VALUE ? none > 0 : values.some((v) => v.value.toLocaleLowerCase() === key))
+        active[facet] = wanted;
+    }
+    return { activeFacets: active, facetChoices: choices };
+  }, [tracks, facets]);
+  const filtered = Object.keys(activeFacets).length > 0;
+  // A filter is offered once there's a choice to make among all the songs.
+  const offered = useMemo(
+    () =>
+      musicFacets.filter((facet) => {
+        const { values, none } = facetCounts(tracks, facet);
+        return values.length > 0 && values.length + (none > 0 ? 1 : 0) >= 2;
+      }),
+    [tracks],
+  );
   const shown = useMemo(
-    () => sortTracks(filterTracks(tracks, filter), sort),
-    [tracks, filter, sort],
+    () => sortTracks(filterTracks(filterByFacets(tracks, activeFacets), filter), sort),
+    [tracks, activeFacets, filter, sort],
   );
   const playable = useMemo(() => shown.filter(canPlayHere), [shown, canPlayHere]);
   const unplayable = useMemo(
@@ -291,7 +331,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   useEffect(() => refresh(device.tracks), [refresh, device.tracks]);
   useEffect(() => refresh(folderTracks), [refresh, folderTracks]);
   // A different list starts from the top.
-  useEffect(() => setLimit(PAGE), [source, filter, sort, folder]);
+  useEffect(() => setLimit(PAGE), [source, filter, activeFacets, sort, folder]);
 
   const playFrom = (track: PlayerTrack) => {
     if (player.current?.key === track.key) return player.toggle();
@@ -415,7 +455,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
         <h2 className="text-xl font-display font-semibold">Your music</h2>
         {tracks.length > 0 && (
           <span className="ml-auto text-sm text-muted-foreground tabular-nums" aria-live="polite">
-            {filter.trim()
+            {filter.trim() || filtered
               ? `${shown.length} of ${countSongs(tracks.length)}`
               : countSongs(tracks.length)}
           </span>
@@ -550,7 +590,66 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                 ))}
               </select>
             </label>
+            {offered.map((facet) => {
+              const { values, none } = facetChoices[facet];
+              const labels = facetLabels[facet];
+              return (
+                <select
+                  key={facet}
+                  aria-label={`Show songs of ${labels.name.toLowerCase()}`}
+                  title={labels.name}
+                  value={activeFacets[facet] ?? "*"}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setFacets((now) => {
+                      const next = { ...now };
+                      if (value === "*") delete next[facet];
+                      else next[facet] = value;
+                      return next;
+                    });
+                  }}
+                  className={cn(
+                    "h-9 max-w-40 rounded-lg border bg-card px-2 text-xs font-medium text-foreground",
+                    activeFacets[facet] !== undefined ? "border-primary" : "border-border",
+                  )}
+                >
+                  <option value="*">{labels.all}</option>
+                  {values.map(({ value, count }) => (
+                    <option key={value} value={value}>
+                      {value} ({count})
+                    </option>
+                  ))}
+                  {none > 0 && (
+                    <option value={NO_VALUE}>
+                      {labels.none} ({none})
+                    </option>
+                  )}
+                </select>
+              );
+            })}
+            {filtered && (
+              <button
+                type="button"
+                onClick={() => setFacets({})}
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                Show all
+              </button>
+            )}
             <div className="ml-auto flex items-center gap-2">
+              {source === "folder" && isLocal && folder && (
+                <button
+                  type="button"
+                  aria-pressed={fillingIn}
+                  disabled={shown.length === 0}
+                  onClick={() => setFillingIn((open) => !open)}
+                  title="Look up the songs' missing genre, album, year, track number and cover"
+                  className={smallButton}
+                >
+                  <Wand2 className="h-3.5 w-3.5" />
+                  Fill in details
+                </button>
+              )}
               <button
                 type="button"
                 disabled={playable.length === 0}
@@ -575,6 +674,19 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
               </button>
             </div>
           </div>
+        )}
+
+        {fillingIn && source === "folder" && isLocal && folder && (
+          <FillInDetails
+            key={folder}
+            tracks={shown.filter(
+              (t): t is Extract<PlayerTrack, { source: "folder" }> => t.source === "folder",
+            )}
+            playingKey={player.current?.key ?? null}
+            atOnce={settings?.cpuCores ?? 1}
+            onWritten={() => void folderMusic.refetch()}
+            onClose={() => setFillingIn(false)}
+          />
         )}
 
         {isLoadingFolder ? (
@@ -611,7 +723,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
           </ol>
         ) : tracks.length > 0 ? (
           <p className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No songs match “{filter.trim()}”.
+            {filter.trim() ? `No songs match “${filter.trim()}”.` : "No songs match those filters."}
           </p>
         ) : source === "folder" && folder && folderMusic.data ? (
           <div className="px-4 py-10 text-center">

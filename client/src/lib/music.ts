@@ -23,6 +23,10 @@ export type PlayerTrack = {
   title: string;
   artist: string | null;
   album: string | null;
+  /** Its genre tags, each once. */
+  genres: string[];
+  /** The year its tags give, if any. */
+  year: number | null;
   /** Length in seconds, when known. */
   duration: number | null;
   /** Its file: where it is in the folder, or its name. */
@@ -56,6 +60,8 @@ export function folderTrack(track: MusicTrack): PlayerTrack {
     title: track.title,
     artist: track.artist,
     album: track.album,
+    genres: track.genres,
+    year: track.year,
     duration: track.duration,
     fileName: track.path,
     addedAt: Date.parse(track.addedAt) || 0,
@@ -137,6 +143,8 @@ export function deviceTrack(file: File): PlayerTrack {
     title: songNameOf(file.name),
     artist: null,
     album: null,
+    genres: [],
+    year: null,
     duration: null,
     fileName,
     addedAt: file.lastModified,
@@ -172,16 +180,103 @@ export function sortTracks(tracks: readonly PlayerTrack[], sort: MusicSort): Pla
   return [...tracks].sort(compare[sort]);
 }
 
-/** The songs with every word typed in their title, artist, album or file name (partial words too). */
+/** The songs with every word typed in their title, artist, album, genre, year or file name (partial words too). */
 export function filterTracks(tracks: readonly PlayerTrack[], query: string): PlayerTrack[] {
   const words = searchableText(query).split(" ").filter(Boolean);
   if (words.length === 0) return [...tracks];
   return tracks.filter((track) => {
     const text = searchableText(
-      [track.title, track.artist, track.album, track.fileName].filter(Boolean).join(" "),
+      [track.title, track.artist, track.album, ...track.genres, track.year, track.fileName]
+        .filter(Boolean)
+        .join(" "),
     );
     return words.every((word) => text.includes(word));
   });
+}
+
+// --- Filtering by genre, artist, album, year ----------------------------------------
+
+/** What the list can be filtered by, from the songs' tags. */
+export const musicFacets = ["genre", "artist", "album", "year"] as const;
+export type MusicFacet = (typeof musicFacets)[number];
+
+export const facetLabels: Record<MusicFacet, { name: string; all: string; none: string }> = {
+  genre: { name: "Genre", all: "All genres", none: "No genre" },
+  artist: { name: "Artist", all: "All artists", none: "No artist" },
+  album: { name: "Album", all: "All albums", none: "No album" },
+  year: { name: "Year", all: "All years", none: "No year" },
+};
+
+/** The filter's choice for songs with nothing for it (no genre tag, say). */
+export const NO_VALUE = "";
+
+/** The values a song has for a filter: its genres, its artists ("A, B" is both), its album or year. */
+export function facetValues(track: PlayerTrack, facet: MusicFacet): string[] {
+  if (facet === "genre") return track.genres;
+  if (facet === "artist") return (track.artist ?? "").split(/\s*,\s*/).filter(Boolean);
+  if (facet === "album") return track.album ? [track.album] : [];
+  return track.year ? [String(track.year)] : [];
+}
+
+const valueKey = (value: string) => value.toLocaleLowerCase();
+
+/**
+ * A filter's values with how many songs have each — genres the most common
+ * first, years the newest first, artists and albums A–Z — and how many songs
+ * have none. "rock" and "Rock" are one, named as most songs spell it.
+ */
+export function facetCounts(
+  tracks: readonly PlayerTrack[],
+  facet: MusicFacet,
+): { values: { value: string; count: number }[]; none: number } {
+  const byKey = new Map<string, { count: number; spellings: Map<string, number> }>();
+  let none = 0;
+  for (const track of tracks) {
+    const values = facetValues(track, facet);
+    if (values.length === 0) none++;
+    const seen = new Set<string>();
+    for (const value of values) {
+      const key = valueKey(value);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const entry = byKey.get(key) ?? { count: 0, spellings: new Map<string, number>() };
+      entry.count++;
+      entry.spellings.set(value, (entry.spellings.get(value) ?? 0) + 1);
+      byKey.set(key, entry);
+    }
+  }
+  const values = Array.from(byKey.values()).map(({ count, spellings }) => ({
+    value: Array.from(spellings).sort((a, b) => b[1] - a[1])[0][0],
+    count,
+  }));
+  const order: Record<MusicFacet, (a: (typeof values)[0], b: (typeof values)[0]) => number> = {
+    genre: (a, b) => b.count - a.count || collator.compare(a.value, b.value),
+    artist: (a, b) => collator.compare(a.value, b.value),
+    album: (a, b) => collator.compare(a.value, b.value),
+    year: (a, b) => Number(b.value) - Number(a.value),
+  };
+  return { values: values.sort(order[facet]), none };
+}
+
+/** What each filter is set to: a value, or NO_VALUE for songs with none; unset shows them all. */
+export type MusicFilters = Partial<Record<MusicFacet, string>>;
+
+/** The songs every filter set lets through (any spelling of a value). */
+export function filterByFacets(
+  tracks: readonly PlayerTrack[],
+  filters: MusicFilters,
+): PlayerTrack[] {
+  const set = musicFacets.filter((facet) => filters[facet] !== undefined);
+  if (set.length === 0) return [...tracks];
+  return tracks.filter((track) =>
+    set.every((facet) => {
+      const values = facetValues(track, facet);
+      const wanted = filters[facet]!;
+      return wanted === NO_VALUE
+        ? values.length === 0
+        : values.some((value) => valueKey(value) === valueKey(wanted));
+    }),
+  );
 }
 
 // --- A playlist's songs in the folder -----------------------------------------------
