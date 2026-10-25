@@ -8,6 +8,8 @@
  * - Each song has an id made from where it is in the folder, and the page
  *   asks for songs by id, never by path: only a file the folder scan found
  *   can ever be played.
+ * - A song can be deleted from the folder (`deleteMusicFile()`): to the
+ *   Recycle Bin / Trash, unless asked to delete it for good.
  * - A song is sent as it is, untouched. One the browser can't play (WMA, APE,
  *   AIFF in Chrome…) is converted to FLAC first: lossless, so it sounds just
  *   like the file. Conversions are kept in a cache folder, so that's once per
@@ -29,6 +31,7 @@ import {
   type FileTags,
 } from "./library";
 import { retryWhenBusy } from "./retry-when-busy";
+import { moveToTrash } from "./trash";
 
 // --- Songs, and finding one by its id -------------------------------------------
 
@@ -79,6 +82,20 @@ export async function findMusicFile(folder: string, id: string): Promise<AudioFi
   // Still there? (Its size and time may have changed: a new conversion, then.)
   const stat = await fs.stat(file.absolute).catch(() => undefined);
   return stat?.isFile() ? { ...file, size: stat.size, mtimeMs: stat.mtimeMs } : undefined;
+}
+
+/**
+ * Deletes a song from the folder: to the Recycle Bin / Trash (see trash.ts),
+ * or for good when `permanently` says so. Rejects with `NoBinError` when its
+ * drive has no bin (the file stays).
+ */
+export async function deleteMusicFile(
+  file: AudioFile,
+  { permanently = false } = {},
+): Promise<void> {
+  if (permanently) await retryWhenBusy(() => fs.rm(file.absolute));
+  else await moveToTrash(file.absolute);
+  if (known) known.files.delete(musicTrackId(known.folder, file.relative));
 }
 
 // --- Cover pictures ---------------------------------------------------------------

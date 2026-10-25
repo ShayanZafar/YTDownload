@@ -16,6 +16,7 @@ import {
   queueUntilCurrent,
   queueWith,
   queueWithout,
+  queueWithoutSong,
   shuffledOrder,
   sortTracks,
   upNext,
@@ -241,6 +242,30 @@ describe("the queue", () => {
     expect(playOrder(queueWithout(shuffled, 1))).toBe("[B] A");
     expect(queueWithout(inOrder, 1)).toEqual(inOrder);
     expect(queueWithout(inOrder, 7)).toEqual(inOrder);
+  });
+
+  it("drops a song deleted from the folder, the next one taking over if it was playing", () => {
+    // Not the current one: just out of the queue.
+    expect(queueWithoutSong(inOrder, c.key)).toEqual({
+      queue: queueWithout(inOrder, 2),
+      current: "same",
+    });
+    const before = queueWithoutSong(inOrder, a.key);
+    expect([playOrder(before.queue), before.current]).toEqual(["[B] C", "same"]);
+    // The current one: the song after it plays, in play order.
+    const playing = queueWithoutSong(inOrder, b.key);
+    expect([playOrder(playing.queue), playing.current]).toEqual(["A [C]", "next"]);
+    const inShuffle = queueWithoutSong(shuffled, b.key);
+    expect([playOrder(inShuffle.queue), inShuffle.current]).toEqual(["[C] A", "next"]);
+    // The last one: the one before it, then.
+    const last = queueWithoutSong({ ...inOrder, position: 2 }, c.key);
+    expect([playOrder(last.queue), last.current]).toEqual(["A [B]", "previous"]);
+    // The only one: nothing's left.
+    const only: Queue = { tracks: [d], order: [0], position: 0 };
+    expect(queueWithoutSong(only, d.key)).toEqual({ queue: EMPTY_QUEUE, current: "none" });
+    // Not in the queue at all: unchanged.
+    expect(queueWithoutSong(inOrder, e.key)).toEqual({ queue: inOrder, current: "same" });
+    expect(queueWithoutSong(EMPTY_QUEUE, e.key)).toEqual({ queue: EMPTY_QUEUE, current: "same" });
   });
 
   it("clears what's after the current song", () => {

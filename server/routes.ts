@@ -45,7 +45,8 @@ import { saveIntoFolder } from "./save";
 import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import { songsInFolder, type AudioFile } from "./library";
 import { writePlaylistFile } from "./playlist-file";
-import { convertedForBrowser, findMusicFile, listMusic, readCover } from "./music";
+import { convertedForBrowser, deleteMusicFile, findMusicFile, listMusic, readCover } from "./music";
+import { binName, NoBinError } from "./trash";
 import { YouTubeRefused, sendRefused, videoCacheKey, youtubeGuard } from "./youtube-limits";
 import { sourceHealth } from "./source-health";
 
@@ -275,6 +276,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .send(Buffer.from(cover.data));
     } catch (err) {
       sendFolderError(res, err, "Couldn't read the cover");
+    }
+  });
+
+  // Deleting a song from the folder (the player's "Delete from folder"): to
+  // the Recycle Bin / Trash, or for good only when the page says so — after
+  // asking, because its drive has no bin.
+  app.delete(api.music.remove.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    const input = api.music.remove.input.safeParse(req.body ?? {});
+    if (!input.success) return res.status(400).json(validationError(input.error));
+    try {
+      const file = await songFor(req, res);
+      if (!file) return;
+      const permanently = input.data.permanently === true;
+      await deleteMusicFile(file, { permanently });
+      res.json({ trashed: !permanently, bin: binName() });
+    } catch (err) {
+      if (err instanceof NoBinError) {
+        return res.status(409).json({ message: err.message, bin: binName(), noBin: true });
+      }
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: SONG_GONE });
+      }
+      sendFolderError(res, err, "Couldn't delete that song");
     }
   });
 

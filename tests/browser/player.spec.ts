@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import ffmpegPath from "ffmpeg-static";
+import { testServerFiles } from "./test-server-files";
 
 // The music player, with real songs made for the test (no YouTube needed):
 // on the computer running the app it plays the Save to folder; on a phone it
@@ -419,5 +420,72 @@ test.describe("Music player (browser)", () => {
     await expect(rows.first()).toContainText("Test Tone");
     await library.getByRole("combobox", { name: "Order songs by" }).selectOption("title");
     await expect(rows.first()).toContainText("Studio Master");
+  });
+
+  test("a song I'm tired of can be deleted from the folder, to the bin, and the next one plays", async ({
+    page,
+    request,
+  }) => {
+    // A folder of its own: Song A, B and C, listed by title.
+    const tired = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-player-test-"));
+    try {
+      for (const title of ["Song A", "Song B", "Song C"]) {
+        await ffmpeg([
+          ...["-i", mp3, "-c", "copy", "-id3v2_version", "3"],
+          ...["-metadata", `title=${title}`, path.join(tired, `${title}.mp3`)],
+        ]);
+      }
+      await request.put("/api/settings", { data: { saveFolder: tired } });
+      await page.goto("/");
+      const library = page.getByRole("region", { name: "Your music" });
+      const rows = library.getByRole("listitem");
+      await expect(rows).toHaveCount(3);
+      await library.getByRole("combobox", { name: "Order songs by" }).selectOption("title");
+      await library.getByRole("button", { name: /^Play “Song A”/ }).click(START_SONG);
+      const player = page.getByRole("region", { name: "Music player" });
+      await expect(player.getByTestId("player-title")).toHaveText("Song A");
+      await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+
+      // Asked first: Cancel keeps it.
+      await player.getByRole("button", { name: "Delete from folder" }).click();
+      const dialog = page.getByRole("dialog", { name: "Delete from the folder?" });
+      await expect(dialog).toContainText("Song A.mp3");
+      await dialog.getByRole("button", { name: "Cancel" }).click();
+      await expect(dialog).toBeHidden();
+      await expect(rows).toHaveCount(3);
+      await expect(player.getByTestId("player-title")).toHaveText("Song A");
+
+      // Deleted: to the bin, out of the list, and the next song plays.
+      await player.getByRole("button", { name: "Delete from folder" }).click();
+      await dialog
+        .getByRole("button", { name: /^Move to the (Trash|Recycle Bin)$/ })
+        .click(START_SONG);
+      await expect(dialog).toBeHidden();
+      await expect(page.getByText(/^Moved to the (Trash|Recycle Bin)$/)).toBeVisible();
+      await expect(rows).toHaveCount(2);
+      await expect(library.getByRole("button", { name: /^Play “Song A”/ })).toHaveCount(0);
+      await expect(player.getByTestId("player-title")).toHaveText("Song B");
+      await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+      await expect(player.getByRole("button", { name: "Up next" })).toHaveAttribute(
+        "title",
+        "Up next: 1 song",
+      );
+      await expect(fs.stat(path.join(tired, "Song A.mp3"))).rejects.toThrow();
+      await fs.stat(path.join(testServerFiles.TRASH_DIR, "files", "Song A.mp3"));
+
+      // From the list, a song that isn't playing: it leaves the queue too.
+      await library.getByRole("button", { name: "Delete from folder: “Song C”" }).click();
+      await dialog
+        .getByRole("button", { name: /^Move to the (Trash|Recycle Bin)$/ })
+        .click(START_SONG);
+      await expect(rows).toHaveCount(1);
+      await expect(player.getByTestId("player-title")).toHaveText("Song B");
+      await player.getByRole("button", { name: "Up next" }).click();
+      await expect(page.getByText(/^Nothing after this song\./)).toBeVisible();
+      await expect(fs.stat(path.join(tired, "Song C.mp3"))).rejects.toThrow();
+    } finally {
+      await request.put("/api/settings", { data: { saveFolder: null } });
+      await fs.rm(tired, { recursive: true, force: true });
+    }
   });
 });

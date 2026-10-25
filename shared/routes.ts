@@ -1,11 +1,13 @@
 import { z } from "zod";
 import {
   audioSources,
+  deletedSongSchema,
   downloadSchema,
   folderEntrySchema,
   lyricsSchema,
   folderListingSchema,
   musicLibrarySchema,
+  noBinSchema,
   playlistFileSongSchema,
   saveSettingsSchema,
   savedPlaylistFileSchema,
@@ -338,6 +340,17 @@ export const api = {
     flac: { method: "GET" as const, path: "/api/music/:id/flac" as const },
     /** A song's cover picture, from its tags — 204 when it has none. */
     cover: { method: "GET" as const, path: "/api/music/:id/cover" as const },
+    /**
+     * Deletes a song from the folder: to the Recycle Bin / Trash, so it can be
+     * put back from there — or for good, only when `permanently` says so
+     * (a drive with no bin answers `409` with `noBin` instead).
+     */
+    remove: {
+      method: "DELETE" as const,
+      path: "/api/music/:id" as const,
+      input: z.object({ permanently: z.boolean().optional() }),
+      responses: { 200: deletedSongSchema, 409: noBinSchema },
+    },
   },
 };
 

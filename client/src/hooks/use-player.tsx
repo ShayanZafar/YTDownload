@@ -20,6 +20,7 @@ import {
   queueUntilCurrent,
   queueWith,
   queueWithout,
+  queueWithoutSong,
   repeatModes,
   shuffledOrder,
   upNext,
@@ -81,6 +82,13 @@ export type Player = {
   remove: (position: number) => void;
   /** Takes every song after the current one out of the queue. */
   clearUpNext: () => void;
+  /**
+   * Takes this song out of the queue for good (it was deleted from the
+   * folder), letting go of its file if it's the current one: the next song
+   * carries on (playing, if this one was), else the player closes. Call it
+   * inside the click.
+   */
+  discard: (key: string) => void;
   /** Is the Up next list open (above the player bar)? It shows what's added, so no note is needed. */
   upNextOpen: boolean;
   setUpNextOpen: (open: boolean) => void;
@@ -419,6 +427,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       },
       remove: (position: number) => setQueue(queueWithout(latest.current.queue, position)),
       clearUpNext: () => setQueue(queueUntilCurrent(latest.current.queue)),
+      discard: (key: string) => {
+        const { queue: q } = latest.current;
+        const { queue: rest, current: then } = queueWithoutSong(q, key);
+        if (then === "same") return setQueue(rest);
+        if (then === "none") return close();
+        const element = audio();
+        const wasPlaying = !!element && !element.paused;
+        const track = currentOf(rest);
+        setQueue(rest);
+        failuresInARow.current = 0;
+        if (track) load(track, { autoplay: then === "next" && wasPlaying });
+      },
       toggle: () => {
         const element = audio();
         const track = currentTrack();
@@ -652,6 +672,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       jump: actions.jump,
       remove: actions.remove,
       clearUpNext: actions.clearUpNext,
+      discard: actions.discard,
       upNextOpen,
       setUpNextOpen,
       toggle: actions.toggle,

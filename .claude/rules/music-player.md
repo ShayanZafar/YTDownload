@@ -1,13 +1,13 @@
 ---
 paths:
-  - "server/{music,lyrics}.ts"
+  - "server/{music,lyrics,trash}.ts"
   - "shared/audio-types.ts"
   - "client/src/App.tsx"
   - "client/src/hooks/{use-player,use-player-shortcuts}.tsx"
   - "client/src/hooks/{use-folder-music,use-device-music,use-lyrics}.ts"
-  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview}.tsx"
+  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog}.tsx"
   - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player}.ts"
-  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics}.test.ts"
+  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash}.test.ts"
   - "tests/api/music.e2e.test.ts"
   - "tests/browser/{player,playlist}.spec.ts"
 ---
@@ -25,3 +25,6 @@ paths:
 - Playwright's WebKit on Windows plays media through Media Foundation: opening a song blocks the
   page for several seconds (give such clicks a long timeout), it can't play blob: URLs, and it plays
   WMA but not Ogg/Opus or AIFF — `player.spec.ts` asks the browser instead of assuming.
+- Delete from folder moves the file to the system's bin (`server/trash.ts`), never deleting for good
+  unless the person said so after a `409 noBin`; tests use `TRASH_DIR`, never the real bin. Take the
+  song out of the queue (`discard()`) before the request, so the file isn't open while it moves.
