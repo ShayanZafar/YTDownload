@@ -43,9 +43,11 @@ import {
 } from "./folders";
 import { saveIntoFolder } from "./save";
 import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
-import { songsInFolder, type AudioFile } from "./library";
+import { readTags, songsInFolder, type AudioFile } from "./library";
 import { writePlaylistFile } from "./playlist-file";
-import { convertedForBrowser, findMusicFile, listMusic, readCover } from "./music";
+import { CatalogueError } from "./catalogues";
+import { convertedForBrowser, findMusicFile, listMusic, readCover, toMusicTrack } from "./music";
+import { lookUpDetails, SongDetailsError, writeSongDetails } from "./song-details";
 import { YouTubeRefused, sendRefused, videoCacheKey, youtubeGuard } from "./youtube-limits";
 import { sourceHealth } from "./source-health";
 
@@ -275,6 +277,40 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         .send(Buffer.from(cover.data));
     } catch (err) {
       sendFolderError(res, err, "Couldn't read the cover");
+    }
+  });
+
+  // Fill in details: what a song lacks and what the music catalogues have for
+  // it (nothing written), then writing just that into the file.
+  app.get(api.music.lookUpDetails.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    try {
+      const file = await songFor(req, res);
+      if (file) res.json(await lookUpDetails(file));
+    } catch (err) {
+      if (err instanceof CatalogueError) return res.status(502).json({ message: err.message });
+      sendFolderError(res, err, "Couldn't look that song up");
+    }
+  });
+
+  app.post(api.music.writeDetails.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    const details = api.music.writeDetails.input.safeParse(req.body);
+    if (!details.success) return res.status(400).json(validationError(details.error));
+    try {
+      const file = await songFor(req, res);
+      if (!file) return;
+      const added = await writeSongDetails(file, details.data);
+      const { saveFolder } = await settings.get();
+      const now = await findMusicFile(saveFolder!, String(req.params.id));
+      if (!now) return res.status(404).json({ message: SONG_GONE });
+      res.json({ added, track: toMusicTrack(saveFolder!, now, await readTags(now)) });
+    } catch (err) {
+      if (err instanceof SongDetailsError)
+        return res.status(err.status).json({ message: err.message });
+      if (err instanceof FolderError) return sendFolderError(res, err, "");
+      console.error("Writing a song's details failed:", err);
+      res.status(500).json({
+        message: `Couldn't write that song's details: ${err instanceof Error ? err.message : err}`,
+      });
     }
   });
 

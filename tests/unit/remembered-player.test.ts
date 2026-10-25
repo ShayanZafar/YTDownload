@@ -23,6 +23,8 @@ const folderSong = (n: number, extra: { duration?: number | null } = {}) =>
     title: `Song ${n}`,
     artist: `Artist ${n}`,
     album: null,
+    genres: [],
+    year: null,
     duration: extra.duration === undefined ? 200 : extra.duration,
     addedAt: "2026-10-01T10:00:00.000Z",
     size: 1000,

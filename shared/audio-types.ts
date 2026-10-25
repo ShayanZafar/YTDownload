@@ -52,3 +52,21 @@ export function songNameOf(filePath: string): string {
   const ext = extensionOf(name);
   return (ext && name.length > ext.length ? name.slice(0, -ext.length) : name).trim() || name;
 }
+
+/**
+ * A file's genres, each once: "Rock; Pop" (one tag holding several, the way
+ * some taggers write them) counts as two. ID3v1's numbered genres come as
+ * names already (music-metadata turns "(17)" into "Rock").
+ */
+export function genresOf(tags: string[] | undefined): string[] {
+  const genres = (tags ?? []).flatMap((tag) => tag.split(/\s*;\s*/));
+  const seen = new Set<string>();
+  return genres
+    .map((genre) => genre.replace(/\s+/g, " ").trim())
+    .filter((genre) => {
+      const key = genre.toLowerCase();
+      if (!genre || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}

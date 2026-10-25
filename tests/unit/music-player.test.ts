@@ -30,6 +30,8 @@ const folderSong = (title: string, extra: Partial<Parameters<typeof folderTrack>
     title,
     artist: null,
     album: null,
+    genres: [],
+    year: null,
     duration: null,
     addedAt: "2026-10-01T10:00:00.000Z",
     size: 1000,

@@ -278,6 +278,10 @@ export const musicTrackSchema = z.object({
   title: z.string(),
   artist: z.string().nullable(),
   album: z.string().nullable(),
+  /** Its genre tags, each once (none when it has no genre tag). */
+  genres: z.array(z.string()).default([]),
+  /** The year its tags give. */
+  year: z.number().int().nullable().default(null),
   /** Length in seconds, when the file says. */
   duration: z.number().nullable(),
   /** When it arrived in the folder (ISO 8601), for "Recently added". */
@@ -296,6 +300,56 @@ export const musicLibrarySchema = z.object({
 });
 
 export type MusicLibrary = z.infer<typeof musicLibrarySchema>;
+
+/** The details "Fill in details" can add to a song that lacks them. */
+export const songDetailFields = [
+  "title",
+  "artist",
+  "album",
+  "genre",
+  "year",
+  "track",
+  "cover",
+] as const;
+export type SongDetailField = (typeof songDetailFields)[number];
+
+/** A song's details, as a music catalogue gives them (the cover as its address there). */
+export const songDetailsSchema = z.object({
+  title: z.string().trim().min(1).max(500).optional(),
+  artist: z.string().trim().min(1).max(500).optional(),
+  album: z.string().trim().min(1).max(500).optional(),
+  genre: z.string().trim().min(1).max(200).optional(),
+  year: z.number().int().min(1000).max(9999).optional(),
+  track: z.number().int().min(1).max(9999).optional(),
+  coverUrl: z.string().max(2000).optional(),
+});
+
+export type SongDetails = z.infer<typeof songDetailsSchema>;
+
+/** What a folder song lacks, and what the music catalogues have for it. */
+export const songLookupSchema = z.object({
+  missing: z.array(z.enum(songDetailFields)),
+  /** Can the app write tags into this kind of file? (Not a .wma or .wav, say.) */
+  writable: z.boolean(),
+  /** What was found, just for the details it lacks — null when nothing was. */
+  found: songDetailsSchema.nullable(),
+  /** The catalogue's song it matched, to show who's who before anything is written. */
+  match: z
+    .object({ title: z.string(), artist: z.string(), album: z.string().nullable() })
+    .nullable(),
+  /** The catalogue that answered. */
+  source: z.enum(["itunes", "deezer"]).nullable(),
+});
+
+export type SongLookup = z.infer<typeof songLookupSchema>;
+
+/** What writing a song's details added, and the song as it is now. */
+export const songDetailsWrittenSchema = z.object({
+  added: z.array(z.enum(songDetailFields)),
+  track: musicTrackSchema,
+});
+
+export type SongDetailsWritten = z.infer<typeof songDetailsWrittenSchema>;
 
 /**
  * Saving into the folder streams one JSON object per line: progress while the

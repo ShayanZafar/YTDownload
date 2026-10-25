@@ -20,7 +20,7 @@
 import { promises as fs, type Dirent } from "fs";
 import path from "path";
 import type { IAudioMetadata, IOptions } from "music-metadata";
-import { AUDIO_TYPES } from "@shared/audio-types";
+import { AUDIO_TYPES, genresOf } from "@shared/audio-types";
 import { foundByValues, type SongToFind, type SongsInFolder } from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
 import { mapAtOnce } from "./cpu-cores";
@@ -50,6 +50,10 @@ export type SongFile = {
   /** For the music player: the song's own artists ("Daft Punk, Pharrell Williams"), else the album artist. */
   trackArtist?: string;
   album?: string;
+  /** Its genre tags ("Rock", "Hip-Hop/Rap"), each once. */
+  genres?: string[];
+  /** The year its tags give. */
+  year?: number;
   /** Length in seconds, when the file says without being read all the way through. */
   duration?: number;
 };
@@ -149,6 +153,11 @@ export const parseFile: ParseFile = async (file, options) => {
 // Tags already read, by file — kept until the file changes (its size or time).
 const tagCache = new Map<string, { size: number; mtimeMs: number; tags: Promise<FileTags> }>();
 const MAX_CACHED = 20_000;
+
+/** Forgets a file's tags, so they're read again (after the app writes new ones). */
+export function forgetTags(absolute: string) {
+  tagCache.delete(absolute);
+}
 
 export function readTags(file: AudioFile): Promise<FileTags> {
   const cached = tagCache.get(file.absolute);
@@ -268,6 +277,8 @@ export function tagsFrom({
     spotifyIds: spotifyIdsInTags(native),
     trackArtist: trackArtist?.trim() || common.albumartist?.trim() || undefined,
     album: common.album?.trim() || undefined,
+    genres: genresOf(common.genre).length ? genresOf(common.genre) : undefined,
+    year: common.year && common.year > 0 ? common.year : undefined,
     duration:
       duration !== undefined && Number.isFinite(duration) && duration > 0 ? duration : undefined,
   };

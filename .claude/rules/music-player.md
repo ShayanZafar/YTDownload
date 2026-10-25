@@ -1,15 +1,15 @@
 ---
 paths:
-  - "server/{music,lyrics}.ts"
+  - "server/{music,lyrics,catalogues,song-details}.ts"
   - "shared/audio-types.ts"
   - "client/src/App.tsx"
   - "client/src/hooks/{use-player,use-player-shortcuts}.tsx"
   - "client/src/hooks/{use-folder-music,use-device-music,use-lyrics}.ts"
-  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview}.tsx"
-  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player}.ts"
-  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics}.test.ts"
+  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,fill-in-details,layout,video-preview}.tsx"
+  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player,song-details}.ts"
+  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,song-details,song-details-routes}.test.ts"
   - "tests/api/music.e2e.test.ts"
-  - "tests/browser/{player,playlist}.spec.ts"
+  - "tests/browser/{player,playlist,song-details}.spec.ts"
 ---
 
 # The music player
@@ -25,3 +25,7 @@ paths:
 - Playwright's WebKit on Windows plays media through Media Foundation: opening a song blocks the
   page for several seconds (give such clicks a long timeout), it can't play blob: URLs, and it plays
   WMA but not Ogg/Opus or AIFF — `player.spec.ts` asks the browser instead of assuming.
+- Fill in details writes into the person's own files: only tags a song lacks, never over one it has,
+  the audio copied with `-c copy`, and only after `rewriteProblem()` finds the copy has every tag
+  the file had. Writing goes over the file in place (it keeps its creation date) with its times put
+  back, so it stays put in "Recently added". The song playing is never changed.

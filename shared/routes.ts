@@ -6,6 +6,9 @@ import {
   lyricsSchema,
   folderListingSchema,
   musicLibrarySchema,
+  songDetailsSchema,
+  songDetailsWrittenSchema,
+  songLookupSchema,
   playlistFileSongSchema,
   saveSettingsSchema,
   savedPlaylistFileSchema,
@@ -338,6 +341,22 @@ export const api = {
     flac: { method: "GET" as const, path: "/api/music/:id/flac" as const },
     /** A song's cover picture, from its tags — 204 when it has none. */
     cover: { method: "GET" as const, path: "/api/music/:id/cover" as const },
+    /**
+     * Fill in details: what a song's tags lack, and what the music catalogues
+     * (iTunes, then Deezer) have for it. Nothing is written.
+     */
+    lookUpDetails: {
+      method: "GET" as const,
+      path: "/api/music/:id/details" as const,
+      responses: { 200: songLookupSchema },
+    },
+    /** Writes the details a song still lacks into its file; tags it has stay as they are. */
+    writeDetails: {
+      method: "POST" as const,
+      path: "/api/music/:id/details" as const,
+      input: songDetailsSchema,
+      responses: { 200: songDetailsWrittenSchema },
+    },
   },
 };
 
