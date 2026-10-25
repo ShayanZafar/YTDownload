@@ -88,8 +88,9 @@ export function PlayerBar() {
   const loading = status === "loading";
   const VolumeIcon =
     player.muted || player.volume === 0 ? VolumeX : player.volume < 0.5 ? Volume1 : Volume2;
-  const detail = player.error
-    ? player.error
+  const notice = player.error ?? player.warning;
+  const detail = notice
+    ? notice
     : loading && player.converting
       ? "Converting for this browser (lossless)…"
       : [current.artist, current.album].filter(Boolean).join(" · ");
@@ -149,9 +150,9 @@ export function PlayerBar() {
               <p
                 className={cn(
                   "truncate text-xs",
-                  player.error ? "text-destructive" : "text-muted-foreground",
+                  notice ? "text-destructive" : "text-muted-foreground",
                 )}
-                role={player.error ? "alert" : undefined}
+                role={notice ? "alert" : undefined}
               >
                 {detail || " "}
               </p>

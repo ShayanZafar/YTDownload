@@ -297,6 +297,19 @@ export function previousPosition(position: number, length: number, repeat: Repea
 /** Previous restarts the song once it has played this long (seconds), like most players. */
 export const RESTART_AFTER_SECONDS = 3;
 
+/**
+ * Did a seek run off the end of the file? A file cut short (a download that
+ * stopped part-way) still says how long the whole song is, but has nothing
+ * after where it stops: asked for a place past that, the browser lands at the
+ * very end and the song "ends" — which isn't the song finishing, so the next
+ * one mustn't start. Seconds, all three; asking for the last second is just
+ * going to the end.
+ */
+export function seekRanOffTheEnd(asked: number, landed: number, duration: number): boolean {
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  return asked < duration - 1 && landed >= duration - 0.5;
+}
+
 // --- The queue ----------------------------------------------------------------------
 
 /** The player's songs: each song once, and the order they play in. */
