@@ -10,6 +10,10 @@ import {
   songDetailsSchema,
   songDetailsWrittenSchema,
   songLookupSchema,
+  trimInputSchema,
+  trimUndoSchema,
+  trimmedSongSchema,
+  waveformSchema,
   noBinSchema,
   playlistFileSongSchema,
   saveSettingsSchema,
@@ -343,6 +347,29 @@ export const api = {
     flac: { method: "GET" as const, path: "/api/music/:id/flac" as const },
     /** A song's cover picture, from its tags — 204 when it has none. */
     cover: { method: "GET" as const, path: "/api/music/:id/cover" as const },
+    /** A song's waveform and quiet stretches, for picking what to cut out. */
+    waveform: {
+      method: "GET" as const,
+      path: "/api/music/:id/waveform" as const,
+      responses: { 200: waveformSchema },
+    },
+    /**
+     * Cuts a part out of a song and joins the rest (dead air, say), keeping
+     * its tags and cover. The original is kept as a backup, for Undo.
+     */
+    trim: {
+      method: "POST" as const,
+      path: "/api/music/:id/trim" as const,
+      input: trimInputSchema,
+      responses: { 200: trimmedSongSchema },
+    },
+    /** Puts a trimmed song's original back. */
+    undoTrim: {
+      method: "POST" as const,
+      path: "/api/music/trim/undo" as const,
+      input: trimUndoSchema,
+      responses: { 200: trimmedSongSchema.pick({ id: true, duration: true }) },
+    },
     /**
      * Fill in details: what a song's tags lack, and what the music catalogues
      * (iTunes, then Deezer) have for it. Nothing is written.

@@ -108,6 +108,12 @@ export type Player = {
   cycleRepeat: () => void;
   /** Newer details of songs in the queue (tags read since, say). */
   refresh: (tracks: readonly PlayerTrack[]) => void;
+  /**
+   * Lets go of this song's file if it's the one loaded, because it's about to
+   * change (trimmed): it stays the current song, paused, and loads afresh
+   * from `at` seconds when played.
+   */
+  letGo: (key: string, at: number) => void;
   close: () => void;
 };
 
@@ -536,6 +542,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         });
         if (changed) setQueue({ ...q, tracks: updated });
       },
+      letGo: (key: string, at: number) => {
+        const element = audio();
+        if (!element || loaded.current?.key !== key) return;
+        element.pause();
+        element.removeAttribute("src");
+        element.load(); // lets go of the file
+        loaded.current = null;
+        resumeAt.current = Math.max(0, at);
+        setStatus("paused");
+        setTime(resumeAt.current);
+      },
       close,
       // For the audio element's events (below).
       seeked,
@@ -722,6 +739,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       toggleShuffle: actions.toggleShuffle,
       cycleRepeat: actions.cycleRepeat,
       refresh: actions.refresh,
+      letGo: actions.letGo,
       close: actions.close,
     }),
     [

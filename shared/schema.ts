@@ -351,6 +351,49 @@ export const songDetailsWrittenSchema = z.object({
 
 export type SongDetailsWritten = z.infer<typeof songDetailsWrittenSchema>;
 
+/** A stretch of a song, in seconds from its start. */
+export const timeRangeSchema = z.object({ start: z.number(), end: z.number() });
+export type TimeRange = z.infer<typeof timeRangeSchema>;
+
+/** A song's waveform, for picking the part to cut out (see server/trim.ts). */
+export const waveformSchema = z.object({
+  /** The song's length in seconds, as decoded. */
+  duration: z.number(),
+  /** How loud each equal slice of the song gets at its loudest, from 0 to 1. */
+  peaks: z.array(z.number()),
+  /** The quiet stretches (dead air) a second or longer, in order. */
+  silences: z.array(timeRangeSchema),
+});
+export type Waveform = z.infer<typeof waveformSchema>;
+
+/** What to cut out of a song: the part from `start` to `end` (seconds). */
+export const trimInputSchema = z
+  .object({
+    start: z.number().finite().min(0, "The cut can't start before the song does"),
+    end: z.number().finite(),
+  })
+  .refine((cut) => cut.end - cut.start >= 0.05, {
+    error: "Pick a part to cut out: its end must come after its start",
+    path: ["end"],
+  });
+
+/** A song with a part cut out of it. */
+export const trimmedSongSchema = z.object({
+  /** Its id (unchanged: it's the same file). */
+  id: z.string(),
+  /** Seconds taken out, and how long it is now. */
+  removed: z.number(),
+  duration: z.number(),
+  /** Hands the original back (Undo); its copy is kept in the backup folder until then. */
+  undo: z.string(),
+});
+export type TrimmedSong = z.infer<typeof trimmedSongSchema>;
+
+/** Which trim to undo. */
+export const trimUndoSchema = z.object({
+  undo: z.string().regex(/^[a-f0-9]{24}$/, "That isn't a trim the app can undo"),
+});
+
 /** A song deleted from the "Save to" folder: to the Recycle Bin / Trash (`trashed`), or for good. */
 export const deletedSongSchema = z.object({
   trashed: z.boolean(),

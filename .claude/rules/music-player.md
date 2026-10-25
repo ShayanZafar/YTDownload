@@ -1,15 +1,15 @@
 ---
 paths:
-  - "server/{music,lyrics,trash,catalogues,song-details}.ts"
+  - "server/{music,lyrics,trash,trim,catalogues,song-details}.ts"
   - "shared/audio-types.ts"
   - "client/src/App.tsx"
   - "client/src/hooks/{use-player,use-player-shortcuts}.tsx"
   - "client/src/hooks/{use-folder-music,use-device-music,use-lyrics}.ts"
-  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog,fill-in-details}.tsx"
-  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player,song-details}.ts"
-  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash,song-details,song-details-routes}.test.ts"
+  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog,trim-song,fill-in-details}.tsx"
+  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player,trim,song-details}.ts"
+  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash,trim,trim-routes,song-details,song-details-routes}.test.ts"
   - "tests/api/music.e2e.test.ts"
-  - "tests/browser/{player,playlist,song-details}.spec.ts"
+  - "tests/browser/{player,playlist,trim,song-details}.spec.ts"
 ---
 
 # The music player
@@ -28,6 +28,9 @@ paths:
 - Delete from folder moves the file to the system's bin (`server/trash.ts`), never deleting for good
   unless the person said so after a `409 noBin`; tests use `TRASH_DIR`, never the real bin. Take the
   song out of the queue (`discard()`) before the request, so the file isn't open while it moves.
+- Trimming changes the user's file: the original is copied to the backup folder before ffmpeg runs,
+  the result is swapped in only once complete, and Undo refuses a song changed since. The player must
+  `letGo()` of a song before it's trimmed or put back (Windows won't replace an open file).
 - Fill in details writes into the person's own files: only tags a song lacks, never over one it has,
   the audio copied with `-c copy`, and only after `rewriteProblem()` finds the copy has every tag
   the file had. Writing goes over the file in place (it keeps its creation date) with its times put
