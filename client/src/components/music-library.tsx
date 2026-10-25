@@ -21,11 +21,14 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Scissors,
   Search,
   Shuffle,
   X,
 } from "lucide-react";
-import type { SaveSettings } from "@shared/schema";
+import type { SaveSettings, TimeRange, TrimmedSong } from "@shared/schema";
+import { TrimSong } from "@/components/trim-song";
+import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
 import { useDeviceMusic } from "@/hooks/use-device-music";
 import { useFolderMusic } from "@/hooks/use-folder-music";
@@ -43,6 +46,7 @@ import {
   type PlayerTrack,
 } from "@/lib/music";
 import { folderName } from "@/lib/save-to-folder";
+import { canTrimFile, formatCutTime, undoTrim } from "@/lib/trim";
 import { cn } from "@/lib/utils";
 
 type MusicLibraryProps = {
@@ -90,6 +94,8 @@ type SongRowProps = {
   ok: boolean;
   onPlay: (track: PlayerTrack) => void;
   onEnqueue: (track: PlayerTrack, where: Enqueue) => void;
+  /** Opens the trim window, for a song in the folder. */
+  onTrim: (track: PlayerTrack) => void;
 };
 
 /** A song in the list: click it to play the list from there, or line it up. */
@@ -101,6 +107,7 @@ const SongRow = memo(function SongRow({
   ok,
   onPlay,
   onEnqueue,
+  onTrim,
 }: SongRowProps) {
   const byline = [track.artist, track.album].filter(Boolean).join(" · ");
   return (
@@ -189,6 +196,17 @@ const SongRow = memo(function SongRow({
               <Icon className="h-4 w-4" />
             </button>
           ))}
+          {track.source === "folder" && canTrimFile(track.fileName) && (
+            <button
+              type="button"
+              onClick={() => onTrim(track)}
+              aria-label={`Trim: “${track.title}”`}
+              title="Trim (cut out dead air)"
+              className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors"
+            >
+              <Scissors className="h-4 w-4" />
+            </button>
+          )}
         </span>
       )}
     </li>
@@ -274,6 +292,34 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
     });
   };
 
+  // Trimming a folder song: the trim window, then a note with Undo.
+  const [trimming, setTrimming] = useState<(PlayerTrack & { source: "folder" }) | null>(null);
+  const trimmed = (track: PlayerTrack, done: TrimmedSong, cut: TimeRange) => {
+    void folderMusic.refetch();
+    const undo = () => {
+      if (player.current?.key === track.key) player.letGo(track.key, cut.start);
+      undoTrim(done.undo)
+        .then(() => toast({ title: "Put back as it was", description: `“${track.title}”` }))
+        .catch((err: Error) =>
+          toast({
+            title: "Couldn't undo the trim",
+            description: err.message,
+            variant: "destructive",
+          }),
+        )
+        .finally(() => void folderMusic.refetch());
+    };
+    toast({
+      title: `Cut ${done.removed.toFixed(1)} s out of “${track.title}”`,
+      description: `${formatCutTime(cut.start)}–${formatCutTime(cut.end)} is gone; it's ${formatCutTime(done.duration)} long now.`,
+      action: (
+        <ToastAction altText="Undo the trim" onClick={undo}>
+          Undo
+        </ToastAction>
+      ),
+    });
+  };
+
   // The rows' clicks, which never change (they call the latest playFrom and
   // enqueue), so a row draws again only when its song, place or playing
   // state does: Show more draws just the new rows, however long the list is.
@@ -281,6 +327,9 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   useLayoutEffect(() => {
     actions.current = { playFrom, enqueue };
   });
+  const onTrim = useCallback((track: PlayerTrack) => {
+    if (track.source === "folder") setTrimming(track);
+  }, []);
   const onPlay = useCallback((track: PlayerTrack) => actions.current.playFrom(track), []);
   const onEnqueue = useCallback(
     (track: PlayerTrack, where: Enqueue) => actions.current.enqueue(track, where),
@@ -533,6 +582,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                   ok={canPlayHere(track)}
                   onPlay={onPlay}
                   onEnqueue={onEnqueue}
+                  onTrim={onTrim}
                 />
               );
             })}
@@ -580,6 +630,14 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
           </p>
         ) : null}
       </div>
+      {trimming && (
+        <TrimSong
+          key={trimming.key}
+          track={trimming}
+          onTrimmed={(done, cut) => trimmed(trimming, done, cut)}
+          onClose={() => setTrimming(null)}
+        />
+      )}
     </section>
   );
 }

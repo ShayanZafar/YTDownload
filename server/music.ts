@@ -150,7 +150,10 @@ function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> 
 }
 
 /** Runs ffmpeg; rejects with its last error line if it fails. `onStart` gets the process. */
-function runFfmpeg(args: string[], onStart: (child: ChildProcess) => void): Promise<void> {
+export function runFfmpeg(
+  args: string[],
+  onStart: (child: ChildProcess) => void = () => {},
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawnFfmpeg(args);
     onStart(child);
