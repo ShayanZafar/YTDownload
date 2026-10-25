@@ -340,6 +340,25 @@ export const trimUndoSchema = z.object({
   undo: z.string().regex(/^[a-f0-9]{24}$/, "That isn't a trim the app can undo"),
 });
 
+/** A song deleted from the "Save to" folder: to the Recycle Bin / Trash (`trashed`), or for good. */
+export const deletedSongSchema = z.object({
+  trashed: z.boolean(),
+  /** What the bin is called on the computer running the app: "Recycle Bin" or "Trash". */
+  bin: z.string(),
+});
+
+export type DeletedSong = z.infer<typeof deletedSongSchema>;
+
+/**
+ * A `409` for a delete that would have had to be for good — the song's drive
+ * has no bin (a network or removable drive) — so it's left where it is.
+ */
+export const noBinSchema = z.object({
+  message: z.string(),
+  bin: z.string(),
+  noBin: z.literal(true),
+});
+
 /**
  * Saving into the folder streams one JSON object per line: progress while the
  * audio arrives, then "done" (or "error").

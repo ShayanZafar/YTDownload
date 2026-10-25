@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   audioSources,
+  deletedSongSchema,
   downloadSchema,
   folderEntrySchema,
   lyricsSchema,
@@ -10,6 +11,7 @@ import {
   trimUndoSchema,
   trimmedSongSchema,
   waveformSchema,
+  noBinSchema,
   playlistFileSongSchema,
   saveSettingsSchema,
   savedPlaylistFileSchema,
@@ -364,6 +366,17 @@ export const api = {
       path: "/api/music/trim/undo" as const,
       input: trimUndoSchema,
       responses: { 200: trimmedSongSchema.pick({ id: true, duration: true }) },
+    },
+    /**
+     * Deletes a song from the folder: to the Recycle Bin / Trash, so it can be
+     * put back from there — or for good, only when `permanently` says so
+     * (a drive with no bin answers `409` with `noBin` instead).
+     */
+    remove: {
+      method: "DELETE" as const,
+      path: "/api/music/:id" as const,
+      input: z.object({ permanently: z.boolean().optional() }),
+      responses: { 200: deletedSongSchema, 409: noBinSchema },
     },
   },
 };

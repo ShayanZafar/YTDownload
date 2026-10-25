@@ -24,9 +24,11 @@ import {
   Scissors,
   Search,
   Shuffle,
+  Trash2,
   X,
 } from "lucide-react";
 import type { SaveSettings, TimeRange, TrimmedSong } from "@shared/schema";
+import { DeleteSongDialog } from "@/components/delete-song-dialog";
 import { TrimSong } from "@/components/trim-song";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
@@ -96,6 +98,8 @@ type SongRowProps = {
   onEnqueue: (track: PlayerTrack, where: Enqueue) => void;
   /** Opens the trim window, for a song in the folder. */
   onTrim: (track: PlayerTrack) => void;
+  /** Delete from folder (asks first). */
+  onDelete: (track: PlayerTrack) => void;
 };
 
 /** A song in the list: click it to play the list from there, or line it up. */
@@ -108,6 +112,7 @@ const SongRow = memo(function SongRow({
   onPlay,
   onEnqueue,
   onTrim,
+  onDelete,
 }: SongRowProps) {
   const byline = [track.artist, track.album].filter(Boolean).join(" · ");
   return (
@@ -207,6 +212,17 @@ const SongRow = memo(function SongRow({
               <Scissors className="h-4 w-4" />
             </button>
           )}
+          {track.source === "folder" && (
+            <button
+              type="button"
+              onClick={() => onDelete(track)}
+              aria-label={`Delete from folder: “${track.title}”`}
+              title="Delete from folder"
+              className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive transition-colors"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
         </span>
       )}
     </li>
@@ -229,6 +245,8 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useStoredChoice<MusicSort>("music-sort", musicSorts, "added");
   const [limit, setLimit] = useState(PAGE);
+  // The song "Delete from folder" is asking about.
+  const [deleting, setDeleting] = useState<(PlayerTrack & { source: "folder" }) | null>(null);
   const [pickFolders] = useState(canPickFolders);
   const isLocal = settings?.canSaveToFolder === true;
 
@@ -335,6 +353,9 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
     (track: PlayerTrack, where: Enqueue) => actions.current.enqueue(track, where),
     [],
   );
+  const onDelete = useCallback((track: PlayerTrack) => {
+    if (track.source === "folder") setDeleting(track);
+  }, []);
 
   const onPicked = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -583,6 +604,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                   onPlay={onPlay}
                   onEnqueue={onEnqueue}
                   onTrim={onTrim}
+                  onDelete={onDelete}
                 />
               );
             })}
@@ -638,6 +660,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
           onClose={() => setTrimming(null)}
         />
       )}
+      {deleting && <DeleteSongDialog track={deleting} onClose={() => setDeleting(null)} />}
     </section>
   );
 }

@@ -6,9 +6,15 @@
  */
 import { api, buildUrl } from "@shared/routes";
 import { AUDIO_TYPES, audioTypeOf, songNameOf } from "@shared/audio-types";
-import { musicLibrarySchema, type MusicLibrary, type MusicTrack } from "@shared/schema";
+import {
+  deletedSongSchema,
+  musicLibrarySchema,
+  noBinSchema,
+  type MusicLibrary,
+  type MusicTrack,
+} from "@shared/schema";
 import { searchableText } from "@/lib/history-filter";
-import { requestJson } from "@/lib/save-to-folder";
+import { ApiError, errorFrom, requestJson } from "@/lib/save-to-folder";
 
 /** A song the player can play. */
 export type PlayerTrack = {
@@ -63,6 +69,52 @@ export const folderSongUrl = (id: string) => buildUrl(api.music.audio.path, { id
 export const folderSongFlacUrl = (id: string) => buildUrl(api.music.flac.path, { id });
 /** A folder song's cover picture (the address answers 204 when there's none). */
 export const folderSongCoverUrl = (id: string) => buildUrl(api.music.cover.path, { id });
+
+/**
+ * What the bin is called on this computer — the one running the app, as only
+ * its own browser sees the folder's songs — until the app says.
+ */
+export const binNameHere = () =>
+  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
+    ? "Recycle Bin"
+    : "Trash";
+
+/** What became of a folder song asked to be deleted. */
+export type DeleteOutcome =
+  /** Gone: to the Recycle Bin / Trash (`trashed`), or for good. */
+  | { deleted: true; trashed: boolean; bin: string }
+  /** Still there: its drive has no bin, so it could only be deleted for good. */
+  | { deleted: false; bin: string; message: string };
+
+/**
+ * Deletes a folder song: to the computer's Recycle Bin / Trash, or for good
+ * when `permanently` says so (only after the person said so, as its drive
+ * has no bin). Throws an `ApiError` if it couldn't be deleted.
+ */
+export async function deleteFolderSong(
+  id: string,
+  { permanently = false } = {},
+): Promise<DeleteOutcome> {
+  const res = await fetch(buildUrl(api.music.remove.path, { id }), {
+    method: api.music.remove.method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ permanently }),
+  });
+  if (res.status === 409) {
+    const noBin = noBinSchema.safeParse(
+      await res
+        .clone()
+        .json()
+        .catch(() => undefined),
+    );
+    if (noBin.success) return { deleted: false, bin: noBin.data.bin, message: noBin.data.message };
+  }
+  if (!res.ok) throw await errorFrom(res);
+  const done = deletedSongSchema.safeParse(await res.json().catch(() => undefined));
+  if (!done.success)
+    throw new ApiError("The app sent an answer the page didn't expect.", res.status);
+  return { deleted: true, ...done.data };
+}
 
 // --- Songs picked on this device ----------------------------------------------------------
 
@@ -248,6 +300,27 @@ export function queueWithout(queue: Queue, position: number): Queue {
     order: queue.order.filter((_, p) => p !== position).map((i) => (i > index ? i - 1 : i)),
     position: position < queue.position ? queue.position - 1 : queue.position,
   };
+}
+
+/**
+ * The queue without this song, wherever it is (a song deleted from the
+ * folder). `current` says what became of the current song: the `same`; the
+ * song after it (`next`), as it was this one; the one before (`previous`),
+ * as this one was the last; or `none`, as it was the only song.
+ */
+export function queueWithoutSong(
+  queue: Queue,
+  key: string,
+): { queue: Queue; current: "same" | "next" | "previous" | "none" } {
+  const index = queue.tracks.findIndex((track) => track.key === key);
+  const position = queue.order.indexOf(index);
+  if (index === -1 || position === -1) return { queue, current: "same" };
+  if (position !== queue.position) return { queue: queueWithout(queue, position), current: "same" };
+  if (queue.order.length === 1) return { queue: EMPTY_QUEUE, current: "none" };
+  const last = position + 1 >= queue.order.length;
+  // Another song is current first, so this one can be taken out.
+  const moved = { ...queue, position: last ? position - 1 : position + 1 };
+  return { queue: queueWithout(moved, position), current: last ? "previous" : "next" };
 }
 
 /** The queue with nothing after the current song. */
