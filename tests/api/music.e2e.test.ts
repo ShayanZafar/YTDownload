@@ -51,6 +51,8 @@ beforeAll(async () => {
   process.env.HISTORY_FILE = path.join(dir, "history.json");
   process.env.SETTINGS_FILE = path.join(dir, "settings.json");
   process.env.PLAYER_CACHE_DIR = path.join(dir, "cache");
+  // Deleted songs go here, not into this computer's Recycle Bin / Trash.
+  process.env.TRASH_DIR = path.join(dir, "bin");
 
   // A folder with an MP3 the way the app saves them (tags and all), an old
   // WMA no browser plays, one with a cover picture, and a file that isn't a song.
@@ -80,6 +82,7 @@ afterAll(async () => {
   delete process.env.HISTORY_FILE;
   delete process.env.SETTINGS_FILE;
   delete process.env.PLAYER_CACHE_DIR;
+  delete process.env.TRASH_DIR;
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -230,6 +233,58 @@ describe("Music player (API)", () => {
       });
     expect(otherDevice.status).toBe(403);
     await expect(fs.stat(path.join(folder, "Road Trip.m3u8"))).rejects.toThrow();
+  });
+
+  it("deletes a song from the folder to the bin, or for good only when asked", async () => {
+    // Two copies of a song to delete, so the songs the other tests use stay.
+    const original = path.join(folder, "Sine Wave", "Test Tone.mp3");
+    await fs.copyFile(original, path.join(folder, "Tired Of It.mp3"));
+    await fs.copyFile(original, path.join(folder, "Gone For Good.mp3"));
+    const listed = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    const tired = listed.find((track) => track.path === "Tired Of It.mp3")!;
+    const gone = listed.find((track) => track.path === "Gone For Good.mp3")!;
+
+    // Only this computer's own page, and only as JSON.
+    const otherDevice = await request(app)
+      .delete(`/api/music/${tired.id}`)
+      .set("X-Forwarded-For", "192.168.1.20")
+      .send({});
+    expect(otherDevice.status).toBe(403);
+    const otherSite = await request(app)
+      .delete(`/api/music/${tired.id}`)
+      .set("Sec-Fetch-Site", "cross-site")
+      .send({});
+    expect(otherSite.status).toBe(403);
+    expect((await request(app).delete(`/api/music/${tired.id}`)).status).toBe(415);
+    expect((await request(app).delete("/api/music/..%2Fhistory.json").send({})).status).toBe(400);
+    await fs.stat(path.join(folder, "Tired Of It.mp3"));
+
+    // To the bin, where it can be put back from.
+    const res = await request(app).delete(`/api/music/${tired.id}`).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      trashed: true,
+      bin: process.platform === "win32" ? "Recycle Bin" : "Trash",
+    });
+    await expect(fs.stat(path.join(folder, "Tired Of It.mp3"))).rejects.toThrow();
+    const binned = await fs.readFile(path.join(dir, "bin", "files", "Tired Of It.mp3"));
+    expect(Buffer.compare(binned, await fs.readFile(original))).toBe(0);
+    expect((await request(app).get(`/api/music/${tired.id}`)).status).toBe(404);
+    expect((await request(app).delete(`/api/music/${tired.id}`).send({})).status).toBe(404);
+
+    // For good, when the page says so.
+    const forGood = await request(app).delete(`/api/music/${gone.id}`).send({ permanently: true });
+    expect(forGood.status).toBe(200);
+    expect(forGood.body.trashed).toBe(false);
+    await expect(fs.stat(path.join(folder, "Gone For Good.mp3"))).rejects.toThrow();
+    await expect(fs.stat(path.join(dir, "bin", "files", "Gone For Good.mp3"))).rejects.toThrow();
+
+    const after = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    expect(after.map((track) => track.path).sort()).toEqual([
+      "Old Song.wma",
+      path.join("Sine Wave", "Test Tone.mp3"),
+      "With Cover.mp3",
+    ]);
   });
 
   it("forgets the old folder's songs when the Save to folder changes", async () => {
