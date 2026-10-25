@@ -1,15 +1,15 @@
 ---
 paths:
-  - "server/{music,lyrics,trash}.ts"
+  - "server/{music,lyrics,trash,trim}.ts"
   - "shared/audio-types.ts"
   - "client/src/App.tsx"
   - "client/src/hooks/{use-player,use-player-shortcuts}.tsx"
   - "client/src/hooks/{use-folder-music,use-device-music,use-lyrics}.ts"
-  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog}.tsx"
-  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player}.ts"
-  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash}.test.ts"
+  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog,trim-song}.tsx"
+  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player,trim}.ts"
+  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash,trim,trim-routes}.test.ts"
   - "tests/api/music.e2e.test.ts"
-  - "tests/browser/{player,playlist}.spec.ts"
+  - "tests/browser/{player,playlist,trim}.spec.ts"
 ---
 
 # The music player
@@ -28,3 +28,6 @@ paths:
 - Delete from folder moves the file to the system's bin (`server/trash.ts`), never deleting for good
   unless the person said so after a `409 noBin`; tests use `TRASH_DIR`, never the real bin. Take the
   song out of the queue (`discard()`) before the request, so the file isn't open while it moves.
+- Trimming changes the user's file: the original is copied to the backup folder before ffmpeg runs,
+  the result is swapped in only once complete, and Undo refuses a song changed since. The player must
+  `letGo()` of a song before it's trimmed or put back (Windows won't replace an open file).
