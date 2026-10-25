@@ -97,7 +97,7 @@ This document covers the project's architecture, local development setup, enviro
 ├── .github/
 │   ├── workflows/
 │   │   ├── install.yml        # Builds the ready-to-run app onto the install branch after every push to main
-│   │   ├── tests.yml          # npm run verify on Linux and Windows (macOS weekly), on pushes and pull requests
+│   │   ├── tests.yml          # npm run verify on Linux and Windows (macOS weekly), on pull requests and direct pushes
 │   │   ├── claude-code-review.yml # Claude reviews each pull request once, with inline comments
 │   │   └── claude-refactor.yml # Monthly: Claude runs /refactor and opens a pull request
 │   ├── dependabot.yml         # Monthly grouped npm and GitHub Actions updates
@@ -361,8 +361,8 @@ What each file does, and the function and constant names to look for. This was C
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
   (no history to merge); it's only ever written by the workflow (`CLAUDE.md` › Workflow)
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
-  lint, type-check, dependency licences, the core-flows and instructions checks, unit tests + the music and history API tests) on Linux and Windows after every push (macOS on Mondays / by hand: its minutes count
-  10×), and on pull requests; its `browser` job runs the Playwright tests (Chrome and WebKit, on
+  lint, type-check, dependency licences, the core-flows and instructions checks, unit tests + the music and history API tests) on Linux and Windows on pull requests and direct pushes to `main`, not the "Merge pull request" push
+  (macOS on Mondays / by hand: its minutes count 10×); its `browser` job runs the Playwright tests (Chrome and WebKit, on
   Linux) with stand-ins for YouTube, Spotify and SoundCloud. The YouTube API tests and the `@live`
   browser tests aren't run there (GitHub's machines get refused)
 - `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
@@ -1161,7 +1161,7 @@ The project ships with two end-to-end test suites that exercise the real app aga
 
 ### Continuous integration
 
-`.github/workflows/tests.yml` keeps the app easy to work on from any system. After every push to `main` (and on pull requests) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. A second job, `browser`, runs the Playwright tests on Linux in Chrome (the runner's Google Chrome) and WebKit (`npx playwright install --with-deps chromium webkit`), with YouTube, Spotify and SoundCloud played by stand-ins. The other API tests and the `@live` browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
+`.github/workflows/tests.yml` keeps the app easy to work on from any system. On every pull request and every direct push to `main` (a "Merge pull request" push is skipped: its pull request already ran the same checks) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. A second job, `browser`, runs the Playwright tests on Linux in Chrome (the runner's Google Chrome) and WebKit (`npx playwright install --with-deps chromium webkit`), with YouTube, Spotify and SoundCloud played by stand-ins. The other API tests and the `@live` browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
 
 Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups; and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The two Claude workflows sign in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and skip with a warning, still green, when it isn't set.
 

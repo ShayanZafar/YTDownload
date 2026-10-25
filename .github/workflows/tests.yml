@@ -3,7 +3,9 @@
 # unit tests) — the one check you run locally too — on Linux
 # and Windows after every push to main (and on pull requests), and on macOS
 # too every Monday or when run by hand (Actions tab, Run workflow): macOS
-# minutes count ten times against GitHub's free allowance.
+# minutes count ten times against GitHub's free allowance. A push to main whose
+# commit is "Merge pull request #N" skips both jobs: that pull request already ran
+# them (half of the minutes spent here went to those repeats).
 #
 # The API and browser tests that talk to YouTube aren't run here — YouTube
 # often refuses GitHub's machines — but the music player's API test is: it
@@ -27,6 +29,7 @@ concurrency:
 
 jobs:
   test:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
     strategy:
       fail-fast: false
       matrix:
@@ -65,6 +68,7 @@ jobs:
         run: npm run verify
 
   browser:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
