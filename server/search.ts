@@ -18,7 +18,7 @@
  */
 import type { AudioSource, SearchResult } from "@shared/schema";
 import { SAME_LENGTH_SECONDS } from "@shared/schema";
-import { foldCase } from "@shared/fold-text";
+import { foldWords } from "@shared/fold-text";
 import { runYtDlpJson, ytDlpErrorLine } from "./audio";
 import { looksLikePreview, recordSoundCloud, soundCloudResult } from "./soundcloud";
 import type { SourceHealthStore } from "./source-health";
@@ -105,10 +105,7 @@ const MATCH_THRESHOLD = 0.75;
 
 /** Lowercase, strip accents and punctuation, single spaces: "Beyoncé - Halo!" → "beyonce halo". */
 export function normalize(text: string): string {
-  // Latin letters and digits only: a title in another script has no words here.
-  return foldCase(text, "latin")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  return foldWords(text);
 }
 
 const hasWords = (normalized: string, words: string) => ` ${normalized} `.includes(` ${words} `);

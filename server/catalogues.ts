@@ -102,7 +102,7 @@ export const isCatalogueCoverUrl = (url: string) =>
 
 /** Text to compare: lower case, no accents or punctuation. */
 export function plain(text: string): string {
-  return foldWords(text.replace(/&/g, " and "), "latin");
+  return foldWords(text.replace(/&/g, " and "));
 }
 
 /** A title's words in order of the alphabet: "Remix (Paul Oakenfold)" is "(Paul Oakenfold Remix)". */

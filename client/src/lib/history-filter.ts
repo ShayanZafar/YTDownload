@@ -39,7 +39,7 @@ const NON_WORD_SPLIT = new RegExp("[^\\p{L}\\p{N}]+", "u");
 
 /** Lowercase, no accents or punctuation: "Beyoncé - Halo!" → "beyonce halo". Works for any script. */
 export function searchableText(text: string): string {
-  return foldWords(text, "latin");
+  return foldWords(text);
 }
 
 /**
