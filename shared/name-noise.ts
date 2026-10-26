@@ -124,7 +124,7 @@ export function sanitizedFileName(name: string): string {
 }
 
 /** An artist's name to compare: lower case, letters and digits only (KnownArtists keys). */
-export const artistKey = (name: string) => foldWords(name, "keep");
+export const artistKey = (name: string) => foldWords(name);
 
 /** A folder's artists (knownArtists()): by artistKey(), each as the folder spells it. */
 export type KnownArtists = ReadonlyMap<string, string>;
