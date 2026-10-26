@@ -382,6 +382,19 @@ describe("Music player (API)", () => {
     expect(caseOnly.body.track.path).toBe(path.join("Sanitize", "Lithium.mp3"));
     expect(await fs.readdir(sub)).toContain("Lithium.mp3");
     expect((await rename(caseOnly.body.track.id, "Lithium")).status).toBe(409);
+    // Where case counts (Linux), "lithium.mp3" beside "Lithium.mp3" is another song: never replaced.
+    await fs.copyFile(source, path.join(sub, "other.mp3"));
+    if (!(await fs.stat(path.join(sub, "OTHER.mp3")).catch(() => undefined))) {
+      await fs.copyFile(source, path.join(sub, "Other.mp3"));
+      const relisted = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+      const lower = relisted.find((t) => t.path === path.join("Sanitize", "other.mp3"))!.id;
+      const kept = await rename(lower, "Other");
+      expect(kept.body.track.path).toBe(path.join("Sanitize", "Other (1).mp3"));
+      await fs.rm(path.join(sub, "Other.mp3"));
+      await fs.rm(path.join(sub, "Other (1).mp3"));
+    } else {
+      await fs.rm(path.join(sub, "other.mp3"));
+    }
     expect((await rename(noisy, "Gone")).status).toBe(404);
 
     // Rename: a new title and artist over the ones it has, and a new file name, at once.

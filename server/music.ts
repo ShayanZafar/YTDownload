@@ -152,6 +152,12 @@ export function fixSongName(
   );
 }
 
+/** Are these one file (or is there nothing at `b`)? */
+async function sameFile(a: string, b: string): Promise<boolean> {
+  const [first, second] = await Promise.all([fs.stat(a), fs.stat(b).catch(() => undefined)]);
+  return !second || (first.ino === second.ino && first.dev === second.dev);
+}
+
 /**
  * Renames a song, in its own folder, to `fileName` (made safe already), or
  * "Name (1).mp3" if another file has that name — an existing file is never
@@ -164,7 +170,11 @@ export async function renameSong(
   fileName: string,
 ): Promise<{ id: string; path: string }> {
   const dir = path.dirname(file.absolute);
-  const sameName = fileName.toLowerCase() === path.basename(file.absolute).toLowerCase();
+  // A change of case on a drive that ignores case: the "other" file is this one.
+  // (Where case counts, "Song.mp3" beside "song.mp3" is another song, and claimed around.)
+  const sameName =
+    fileName.toLowerCase() === path.basename(file.absolute).toLowerCase() &&
+    (await sameFile(file.absolute, path.join(dir, fileName)));
   const target = sameName ? path.join(dir, fileName) : await claimNewName(dir, fileName);
   try {
     await retryWhenBusy(() => fs.rename(file.absolute, target));
