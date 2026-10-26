@@ -475,6 +475,7 @@ describe("Save to folder (API)", () => {
       saveFolder: null,
       canSaveToFolder: true,
       cpuCores: os.availableParallelism(),
+      qualityBar: "128",
     });
 
     const { res, error } = await save({ url: TEST_VIDEO_URL });
@@ -527,6 +528,7 @@ describe("Save to folder (API)", () => {
       saveFolder: saveDir,
       canSaveToFolder: true,
       cpuCores: os.availableParallelism(),
+      qualityBar: "128",
     });
     const before = (await historyFor(TEST_VIDEO_URL)).length;
 
