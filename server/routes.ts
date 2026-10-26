@@ -49,11 +49,13 @@ import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import { readTags, songsInFolder, type AudioFile } from "./library";
 import { writePlaylistFile } from "./playlist-file";
 import { checkSong, deleteOtherFile, otherFiles } from "./housekeeping";
+import { BetterCopyError, findBetterCopy, replaceWithBetterCopy } from "./better-copy";
 import { CatalogueError } from "./catalogues";
 import {
   convertedForBrowser,
   deleteMusicFile,
   findMusicFile,
+  folderArtistSongs,
   assertNameFree,
   fixSongName,
   renameSong,
@@ -334,7 +336,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const file = await songFor(req, res);
       if (!file) return;
       try {
-        const lookup = await lookUpDetails(file);
+        const { saveFolder } = await settings.get();
+        const lookup = await lookUpDetails(file, () => folderArtistSongs(saveFolder!));
         void logDetails(lookupEntry(file.relative, lookup));
         res.json(lookup);
       } catch (err) {
@@ -481,6 +484,72 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(404).json({ message: SONG_GONE });
       }
       sendFolderError(res, err, "Couldn't check that song");
+    }
+  });
+
+  // Housekeeping's better copies: the same song online at a higher bitrate,
+  // and replacing the song with it (the old one to the bin: better-copy.ts).
+  app.get(api.music.findBetterCopy.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    try {
+      const file = await songFor(req, res);
+      if (!file) return;
+      res.json(await findBetterCopy(file));
+    } catch (err) {
+      if (err instanceof YouTubeRefused) return sendRefused(res);
+      if (err instanceof SearchFailed) {
+        return res
+          .status(err.status)
+          .json(
+            err.limited
+              ? { message: err.message, source: "youtube", limited: true }
+              : { message: err.message },
+          );
+      }
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: SONG_GONE });
+      }
+      if (err instanceof FolderError) return sendFolderError(res, err, "");
+      res.status(502).json({
+        message: `Couldn't look for a better copy: ${err instanceof Error ? err.message : err}`,
+      });
+    }
+  });
+
+  app.post(api.music.replaceWithBetterCopy.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    const input = api.music.replaceWithBetterCopy.input.safeParse(req.body);
+    if (!input.success) return res.status(400).json(validationError(input.error));
+    try {
+      const file = await songFor(req, res);
+      if (!file) return;
+      if (file.realType) {
+        return res.status(409).json({
+          message: `It's really ${file.realType} audio, whatever its name says: fix its name first.`,
+        });
+      }
+      const check = await replaceWithBetterCopy(file, input.data.url);
+      const { saveFolder } = await settings.get();
+      const now = await findMusicFile(saveFolder!, String(req.params.id));
+      if (!now) return res.status(404).json({ message: SONG_GONE });
+      res.json({
+        track: toMusicTrack(saveFolder!, now, await readTags(now)),
+        check,
+        bin: binName(),
+      });
+    } catch (err) {
+      if (err instanceof BetterCopyError)
+        return res.status(err.status).json({ message: err.message });
+      if (err instanceof YouTubeRefused) return sendRefused(res);
+      if (err instanceof NoBinError) {
+        return res.status(409).json({
+          message: `Its drive has no ${binName()} for the old song to go to, so it was left as it was.`,
+          bin: binName(),
+          noBin: true,
+        });
+      }
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: SONG_GONE });
+      }
+      sendFolderError(res, err, "Couldn't replace that song");
     }
   });
 

@@ -53,12 +53,14 @@ import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { FillInDetails } from "@/components/fill-in-details";
 import { SanitizeNames } from "@/components/sanitize-names";
 import { Housekeeping } from "@/components/housekeeping";
+import { FacetFilter } from "@/components/facet-filter";
 import { useSaveSettings } from "@/hooks/use-save-settings";
 import { RenameSongDialog } from "@/components/rename-song-dialog";
 import { formatDuration } from "@/lib/format";
 import {
   AUDIO_FILE_ACCEPT,
   NO_VALUE,
+  facetChoicesOf,
   facetCounts,
   facetLabels,
   filterByFacets,
@@ -763,40 +765,24 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
               </select>
             </label>
             {offered.map((facet) => {
-              const { values, none } = facetChoices[facet];
               const labels = facetLabels[facet];
               return (
-                <select
+                <FacetFilter
                   key={facet}
-                  aria-label={`Show songs of ${labels.name.toLowerCase()}`}
-                  title={labels.name}
-                  value={activeFacets[facet] ?? "*"}
-                  onChange={(event) => {
-                    const value = event.target.value;
+                  label={`Show songs of ${labels.name.toLowerCase()}`}
+                  name={labels.name}
+                  all={labels.all}
+                  choices={facetChoicesOf(facet, facetChoices[facet])}
+                  value={activeFacets[facet]}
+                  onChange={(value) =>
                     setFacets((now) => {
                       const next = { ...now };
-                      if (value === "*") delete next[facet];
+                      if (value === undefined) delete next[facet];
                       else next[facet] = value;
                       return next;
-                    });
-                  }}
-                  className={cn(
-                    "h-9 max-w-40 rounded-lg border bg-card px-2 text-xs font-medium text-foreground",
-                    activeFacets[facet] !== undefined ? "border-primary" : "border-border",
-                  )}
-                >
-                  <option value="*">{labels.all}</option>
-                  {values.map(({ value, count }) => (
-                    <option key={value} value={value}>
-                      {value} ({count})
-                    </option>
-                  ))}
-                  {none > 0 && (
-                    <option value={NO_VALUE}>
-                      {labels.none} ({none})
-                    </option>
-                  )}
-                </select>
+                    })
+                  }
+                />
               );
             })}
             {filtered && (
@@ -946,6 +932,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
               void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
               void queryClient.invalidateQueries({ queryKey: HISTORY_IN_FOLDER_KEY });
             }}
+            onReplaced={showWritten}
             onClose={() => setHousekeeping(false)}
           />
         )}

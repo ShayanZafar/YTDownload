@@ -18,6 +18,7 @@ import type { IAudioMetadata } from "music-metadata";
 import { extensionOf, songNameOf } from "@shared/audio-types";
 import { sanitizedFileName } from "@shared/name-noise";
 import type { SongDetailField, SongDetails, SongLookup } from "@shared/schema";
+import { guessGenre, type ArtistSong } from "./artist-genre";
 import { lookUpSongNoted, sourceName } from "./catalogues";
 import { setNotFound } from "./not-found";
 import { fetchCover } from "./cover";
@@ -186,9 +187,15 @@ export function detailsFromName(file: string, missing: SongDetailField[]): SongD
 /**
  * What a folder song lacks, and what the catalogues have for it: looked up
  * by its title and artist tags, or, for a song without them, its file name
- * ("Artist - Song.mp3"). Throws CatalogueError if neither catalogue can be reached.
+ * ("Artist - Song.mp3"). A genre no catalogue has for the song is guessed from
+ * its artist (guessGenre(): their other songs in `folderSongs`, else the
+ * catalogues'), and said to be a guess. Throws CatalogueError if neither
+ * catalogue can be reached.
  */
-export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
+export async function lookUpDetails(
+  file: AudioFile,
+  folderSongs?: () => Promise<readonly ArtistSong[]>,
+): Promise<SongLookup> {
   const metadata = await readWithCovers(file).catch(() => undefined);
   const missing = metadata ? missingFrom(detailsPresent(metadata)) : [];
   let writable = metadata !== undefined && canWriteDetails(file.relative);
@@ -209,6 +216,7 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
     found: null,
     match: null,
     source: null,
+    guess: null,
     notFound: false,
   };
   if (missing.length === 0 || !writable) return none;
@@ -222,19 +230,36 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
     },
     missing.map((field) => (field === "cover" ? "coverUrl" : field)),
   );
+  // A genre no catalogue has for the song: its artist's, a guess.
+  const guessed = async (artist: string | undefined) =>
+    missing.includes("genre") && artist ? guessGenre(artist, folderSongs) : undefined;
   if (!match) {
     const named = tags.title || tags.trackArtist ? {} : detailsFromName(file.relative, missing);
     // Not found: every catalogue answered, none has it, and its name says nothing either.
     const notFound = noneHasIt === true && Object.keys(named).length === 0;
     await setNotFound(file, notFound);
-    return Object.keys(named).length > 0
-      ? { ...none, notes, found: named, source: "name" }
+    const guess = await guessed(tags.trackArtist ?? named.artist);
+    const withGuess = guess ? { genre: guess.genre } : {};
+    if (Object.keys(named).length > 0) {
+      return {
+        ...none,
+        notes,
+        found: { ...named, ...withGuess },
+        source: "name",
+        guess: guess?.why ?? null,
+      };
+    }
+    return guess
+      ? { ...none, notes, found: withGuess, source: "artist", guess: guess.why, notFound }
       : { ...none, notes, notFound };
   }
   await setNotFound(file, false);
   const { song, source, otherVersion } = match;
   // Another version of the song gives its genre and nothing else.
   const found = detailsFor(otherVersion ? missing.filter((f) => f === "genre") : missing, song);
+  // The song's found without a genre: its artist's, a guess.
+  const guess = found.genre ? undefined : await guessed(tags.trackArtist ?? song.artist);
+  if (guess) found.genre = guess.genre;
   if (Object.keys(found).length === 0) {
     const catalogue = sourceName(source);
     return {
@@ -261,6 +286,7 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
           : null,
     },
     source,
+    guess: guess?.why ?? null,
     notFound: false,
   };
 }

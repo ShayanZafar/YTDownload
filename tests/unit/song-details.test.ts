@@ -15,6 +15,7 @@ import {
   pickMatch,
   pickVersion,
   musicBrainzArtistGenre,
+  genreOfArtistNamed,
   resetCatalogues,
   CATALOGUE_LIMITS,
   type CatalogueSong,
@@ -35,8 +36,10 @@ import {
 import { genresOf } from "../../shared/audio-types";
 import {
   NO_VALUE,
+  facetChoicesOf,
   facetCounts,
   filterByFacets,
+  matchChoices,
   filterTracks,
   folderTrack,
 } from "../../client/src/lib/music";
@@ -808,6 +811,59 @@ describe("lookUpSong", () => {
     expect(musicBrainzArtistGenre({})).toBe(undefined);
   });
 
+  it("finds the genre iTunes files an artist under, else MusicBrainz's, passing over a busy one", async () => {
+    const asked: string[] = [];
+    const artist = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
+    let itunesBusy = false;
+    vi.stubGlobal("fetch", async (url: string) => {
+      const { hostname, pathname, searchParams } = new URL(url);
+      asked.push(`${hostname}${pathname}`);
+      if (hostname === "itunes.apple.com") {
+        if (itunesBusy) return new Response("", { status: 403 });
+        expect(searchParams.get("entity")).toBe("musicArtist");
+        return json({
+          results: [
+            { wrapperType: "artist", artistName: "Darren Styles", primaryGenreName: "Dance" },
+            { wrapperType: "artist", artistName: "Darren Tate", primaryGenreName: "Electronic" },
+          ],
+        });
+      }
+      if (pathname === `/ws/2/artist/${artist}`) {
+        return json({ genres: [{ name: "trance", count: 4 }] });
+      }
+      expect(searchParams.get("query")).toBe('artist:"Darren Tate"');
+      return json({
+        artists: [
+          { id: "11111111-2222-3333-4444-555555555555", name: "Darren Styles", score: 100 },
+          { id: artist, name: "Darren Tate", score: 100 },
+        ],
+      });
+    });
+    expect(await genreOfArtistNamed("Darren Tate")).toEqual({
+      genre: "Electronic",
+      source: "itunes",
+    });
+    // Asked again: from memory.
+    expect(await genreOfArtistNamed("darren tate")).toEqual({
+      genre: "Electronic",
+      source: "itunes",
+    });
+    expect(asked).toEqual(["itunes.apple.com/search"]);
+
+    resetCatalogues();
+    asked.length = 0;
+    itunesBusy = true;
+    expect(await genreOfArtistNamed("Darren Tate")).toEqual({
+      genre: "Trance",
+      source: "musicbrainz",
+    });
+    expect(asked).toEqual([
+      "itunes.apple.com/search",
+      "musicbrainz.org/ws/2/artist",
+      `musicbrainz.org/ws/2/artist/${artist}`,
+    ]);
+  });
+
   it("says when neither catalogue can be reached", async () => {
     vi.stubGlobal("fetch", async () => {
       throw new TypeError("fetch failed");
@@ -915,6 +971,36 @@ describe("the other filters", () => {
     expect(titles({ album: "First", artist: "Trio" })).toEqual(["C"]);
     expect(titles({ year: NO_VALUE })).toEqual(["D"]);
     expect(filterTracks(songs, "2004").map((t) => t.title)).toEqual(["B"]);
+  });
+
+  it("narrow to what's typed: any case, accents or dashes, names starting with it first", () => {
+    const choices = facetChoicesOf("artist", facetCounts(songs, "artist"));
+    expect(choices.map((c) => c.text)).toEqual([
+      "Band (2)",
+      "Singer (1)",
+      "Trio (1)",
+      "No artist (1)",
+    ]);
+    const texts = (typed: string) => matchChoices(choices, typed).map((c) => c.text);
+    expect(texts("")).toHaveLength(4);
+    expect(texts("SIN")).toEqual(["Singer (1)"]);
+    expect(texts("no a")).toEqual(["No artist (1)"]);
+    expect(texts("zzz")).toEqual([]);
+    const genres = [
+      { value: "Synth-Pop", text: "Synth-Pop (4)", count: 4 },
+      { value: "Hip-Hop/Rap", text: "Hip-Hop/Rap (3)", count: 3 },
+      { value: "Pop", text: "Pop (2)", count: 2 },
+      { value: "Électronique", text: "Électronique (1)", count: 1 },
+    ];
+    // "Pop" and the word "Pop" in "Synth-Pop" before "Hip-Hop", which only has it inside a word.
+    expect(matchChoices(genres, "pop").map((c) => c.value)).toEqual(["Synth-Pop", "Pop"]);
+    expect(matchChoices(genres, "op").map((c) => c.value)).toEqual([
+      "Synth-Pop",
+      "Hip-Hop/Rap",
+      "Pop",
+    ]);
+    expect(matchChoices(genres, "hiphop").map((c) => c.value)).toEqual(["Hip-Hop/Rap"]);
+    expect(matchChoices(genres, "electro").map((c) => c.value)).toEqual(["Électronique"]);
   });
 });
 

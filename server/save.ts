@@ -19,6 +19,7 @@ import {
   createNewFile,
   folderError,
 } from "./folders";
+import { folderArtistSongs } from "./music";
 import { retryWhenBusy } from "./retry-when-busy";
 import { settings } from "./settings";
 import { spotifySongTags } from "./spotify";
@@ -126,8 +127,11 @@ export async function saveIntoFolder(req: Request, res: Response) {
       spotifyId,
     };
     // Its genre (and for a song without an album, its album) from the music
-    // catalogues, looked up meanwhile. It never fails or holds the download up.
-    const lookedUp = lookUpDownload(tags, info.duration);
+    // catalogues, looked up meanwhile — or its artist's genre, from the folder's
+    // other songs by them first. It never fails or holds the download up.
+    const lookedUp = lookUpDownload(tags, info.duration, {
+      folderSongs: () => folderArtistSongs(folder),
+    });
     // Cancelled while we were looking up the video: don't start any work.
     if (clientGone) return;
 

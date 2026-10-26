@@ -22,7 +22,9 @@ import os from "os";
 import path from "path";
 import { songNameOf } from "@shared/audio-types";
 import type { Download, HistoryInFolder, MusicLibrary, MusicTrack } from "@shared/schema";
+import type { ArtistSong } from "./artist-genre";
 import { spawnFfmpeg } from "./audio";
+import { mapAtOnce } from "./cpu-cores";
 import { isNotFound, loadNotFound } from "./not-found";
 import {
   findAudioFiles,
@@ -30,6 +32,7 @@ import {
   forgetTags,
   parseFile,
   readFolderTags,
+  readTags,
   type AudioFile,
   type FileTags,
 } from "./library";
@@ -106,6 +109,20 @@ export async function historyInFolder(
       ]),
     ),
   };
+}
+
+/**
+ * Each song's artist and genres in `folder`, for a genre guessed from the
+ * artist: the songs the folder had when last looked through (their tags are
+ * read once and kept), or looked through now.
+ */
+export async function folderArtistSongs(folder: string): Promise<ArtistSong[]> {
+  const files =
+    known?.folder === folder ? [...known.files.values()] : (await findAudioFiles(folder)).files;
+  const tags = await mapAtOnce(files, (file) => readTags(file).catch(() => undefined));
+  return tags.flatMap((tag) =>
+    tag ? [{ artist: tag.trackArtist ?? null, genres: tag.genres ?? [] }] : [],
+  );
 }
 
 /**
