@@ -36,16 +36,25 @@ const FILM_NOISE_RE = /(?<=\S)\s*[-–—|]?\s*\b(?:full (?:video )?song|hd vide
 const TRAILING_NOISE_RE =
   /(?:\s+|\s*[-–—|]+\s*|\s+\.+\s*)(?:audio (?:hq|hd)|(?:w\/?|with) lyrics|(?:hq )?\d{2,3} ?kbps|official(?: (?:hd|hq|4k))?(?: music| lyrics?)? (?:video|audio)|(?:hd|hq) (?:video|audio)|lyrics? video|music video|full song|lyrics|hq|hd|4k|1080p|720p|remaster(?:ed)?(?: \d{4})?)$/i;
 
+// At the start: the site a download came from ("yt1s.com - ", "y2mate.com - ").
+const SITE_NOISE_RE =
+  /^\s*(?:www\.)?(?:yt1s|y2mate|ytmp3|savefrom|flvto|mp3juices|onlinevideoconverter|x2convert|notube|tomp3)\b[\w.-]*\.(?:com|net|org|cc|is|io|me|to|ch|biz|info|app)\s*[-–—_|]+\s*/i;
+
 /** `text` without the words above, or `text` itself if nothing else would be left. */
 export function withoutNameNoise(text: string): string {
   let clean = decodeEntities(text)
+    .replace(SITE_NOISE_RE, "")
     .replace(BRACKETED_NOISE_RE, "")
     .replace(FILM_NOISE_RE, "")
     .replace(RUN_ON_NOISE_RE, "");
   for (let before = ""; before !== clean;) {
     before = clean;
     // And a dash or a lone dot left at the end ("Song -", "Song ."), not "Inc.".
-    clean = clean.replace(TRAILING_NOISE_RE, "").replace(/\s*[-–—|]+$|\s+\.+$/, "");
+    clean = clean
+      .replace(TRAILING_NOISE_RE, "")
+      // "Kickstart My Heart - Official", not "Make It Official".
+      .replace(/\s*[-–—|]+\s*official$/i, "")
+      .replace(/\s*[-–—|]+$|\s+\.+$/, "");
   }
   // "(Extended Version) 1992": a year after the brackets.
   clean = clean.replace(/\)\s+(?:19|20)\d{2}$/, ")");

@@ -55,9 +55,16 @@ export function parseLrc(text: string): LyricLine[] {
   return lines.sort((a, b) => a.time - b.time);
 }
 
-/** A song title as LRCLIB names it: without "(Official Video)", "(feat. …)", "- Remastered". */
+/**
+ * A song title as LRCLIB names it: without "(Official Video)", "(feat. …)",
+ * "- Remastered", or a featured artist after it ("Despacito ft. Daddy Yankee").
+ */
 export function cleanSongTitle(title: string): string {
-  return cleanTrackTitle(withoutNameNoise(title)).replace(/\s+/g, " ").trim();
+  const clean = cleanTrackTitle(withoutNameNoise(title))
+    .replace(/\s+(?:feat\.?|ft\.?|featuring)\s+[^([]+$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean || title.trim();
 }
 
 /** An artist as LRCLIB names them: the first one, without "VEVO" or " - Topic". */
@@ -79,7 +86,11 @@ export function searchesFor({ title, artist }: SongToLookUp): { track: string; a
   const clean = cleanSongTitle(title);
   // "Artist - Song", with a hyphen or a dash (and "Artist- Song", as file names have it).
   const halves = /^(.+?)\s*[-–—]\s+(.+)$/.exec(clean);
-  if (halves) searches.push({ artist: halves[1].trim(), track: halves[2].trim() });
+  // "Static - X - Dead Souls": an artist with a dash in it, its second part a letter or two.
+  const dashed = halves && /^(\S{1,2})\s*[-–—]\s+(.+)$/.exec(halves[2]);
+  if (dashed)
+    searches.push({ artist: `${halves[1].trim()}-${dashed[1]}`, track: dashed[2].trim() });
+  else if (halves) searches.push({ artist: halves[1].trim(), track: halves[2].trim() });
   if (artist?.trim()) searches.push({ track: clean, artist: cleanArtist(artist) });
   else if (!halves) searches.push({ track: clean, artist: "" });
   return searches.filter((s) => s.track);

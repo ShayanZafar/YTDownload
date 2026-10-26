@@ -290,9 +290,15 @@ What each file does, and the function and constant names to look for. This was C
   asked in turn until one has all of it, and the one with the most is used (the earlier on a tie;
   one with none of it is passed over); `noneHasIt` says every catalogue answered and none had it.
   A name with no dash and no artist ("Michael Jackson Earth Song") matches a song whose artist and
-  title it is (`namesBoth()`). `pickMatch()` takes only the same title by the same artist (or, without an artist, the same
+  title it is, or one of its artists and its title (`namesBoth()`). `pickMatch()` takes only the same title by the same artist (or, without an artist, the same
   length) — or a title that differs only in brackets, the same length — best the same title and
-  length on the artist's own album; each is asked no faster than its published limit
+  length on the artist's own album. The same title can have its words in another order ("Remix
+  (Paul Oakenfold)"), and a featured artist after it ("ft. Daddy Yankee") is left out; the same
+  artist is a whole name, one of a credit's names ("Bob Marley & The Wailers"), spelt the same but
+  for spaces and signs ("ACDC", "AC/DC") or a letter or two out: never part of a name ("Fred &
+  Ginger" isn't "Fred Lark Brown"). A search that finds nothing is asked again with the bare title
+  (`bareTitle()`: without brackets, a last "- Live 1978", or a year, "original", "HD" at the end).
+  MusicBrainz is given 20 seconds to answer, the others 8. Each is asked no faster than its published limit
   (`CATALOGUE_LIMITS`: iTunes 20 a minute, Deezer 50 in 5 s, MusicBrainz 1 a second; past it Deezer answers "nothing" for
   songs it has), and one that refuses (iTunes `403`/`429`, Deezer error 4) or whose limit is used up
   is skipped at once until its time is up; covers only from
@@ -341,7 +347,9 @@ What each file does, and the function and constant names to look for. This was C
   it's left as it is
 - `server/lyrics.ts` — lyrics for the player from LRCLIB's search (`lrclib.net`, free, no key; only
   title, artist and length sent): `searchesFor()`, `pickLyrics()` (same length ±3 s, synced first),
-  `parseLrc()`; answers cached in memory. Pure parts unit-tested
+  `parseLrc()`; answers cached in memory. `cleanSongTitle()` and `searchesFor()` are also how
+  the catalogues are searched ("Static - X - Dead Souls" is Static-X's "Dead Souls"). Pure parts
+  unit-tested
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename; `server/retry-when-busy.ts` retries the renames and deletes Windows briefly
@@ -355,7 +363,8 @@ What each file does, and the function and constant names to look for. This was C
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
   default name of any download found from Spotify); `shared/name-noise.ts` has `withoutNameNoise()`
-  (a name without "(Official Video)", "HQ", "Lyrics Video", "(1998)", a copy's "(1)", and
+  (a name without "(Official Video)", "HQ", "Lyrics Video", "(1998)", a copy's "(1)", a
+  converter site's "yt1s.com - " in front, and
   `decodeEntities()` for "&#39"), used before the catalogues and LRCLIB are searched and for a
   download's title tag, and `sanitizedFileName()` (Sanitize Filename's tidy name, also a download's
   default file name, on the page and the server; parts in capitals put in title case by
