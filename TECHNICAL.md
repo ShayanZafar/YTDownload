@@ -13,7 +13,6 @@ This document covers the project's architecture, local development setup, enviro
 - **Wouter** for client-side routing
 - **TanStack Query v5** for server-state management and caching
 - **Tailwind CSS 4** (through `@tailwindcss/vite`; the theme is in `client/src/index.css`, `tw-animate-css` for animations) with shadcn/ui components for styling
-- **Framer Motion** for animations
 - **Lucide React** for icons
 
 ### Backend
@@ -120,7 +119,7 @@ This document covers the project's architecture, local development setup, enviro
 ├── docs/
 │   ├── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
 │   └── sources.md             # The outside sources: primary, fallbacks, health, what was rejected
-├── vite.config.ts             # Vite configuration
+├── vite.config.ts             # Vite configuration (the dev server prepares the page's code as it starts: `server.warmup`)
 ├── tests/                     # unit, api (Vitest) and browser (Playwright) tests
 ├── CLAUDE.md                  # Claude Code's instructions, sent with every request (≤600 words)
 ├── LEARNING.md                # The stack, mapped onto .NET concepts

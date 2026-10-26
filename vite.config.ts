@@ -19,6 +19,9 @@ export default defineConfig({
   },
   // The development server (npm run dev; server/vite.ts applies these options).
   server: {
+    // The page's code is prepared as the server starts, not when the page first
+    // asks for it, so the first load after a restart is as quick as the next.
+    warmup: { clientFiles: ["./src/main.tsx"] },
     // Vite sends files by their path on disk (/@fs/<path>) to anyone who can reach
     // the app — with HOST=0.0.0.0, every device on the network. So it sends only
     // what the page loads: its code (client/), shared/, and packages (node_modules,
