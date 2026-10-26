@@ -67,6 +67,14 @@ function copyText({ keep, check, kept }: { keep: FolderTrack; check: SongCheck; 
       : "";
   return `The same song as “${fileOf(keep.fileName)}”, the same length: that one is kept${quality}.`;
 }
+/** What the list is for, as a sentence ends: "The list is for songs below 128 kbps". */
+const barText: Record<QualityBar, string> = {
+  "128": "songs below 128 kbps",
+  "192": "songs below 192 kbps",
+  "256": "songs below 256 kbps",
+  lossless: "songs that aren't lossless",
+  off: "no quality bar",
+};
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
@@ -100,6 +108,8 @@ export function Housekeeping({
   onClose: () => void;
 }) {
   const [stage, setStage] = useState<Stage>({ name: "intro" });
+  // The bar the list is for: the one chosen when Check was last pressed.
+  const [listedBar, setListedBar] = useState<QualityBar>(qualityBar);
   const [checks, setChecks] = useState<Map<string, SongCheck | string>>(new Map());
   const [others, setOthers] = useState<FolderFile[]>([]);
   // What the person ticked or unticked, over each item's own default.
@@ -139,7 +149,7 @@ export function Housekeeping({
         ? { kind: "damaged" as const, text: `Couldn't be checked: ${check}` }
         : copy
           ? { kind: "copy" as const, text: copyText(copy) }
-          : songProblem(check, qualityBar);
+          : songProblem(check, listedBar);
     if (!problem) continue;
     items.push({
       key: track.key,
@@ -172,6 +182,7 @@ export function Housekeeping({
     const abort = new AbortController();
     controller.current = abort;
     let done = 0;
+    setListedBar(qualityBar);
     setChecks(new Map());
     setGone(new Set());
     setStage({ name: "checking", done, total: tracks.length });
@@ -258,22 +269,42 @@ export function Housekeeping({
           )}
 
           {(stage.name === "intro" || stage.name === "review") && (
-            <label className="flex flex-wrap items-center gap-2 text-xs text-foreground">
-              Low quality:
-              <select
-                value={qualityBar}
-                aria-label="Low quality"
-                onChange={(event) => onQualityBar(event.target.value as QualityBar)}
-                className="rounded border border-border bg-background px-2 py-1 text-xs"
-              >
-                {qualityBars.map((bar) => (
-                  <option key={bar} value={bar}>
-                    {qualityBarLabels[bar]}
-                  </option>
-                ))}
-              </select>
-              <span className="text-muted-foreground">Lossless files (FLAC, WAV) always pass.</span>
-            </label>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-foreground">
+              <label className="flex items-center gap-2">
+                Low quality:
+                <select
+                  value={qualityBar}
+                  aria-label="Low quality"
+                  onChange={(event) => onQualityBar(event.target.value as QualityBar)}
+                  className="rounded border border-border bg-background px-2 py-1 text-xs"
+                >
+                  {qualityBars.map((bar) => (
+                    <option key={bar} value={bar}>
+                      {qualityBarLabels[bar]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {stage.name === "review" && qualityBar !== listedBar ? (
+                <>
+                  {/* The songs are read already: the new bar only needs their bitrates. */}
+                  <button
+                    type="button"
+                    className={primary}
+                    onClick={() => setListedBar(qualityBar)}
+                  >
+                    Check {count(checks.size, "song")}
+                  </button>
+                  <span className="text-muted-foreground">
+                    The list is for {barText[listedBar]} until you press Check.
+                  </span>
+                </>
+              ) : (
+                <span className="text-muted-foreground">
+                  Lossless files (FLAC, WAV) always pass.
+                </span>
+              )}
+            </div>
           )}
 
           {stage.name === "intro" && (

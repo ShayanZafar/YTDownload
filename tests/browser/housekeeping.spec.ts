@@ -87,15 +87,28 @@ test("Housekeeping finds songs that aren't audio, are cut short, low quality or 
   await expect(panel.getByRole("checkbox", { name: "Delete “notes.txt”" })).not.toBeChecked();
   await expect(panel.getByRole("button", { name: "Delete 5 files" })).toBeVisible();
 
-  // The bar is a setting: off, the low-bitrate song isn't listed (and the app keeps it).
+  // Another bar lists its songs once Check is pressed (the songs aren't read again).
   const bar = panel.getByRole("combobox", { name: "Low quality" });
+  await bar.selectOption({ label: "Below 256 kbps" });
+  await expect(
+    panel.getByText("The list is for songs below 128 kbps until you press Check."),
+  ).toBeVisible();
+  await expect(group("Low quality")).not.toContainText("Good.mp3");
+  await panel.getByRole("button", { name: "Check 6 songs" }).click();
+  await expect(group("Low quality")).toContainText("Good.mp3");
+  await expect(group("Low quality")).toContainText("192 kbps: below 256 kbps.");
+  await expect(panel.getByRole("button", { name: "Delete 7 files" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Check 6 songs" })).toHaveCount(0);
+  // The bar is a setting: off, the low-bitrate song isn't listed (and the app keeps it).
   await bar.selectOption({ label: "Don't check" });
+  await panel.getByRole("button", { name: "Check 6 songs" }).click();
   await expect(group("Low quality")).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "Delete 4 files" })).toBeVisible();
   await expect
     .poll(async () => (await (await request.get("/api/settings")).json()).qualityBar)
     .toBe("off");
   await bar.selectOption({ label: "Below 128 kbps" });
+  await panel.getByRole("button", { name: "Check 6 songs" }).click();
   await panel.getByRole("checkbox", { name: "Delete “Low.mp3”" }).uncheck();
 
   await panel.getByRole("button", { name: "Delete 4 files" }).click();
