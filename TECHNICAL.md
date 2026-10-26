@@ -83,6 +83,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── folders.ts             # The folder browser: list and make folders, quick links, new files
 │   ├── local-only.ts          # Folder routes answer only this computer's own page; history changes only the app's page
 │   ├── retry-when-busy.ts     # Retries a rename/delete Windows briefly blocks (antivirus, indexer)
+│   ├── json-file.ts           # writeJsonFile() (temp file + rename) and oneAtATime() for every data/*.json store
 │   ├── vite.ts                # Dev-only Vite middleware integration
 │   └── static.ts              # Production static-file serving
 ├── shared/                    # Code shared between client & server
@@ -419,6 +420,11 @@ What each file does, and the function and constant names to look for. This was C
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename; `server/retry-when-busy.ts` retries the renames and deletes Windows briefly
   blocks (antivirus, the indexer)
+- `server/json-file.ts` — the one way the app writes its `data/*.json` files: `writeJsonFile()`
+  (pretty JSON to a temp file, then a rename through `retryWhenBusy()`; `mode` for the Spotify
+  sign-in's 0o600) and `oneAtATime()`, the queue that runs one file's changes one after another.
+  Used by the history, settings, Not found marks, source health and Spotify sign-in; a new JSON
+  store uses them too (unit-tested)
 - `shared/` — schema and API contracts shared by client and server; `shared/soundcloud-link.ts` has
   `parseSoundCloudLink()` (a SoundCloud track's one canonical link,
   `https://api.soundcloud.com/tracks/<digits>`, from that or the URL-encoded URN form yt-dlp lists —

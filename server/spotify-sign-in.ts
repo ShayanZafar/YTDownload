@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
 import { z } from "zod";
-import { retryWhenBusy } from "./retry-when-busy";
+import { oneAtATime, writeJsonFile } from "./json-file";
 import { sourceHealth } from "./source-health";
 
 /**
@@ -92,7 +92,7 @@ type TokenAnswer = { access_token: string; refresh_token?: string; expires_in: n
 
 export class SpotifySignIn {
   // Each write waits for the previous one to finish.
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly queue = oneAtATime();
   /** Sign-ins started on the page, by their `state`, until Spotify sends the browser back. */
   private pending = new Map<string, Pending>();
   /** One renewal at a time: everyone asking meanwhile waits for the same one. */
@@ -125,21 +125,11 @@ export class SpotifySignIn {
   }
 
   private write(change: (saved: Saved) => Saved): Promise<Saved> {
-    const run = async () => {
+    return this.queue(async () => {
       const next = change(await this.read());
-      const file = this.file();
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      const tmp = `${file}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(next, null, 2) + "\n", {
-        encoding: "utf8",
-        mode: 0o600,
-      });
-      await retryWhenBusy(() => fs.rename(tmp, file));
+      await writeJsonFile(this.file(), next, { mode: 0o600 });
       return next;
-    };
-    const result = this.queue.then(run, run);
-    this.queue = result.catch(() => {});
-    return result;
+    });
   }
 
   /** What the page shows: the Client ID, and who is signed in (never the passes). */
