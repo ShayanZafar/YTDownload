@@ -481,13 +481,13 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
       await expect(page.getByText(/download cancelled/i).first()).toBeVisible();
       await expect.poll(() => fs.readdir(target), { timeout: 10_000 }).toEqual([]);
 
-      // A full download lands in the folder as a real MP3.
+      // A full download lands in the folder as a real MP3, named "Artist - Title".
       await downloadLink.click();
       await expect(page.getByText(/saved to “test music”/i).first()).toBeVisible({
         timeout: 90_000,
       });
       const files = await fs.readdir(target);
-      expect(files).toEqual([expect.stringMatching(/^Me at the zoo.*\.mp3$/i)]);
+      expect(files).toEqual([expect.stringMatching(/^jawed - Me at the zoo.*\.mp3$/i)]);
       const verdict = await verifyMp3File(path.join(target, files[0]));
       expect(verdict.isValid, `Saved file is not a valid MP3: ${verdict.reason}`).toBe(true);
       expect(browserDownloads).toBe(0);
