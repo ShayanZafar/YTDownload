@@ -5,6 +5,8 @@
  * catalogues and LRCLIB) and the page.
  */
 
+import { safeFileName } from "./filename";
+
 const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
 
 /** "Warrior&#39s Call" → "Warrior's Call": HTML entities, with or without their ";". */
@@ -38,4 +40,20 @@ export function withoutNameNoise(text: string): string {
   clean = clean.replace(/\)\s+(?:19|20)\d{2}$/, ")");
   clean = clean.replace(/\s+/g, " ").trim();
   return clean || text.trim();
+}
+
+/**
+ * Sanitize Filename: a song's file name (without its extension) as it should
+ * read — without the noise above, "Artist- Song" and "Artist_-_Song" as
+ * "Artist - Song", no stray dashes at either end — and safe to save
+ * (safeFileName). The name itself if nothing's left of it.
+ */
+export function sanitizedFileName(name: string): string {
+  let clean = /\s/.test(name) ? name : name.replace(/_+/g, " ");
+  clean = withoutNameNoise(clean)
+    .replace(/\s*[-–—]\s+|\s+[-–—]\s*/g, " - ")
+    .replace(/^[\s\-–—_.]+|[\s\-–—_]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean ? safeFileName(clean, name) : name;
 }

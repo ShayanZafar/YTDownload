@@ -11,10 +11,13 @@ import {
   musicLibrarySchema,
   noBinSchema,
   renamedSongSchema,
+  sanitizedSongSchema,
   type MusicLibrary,
   type MusicTrack,
   type RenamedSong,
+  type SanitizedSong,
 } from "@shared/schema";
+import { sanitizedFileName } from "@shared/name-noise";
 import { searchableText } from "@/lib/history-filter";
 import { ApiError, errorFrom, requestJson } from "@/lib/save-to-folder";
 
@@ -143,6 +146,34 @@ export async function fixFolderSongName(id: string): Promise<RenamedSong> {
   if (!done.success)
     throw new ApiError("The app sent an answer the page didn't expect.", res.status);
   return done.data;
+}
+
+/**
+ * Sanitize Filename: the name a folder song's file should have, without its
+ * folder or extension ("Junoon - Heer"), or undefined if it has it already.
+ */
+export function sanitizedNameOf(track: { fileName: string }): string | undefined {
+  const file = track.fileName.split(/[\\/]/).pop() ?? track.fileName;
+  const ext = /\.[^.]+$/.exec(file)?.[0] ?? "";
+  const name = file.slice(0, file.length - ext.length);
+  const clean = sanitizedFileName(name);
+  return clean !== name ? clean : undefined;
+}
+
+/**
+ * Rename, and Sanitize Filename: gives a folder song a new file name (its
+ * extension stays), title or artist; answers with it as it is now.
+ */
+export function renameFolderSong(
+  id: string,
+  change: { name?: string; title?: string; artist?: string },
+  signal?: AbortSignal,
+): Promise<SanitizedSong> {
+  return requestJson(sanitizedSongSchema, buildUrl(api.music.rename.path, { id }), {
+    method: api.music.rename.method,
+    json: change,
+    signal,
+  });
 }
 
 // --- Songs picked on this device ----------------------------------------------------------

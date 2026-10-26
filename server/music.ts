@@ -139,21 +139,38 @@ export async function deleteMusicFile(
  * (`realType`, from its tags): "Song.mp3" → "Song.m4a", or "Song (1).m4a" if
  * that's taken — an existing file is never replaced. Returns its new place.
  */
-export async function fixSongName(
+export function fixSongName(
   folder: string,
   file: AudioFile,
   realType: string,
 ): Promise<{ id: string; path: string }> {
-  const dir = path.dirname(file.absolute);
   const name = path.basename(file.absolute);
-  const target = await claimNewName(
-    dir,
+  return renameSong(
+    folder,
+    file,
     `${name.slice(0, name.length - path.extname(name).length)}${realType}`,
   );
+}
+
+/**
+ * Renames a song, in its own folder, to `fileName` (made safe already), or
+ * "Name (1).mp3" if another file has that name — an existing file is never
+ * replaced. A change of case only ("song.mp3" → "Song.mp3") is made as it
+ * is. Returns its new place.
+ */
+export async function renameSong(
+  folder: string,
+  file: AudioFile,
+  fileName: string,
+): Promise<{ id: string; path: string }> {
+  const dir = path.dirname(file.absolute);
+  const sameName = fileName.toLowerCase() === path.basename(file.absolute).toLowerCase();
+  const target = sameName ? path.join(dir, fileName) : await claimNewName(dir, fileName);
   try {
     await retryWhenBusy(() => fs.rename(file.absolute, target));
   } catch (err) {
-    await fs.rm(target, { force: true }).catch(() => {}); // the empty name it had claimed
+    // The empty name it had claimed.
+    if (!sameName) await fs.rm(target, { force: true }).catch(() => {});
     throw err;
   }
   forgetTags(file.absolute);

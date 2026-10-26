@@ -7,6 +7,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { FFMPEG_PATH } from "../../server/audio";
+import { parseFile } from "../../server/library";
 import { musicLibrarySchema, type MusicTrack } from "../../shared/schema";
 
 // The music player's routes, against real files in a temporary "Save to"
@@ -345,6 +346,64 @@ describe("Music player (API)", () => {
     ).toBe(200);
     await expect(fs.stat(path.join(folder, "Not A Song.mp3"))).rejects.toThrow();
     await fs.rm(path.join(folder, "Really M4A.m4a"));
+  });
+
+  it("renames a song for Sanitize Filename: its extension kept, a taken name numbered, a case change as it is", async () => {
+    const source = path.join(folder, "Sine Wave", "Test Tone.mp3");
+    const sub = path.join(folder, "Sanitize");
+    await fs.mkdir(sub);
+    for (const name of ["Junoon - Heer (Official Audio).mp3", "Junoon - Heer.mp3", "lithium.mp3"]) {
+      await fs.copyFile(source, path.join(sub, name));
+    }
+    const listed = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    const idOf = (name: string) => listed.find((t) => t.path === path.join("Sanitize", name))!.id;
+    const rename = (id: string, name: unknown) =>
+      request(app).post(`/api/music/${id}/rename`).send({ name });
+
+    const noisy = idOf("Junoon - Heer (Official Audio).mp3");
+    expect(
+      (await rename(noisy, "Junoon - Heer").set("X-Forwarded-For", "192.168.1.20")).status,
+    ).toBe(403);
+    expect((await rename(noisy, "  ")).status).toBe(400);
+    const renamed = await rename(noisy, "Junoon - Heer");
+    expect(renamed.status).toBe(200);
+    // "Junoon - Heer.mp3" is taken: a number, never over the other song.
+    expect(renamed.body.track).toMatchObject({
+      path: path.join("Sanitize", "Junoon - Heer (1).mp3"),
+    });
+    expect(renamed.body.track.id).not.toBe(noisy);
+    expect((await fs.readdir(sub)).sort()).toEqual([
+      "Junoon - Heer (1).mp3",
+      "Junoon - Heer.mp3",
+      "lithium.mp3",
+    ]);
+
+    const caseOnly = await rename(idOf("lithium.mp3"), "Lithium.mp3");
+    expect(caseOnly.body.track.path).toBe(path.join("Sanitize", "Lithium.mp3"));
+    expect(await fs.readdir(sub)).toContain("Lithium.mp3");
+    expect((await rename(caseOnly.body.track.id, "Lithium")).status).toBe(409);
+    expect((await rename(noisy, "Gone")).status).toBe(404);
+
+    // Rename: a new title and artist over the ones it has, and a new file name, at once.
+    const both = await request(app)
+      .post(`/api/music/${caseOnly.body.track.id}/rename`)
+      .send({ name: "Nirvana - Lithium", title: "Lithium", artist: "Nirvana" });
+    expect(both.status).toBe(200);
+    expect(both.body.track).toMatchObject({
+      path: path.join("Sanitize", "Nirvana - Lithium.mp3"),
+      title: "Lithium",
+      artist: "Nirvana",
+    });
+    const { common } = await parseFile(path.join(sub, "Nirvana - Lithium.mp3"));
+    expect([common.title, common.artist]).toEqual(["Lithium", "Nirvana"]);
+    const same = await request(app)
+      .post(`/api/music/${both.body.track.id}/rename`)
+      .send({ title: "Lithium" });
+    expect(same.status).toBe(409);
+    expect(
+      (await request(app).post(`/api/music/${both.body.track.id}/rename`).send({})).status,
+    ).toBe(400);
+    await fs.rm(sub, { recursive: true });
   });
 
   it("forgets the old folder's songs when the Save to folder changes", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeEntities, withoutNameNoise } from "../../shared/name-noise";
+import { decodeEntities, sanitizedFileName, withoutNameNoise } from "../../shared/name-noise";
 import { searchesFor } from "../../server/lyrics";
 
 // What video titles and file names add to a song's name (shared/name-noise.ts),
@@ -57,5 +57,31 @@ describe("searchesFor a file's name", () => {
       { artist: "Volbeat", track: "A Warrior's Call" },
     ]);
     expect(searchesFor({ title: "Jay-Z - Song HQ" })).toEqual([{ artist: "Jay-Z", track: "Song" }]);
+  });
+});
+
+describe("sanitizedFileName", () => {
+  it("tidies a file's name for Sanitize Filename", () => {
+    const cases: [string, string][] = [
+      ["Junoon - Heer (Official Audio)", "Junoon - Heer"],
+      ["Volbeat- A Warrior&#39s Call", "Volbeat - A Warrior's Call"],
+      ["- Stuntin Like My Daddy", "Stuntin Like My Daddy"],
+      ["Artist_-_Song_HQ", "Artist - Song"],
+      ["Genetic - Trancemission . HQ", "Genetic - Trancemission"],
+      ["Jimi Hendrix Purple Haze (1)", "Jimi Hendrix Purple Haze"],
+      ["Rock &quot;n&quot; Roll", "Rock n Roll"],
+    ];
+    for (const [name, clean] of cases) expect(sanitizedFileName(name)).toBe(clean);
+  });
+
+  it("leaves a tidy name as it is", () => {
+    for (const name of [
+      "Queen - Bohemian Rhapsody",
+      "T2 - 8-15 To Nowhere",
+      "Jay-Z - 99 Problems",
+      "HQ",
+    ]) {
+      expect(sanitizedFileName(name)).toBe(name);
+    }
   });
 });

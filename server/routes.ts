@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import path from "path";
 import { type Server } from "http";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
@@ -7,7 +8,7 @@ import { extractVideoId } from "./youtube-url";
 import { SearchFailed, searchSongs, searchSoundCloudOnly, type SongSearchOptions } from "./search";
 import { audioLinkOf } from "@shared/soundcloud-link";
 import { safeFileName } from "@shared/filename";
-import { audioTypeOf } from "@shared/audio-types";
+import { audioTypeOf, songNameOf } from "@shared/audio-types";
 import { musicIdSchema, type SaveSettings } from "@shared/schema";
 import {
   SpotifyError,
@@ -52,6 +53,7 @@ import {
   deleteMusicFile,
   findMusicFile,
   fixSongName,
+  renameSong,
   historyInFolder,
   listMusic,
   readCover,
@@ -464,6 +466,56 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const { saveFolder } = await settings.get();
       res.json(await fixSongName(saveFolder!, file, file.realType));
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: SONG_GONE });
+      }
+      sendFolderError(res, err, "Couldn't rename that song");
+    }
+  });
+
+  // Rename, and Sanitize Filename: a song gets the file name, title or artist
+  // the person typed or ticked — the tags first, then the file's name.
+  app.post(api.music.rename.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    const input = api.music.rename.input.safeParse(req.body);
+    if (!input.success) return res.status(400).json(validationError(input.error));
+    const { name, title, artist } = input.data;
+    try {
+      let file = await songFor(req, res, { anyFile: name !== undefined && !title && !artist });
+      if (!file) return;
+      const { saveFolder } = await settings.get();
+      const fileName =
+        name === undefined
+          ? undefined
+          : `${safeFileName(name, songNameOf(file.relative))}${path.extname(file.relative)}`;
+      const renaming = fileName !== undefined && fileName !== path.basename(file.relative);
+      const retagging = title !== undefined || artist !== undefined;
+      if (!renaming && !retagging) {
+        return res.status(409).json({ message: "It has that name already." });
+      }
+      let changed = false;
+      if (retagging) {
+        changed = (await writeSongDetails(file, {}, { replace: { title, artist } })).length > 0;
+        void logDetails({
+          kind: "write",
+          song: file.relative,
+          outcome: changed ? "renamed" : "nothing to change",
+          details: [title && `title ${title}`, artist && `artist ${artist}`].filter(
+            (word): word is string => !!word,
+          ),
+        });
+      }
+      let id = String(req.params.id);
+      if (renaming) {
+        id = (await renameSong(saveFolder!, file, fileName)).id;
+        changed = true;
+      }
+      if (!changed) return res.status(409).json({ message: "It has that name already." });
+      file = await findMusicFile(saveFolder!, id);
+      if (!file) return res.status(404).json({ message: SONG_GONE });
+      res.json({ track: toMusicTrack(saveFolder!, file, await readTags(file)) });
+    } catch (err) {
+      if (err instanceof SongDetailsError)
+        return res.status(err.status).json({ message: err.message });
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         return res.status(404).json({ message: SONG_GONE });
       }
