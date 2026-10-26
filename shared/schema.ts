@@ -184,6 +184,32 @@ export const spotifyPlaylistSchema = z.object({
 });
 
 export type SpotifyPlaylist = z.infer<typeof spotifyPlaylistSchema>;
+
+/** Signing in with Spotify, as the page sees it (never the passes themselves). */
+export const spotifyAccountSchema = z.object({
+  /** Can this browser sign in? Only one on the computer running the app can. */
+  canSignIn: z.boolean(),
+  /** Your Spotify app's Client ID, or null before you've added one. */
+  clientId: z.string().nullable(),
+  /** Who is signed in (their Spotify name), or null. */
+  signedInAs: z.string().nullable(),
+  /** The Redirect URI to add to your Spotify app: this app's, on 127.0.0.1. */
+  redirectUri: z.string(),
+  /** Why the last sign-in didn't work, or null. */
+  error: z.string().nullable(),
+});
+export type SpotifyAccount = z.infer<typeof spotifyAccountSchema>;
+
+/** One of your playlists on Spotify, in the list of them. */
+export const ownPlaylistSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  name: z.string(),
+  by: z.string().nullable(),
+  image: z.string().nullable(),
+  songs: z.number(),
+});
+export type OwnPlaylist = z.infer<typeof ownPlaylistSchema>;
 export type PlaylistMore = NonNullable<SpotifyPlaylist["more"]>;
 
 /**

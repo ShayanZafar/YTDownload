@@ -25,6 +25,7 @@ import {
 } from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
 import { mapAtOnce } from "./cpu-cores";
+import { recordAccountAnswer } from "./spotify-sign-in";
 import { sourceHealth } from "./source-health";
 import { TtlCache } from "./youtube-limits";
 
@@ -542,6 +543,8 @@ export function parsePlaylistPage(
 type ApiPlaylistPage = { total?: unknown; items?: unknown };
 type ApiPlaylistItem = {
   is_local?: unknown;
+  /** The song, as `/items` answers since Spotify's Feb 2026 changes; `track` before. */
+  item?: ApiPlaylistItem["track"];
   track?: {
     type?: unknown;
     id?: unknown;
@@ -565,7 +568,7 @@ export function parsePlaylistItemsPage(json: unknown): {
   const page = (json ?? {}) as ApiPlaylistPage;
   const items = (Array.isArray(page.items) ? page.items : []) as ApiPlaylistItem[];
   const tracks = items.flatMap((entry): SpotifyPlaylistTrack[] => {
-    const track = entry?.track;
+    const track = entry?.item ?? entry?.track;
     // Songs only, as on the embed page: no episodes, local files or removed songs.
     if (!track || entry.is_local === true || track.type !== "track") return [];
     const id = typeof track.id === "string" && SPOTIFY_ID_RE.test(track.id) ? track.id : "";
@@ -694,18 +697,208 @@ export async function fetchMorePlaylistSongs(
   return { tracks, stop: { reason: "limit" } }; // cut at PLAYLIST_MAX_SONGS
 }
 
+/** Songs per page of `/playlists/<id>/items` when signed in. */
+const OWN_PAGE_SIZE = 50;
+
+/** The image closest to `width` pixels wide, from the Web API's `images` ({url, width}). */
+function apiImageOfWidth(images: unknown, width: number): string | null {
+  const list = (Array.isArray(images) ? images : [])
+    .filter((img: { url?: unknown }) => typeof img?.url === "string")
+    .sort((a: { width?: number }, b: { width?: number }) => (a.width ?? 0) - (b.width ?? 0));
+  const best = list.find((img: { width?: number }) => (img.width ?? 0) >= width) ?? list.at(-1);
+  return (best?.url as string | undefined) ?? null;
+}
+
+/** Asks Spotify's Web API as the signed-in person; undefined for no answer at all. */
+async function askAsYou(url: string, token: string): Promise<Response | undefined> {
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    recordAccountAnswer(res);
+    return res;
+  } catch {
+    sourceHealth.record("spotify-account", false, { note: "Couldn't reach Spotify" });
+    return undefined;
+  }
+}
+
+/** One page of your own playlist's songs, from `offset` on — or why Spotify didn't give it. */
+async function fetchOwnPlaylistPage(
+  id: string,
+  token: string,
+  offset: number,
+): Promise<{ page: ReturnType<typeof parsePlaylistItemsPage> } | { stop: MoreStop }> {
+  const params = new URLSearchParams({
+    offset: String(offset),
+    limit: String(Math.min(OWN_PAGE_SIZE, PLAYLIST_MAX_SONGS - offset)),
+  });
+  const res = await askAsYou(`https://api.spotify.com/v1/playlists/${id}/items?${params}`, token);
+  if (!res) return { stop: failedStop("no connection") };
+  if (res.status === 429) {
+    const retryAt = parseRetryAfter(res.headers.get("retry-after"), Date.now());
+    if (retryAt) return { stop: { reason: "refused", retryAt } };
+  }
+  if (!res.ok) return { stop: failedStop(`HTTP ${res.status}`) };
+  try {
+    return { page: parsePlaylistItemsPage(await res.json()) };
+  } catch {
+    return { stop: failedStop("an answer it couldn't read") };
+  }
+}
+
 /**
- * The songs in a public playlist or album: Spotify's public embed page, and
- * for a playlist of more than 100 songs, the rest from its Web API — or, if
- * the app didn't get them all, why (`more`).
+ * A playlist you made or collaborate on, whole (up to `PLAYLIST_MAX_SONGS`),
+ * from Spotify's Web API with your sign-in — private ones too. Undefined when
+ * Spotify won't share its songs with you (someone else's playlist: since Feb
+ * 2026 it gives only its name) or doesn't answer: the caller then reads the
+ * embed page as for anyone. Pages after the first are asked for together, a
+ * page per CPU core at a time; one that fails keeps what came before it.
+ */
+export async function fetchOwnPlaylist(
+  id: string,
+  token: string,
+): Promise<SpotifyPlaylist | undefined> {
+  if (!SPOTIFY_ID_RE.test(id)) return undefined;
+  const res = await askAsYou(`https://api.spotify.com/v1/playlists/${id}`, token);
+  if (!res?.ok) return undefined;
+  let json: {
+    name?: unknown;
+    owner?: { display_name?: unknown } | null;
+    images?: unknown;
+    items?: unknown;
+  };
+  try {
+    json = (await res.json()) as typeof json;
+  } catch {
+    return undefined;
+  }
+  const name = typeof json.name === "string" ? json.name.trim() : "";
+  if (!name || !json.items || typeof json.items !== "object") return undefined;
+  const first = parsePlaylistItemsPage(json.items);
+  const by = typeof json.owner?.display_name === "string" ? json.owner.display_name.trim() : "";
+  const playlist: SpotifyPlaylist = {
+    source: "spotify",
+    kind: "playlist",
+    id,
+    url: `https://open.spotify.com/playlist/${id}`,
+    name,
+    by: by || null,
+    image: apiImageOfWidth(json.images, 300),
+    tracks: [...first.tracks],
+    maybeMore: false,
+  };
+  const stopped = (stop: MoreStop): SpotifyPlaylist => ({
+    ...playlist,
+    maybeMore: true,
+    more: {
+      reason: stop.reason,
+      ...(stop.note && { note: stop.note }),
+      ...(stop.retryAt && { retryAt: new Date(stop.retryAt).toISOString() }),
+    },
+  });
+
+  let offset = first.count;
+  if (first.count === 0 || offset >= first.total) return playlist;
+  const offsets: number[] = [];
+  const end = Math.min(first.total, PLAYLIST_MAX_SONGS);
+  for (let at = offset; at < end; at += OWN_PAGE_SIZE) offsets.push(at);
+  const answers = await mapAtOnce(offsets, (at) => fetchOwnPlaylistPage(id, token, at));
+  const refusal = answers
+    .map((answer) => ("stop" in answer ? answer.stop : undefined))
+    .find((stop) => stop?.reason === "refused");
+  for (const answer of answers) {
+    if ("stop" in answer) return stopped(refusal ?? answer.stop);
+    const { page } = answer;
+    const asked = Math.min(OWN_PAGE_SIZE, PLAYLIST_MAX_SONGS - offset);
+    playlist.tracks.push(...page.tracks);
+    offset += page.count;
+    if (page.count === 0 || offset >= page.total) return playlist;
+    // A short page before the end would leave a gap before the next: stop there.
+    if (page.count < asked) return stopped(refusal ?? failedStop("a page came back short"));
+  }
+  return stopped({ reason: "limit" }); // cut at PLAYLIST_MAX_SONGS
+}
+
+/** One of your playlists, as the list of them shows it. */
+export type OwnPlaylistSummary = {
+  id: string;
+  url: string;
+  name: string;
+  by: string | null;
+  image: string | null;
+  songs: number;
+};
+
+/** The most of your playlists the list shows. */
+const MY_PLAYLISTS_MAX = 500;
+
+/** Your playlists on Spotify (made, followed, collaborative), as Spotify lists them. */
+export async function fetchMyPlaylists(token: string): Promise<OwnPlaylistSummary[]> {
+  const list: OwnPlaylistSummary[] = [];
+  for (let offset = 0; offset < MY_PLAYLISTS_MAX; offset += 50) {
+    const params = new URLSearchParams({ offset: String(offset), limit: "50" });
+    const res = await askAsYou(`https://api.spotify.com/v1/me/playlists?${params}`, token);
+    if (!res) throw new SpotifyError(502, "Couldn't reach Spotify.");
+    if (!res.ok) {
+      throw new SpotifyError(
+        res.status === 401 ? 401 : 502,
+        res.status === 401
+          ? "Your Spotify sign-in ended. Sign in again."
+          : `Spotify didn't list your playlists (HTTP ${res.status}).`,
+      );
+    }
+    const page = (await res.json().catch(() => ({}))) as { items?: unknown; next?: unknown };
+    const items = Array.isArray(page.items) ? page.items : [];
+    for (const raw of items) {
+      const item = raw as {
+        id?: unknown;
+        name?: unknown;
+        owner?: { display_name?: unknown } | null;
+        images?: unknown;
+        items?: { total?: unknown } | null;
+        tracks?: { total?: unknown } | null;
+      } | null;
+      const id = typeof item?.id === "string" && SPOTIFY_ID_RE.test(item.id) ? item.id : "";
+      const name = typeof item?.name === "string" ? item.name.trim() : "";
+      if (!id || !name) continue;
+      const total = item?.items?.total ?? item?.tracks?.total;
+      const by =
+        typeof item?.owner?.display_name === "string" ? item.owner.display_name.trim() : "";
+      list.push({
+        id,
+        url: `https://open.spotify.com/playlist/${id}`,
+        name,
+        by: by || null,
+        image: apiImageOfWidth(item?.images, 64),
+        songs: typeof total === "number" && total >= 0 ? total : 0,
+      });
+    }
+    if (items.length < 50 || !page.next) break;
+  }
+  return list;
+}
+
+/**
+ * The songs in a playlist or album. A playlist you made or collaborate on
+ * comes whole from Spotify's Web API when you've signed in (`signedIn` gives
+ * the pass); any other, or when that doesn't answer, from Spotify's public
+ * embed page, and for a playlist of more than 100 songs, the rest from its
+ * Web API with the embed page's anonymous pass — or, if the app didn't get
+ * them all, why (`more`).
  */
 export async function fetchSpotifyPlaylist(
   kind: "playlist" | "album",
   id: string,
+  { signedIn }: { signedIn?: () => Promise<string | undefined> } = {},
 ): Promise<SpotifyPlaylist> {
   if ((kind !== "playlist" && kind !== "album") || !SPOTIFY_ID_RE.test(id)) {
     throw new SpotifyError(400, "That isn't a valid Spotify playlist link.");
   }
+  const yourPass = kind === "playlist" ? await signedIn?.() : undefined;
+  const own = yourPass ? await fetchOwnPlaylist(id, yourPass) : undefined;
+  if (own) return own;
   const html = await fetchEmbedPage(`${kind}/${id}`, notFoundMessage(kind));
   const playlist = parsePlaylistPage(html, kind, id);
   const token = playlist.maybeMore ? readEmbedAccessToken(html) : undefined;

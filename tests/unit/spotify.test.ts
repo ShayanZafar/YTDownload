@@ -8,6 +8,7 @@ import {
   RETRY_FAILED_AFTER_MS,
   SpotifyError,
   cleanTrackTitle,
+  fetchMyPlaylists,
   fetchOembedTrack,
   fetchSpotifyPlaylist,
   fetchSpotifyTrack,
@@ -438,6 +439,14 @@ describe("parsePlaylistItemsPage", () => {
     ]);
   });
 
+  it("reads the song under `item`, as `/items` answers since Spotify's Feb 2026 changes", () => {
+    const page = parsePlaylistItemsPage({
+      total: 1,
+      items: [{ is_local: false, item: apiItem(7).track }],
+    });
+    expect(page.tracks.map((t) => t.title)).toEqual(["Song 7"]);
+  });
+
   it("copes with an answer it can't read", () => {
     for (const json of [null, "text", { items: "nope" }, { total: -1, items: [] }]) {
       expect(parsePlaylistItemsPage(json)).toEqual({ tracks: [], count: 0, total: 0 });
@@ -742,6 +751,199 @@ describe("fetchSpotifyPlaylist", () => {
     expect(playlist.maybeMore).toBe(true);
     expect(playlist.more).toEqual({ reason: "limit" });
     expect(fetch).toHaveBeenCalledTimes(1 + pages.length);
+  });
+});
+
+describe("fetchSpotifyPlaylist with your Spotify sign-in", () => {
+  const PLAYLIST = "1aBcDeFgHiJkLmNoPqRsTu";
+  const YOURS = "BQDyourOwnPassFromSigningIn0000000000000";
+  const signedIn = async () => YOURS;
+  /** An entry as `/items` answers since Spotify's Feb 2026 changes: the song under `item`. */
+  const itemEntry = (n: number) => ({ is_local: false, item: apiItem(n).track });
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  const itemsPage = (from: number, to: number, total: number) => ({
+    total,
+    items: Array.from({ length: Math.max(0, to - from) }, (_, i) => itemEntry(from + i)),
+  });
+  /** Spotify: your playlist (`total` songs, `first` in its first page) by address. */
+  const standIn = (total: number, answer?: (url: URL) => Response | undefined) => {
+    const fetch = vi.fn(async (url: string, _init?: RequestInit) => {
+      const asked = new URL(url);
+      const own = answer?.(asked);
+      if (own) return own;
+      if (asked.pathname === `/v1/playlists/${PLAYLIST}`) {
+        return json({
+          name: "Trance Legends",
+          owner: { display_name: "Shayan" },
+          images: [
+            { url: "https://i.scdn.co/image/640", width: 640 },
+            { url: "https://i.scdn.co/image/300", width: 300 },
+          ],
+          items: itemsPage(0, Math.min(100, total), total),
+        });
+      }
+      if (asked.pathname === `/v1/playlists/${PLAYLIST}/items`) {
+        const offset = Number(asked.searchParams.get("offset"));
+        const limit = Number(asked.searchParams.get("limit"));
+        return json(itemsPage(offset, Math.min(offset + limit, total), total));
+      }
+      throw new TypeError(`fetch failed: nothing stands in for ${url}`);
+    });
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    webApiRefusal.clear();
+  });
+
+  it("lists your own playlist whole from the Web API, 50 songs a page, with your pass", async () => {
+    const fetch = standIn(260);
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST, { signedIn });
+    expect(playlist).toMatchObject({
+      name: "Trance Legends",
+      by: "Shayan",
+      image: "https://i.scdn.co/image/300",
+      url: `https://open.spotify.com/playlist/${PLAYLIST}`,
+      maybeMore: false,
+    });
+    expect(playlist.more).toBeUndefined();
+    expect(playlist.tracks).toHaveLength(260);
+    expect(playlist.tracks.map((t) => t.title).slice(99, 101)).toEqual(["Song 99", "Song 100"]);
+    expect(playlist.tracks[0]).toMatchObject({ artists: "Band, Guest", duration: 200 });
+    // No embed page and no anonymous pass: just yours.
+    const urls = fetch.mock.calls.map(([url]) => url);
+    expect(urls.some((url) => url.includes("/embed/"))).toBe(false);
+    for (const [, init] of fetch.mock.calls) {
+      expect(init?.headers).toEqual({ Authorization: `Bearer ${YOURS}` });
+    }
+    const offsets = urls
+      .filter((url) => url.includes("/items?"))
+      .map((url) => new URL(url).searchParams.get("offset"))
+      .sort((a, b) => Number(a) - Number(b));
+    expect(offsets).toEqual(["100", "150", "200", "250"]);
+  });
+
+  it("reads someone else's playlist from the embed page, as when signed out", async () => {
+    // Since Feb 2026 Spotify answers a playlist that isn't yours without its songs.
+    const fetch = standIn(0, (url) =>
+      url.pathname === `/v1/playlists/${PLAYLIST}`
+        ? json({ name: "Not Mine", owner: { display_name: "Someone" } })
+        : url.pathname === `/embed/playlist/${PLAYLIST}`
+          ? new Response(
+              embedPage({
+                state: { data: { entity: playlistEntity }, settings: { session: {} } },
+              }),
+            )
+          : undefined,
+    );
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST, { signedIn });
+    expect(playlist.name).toBe(playlistEntity.name);
+    expect(fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      `/v1/playlists/${PLAYLIST}`,
+      `/embed/playlist/${PLAYLIST}`,
+    ]);
+  });
+
+  it("falls back to the embed page when Spotify refuses your pass or isn't reached", async () => {
+    for (const refusal of [json({ error: { status: 403 } }, 403), json({}, 401)]) {
+      standIn(0, (url) =>
+        url.pathname === `/v1/playlists/${PLAYLIST}`
+          ? refusal
+          : url.pathname === `/embed/playlist/${PLAYLIST}`
+            ? new Response(
+                embedPage({
+                  state: { data: { entity: playlistEntity }, settings: { session: {} } },
+                }),
+              )
+            : undefined,
+      );
+      expect((await fetchSpotifyPlaylist("playlist", PLAYLIST, { signedIn })).name).toBe(
+        playlistEntity.name,
+      );
+    }
+  });
+
+  it("asks nothing as you when nobody is signed in", async () => {
+    const fetch = standIn(0, (url) =>
+      url.pathname.startsWith("/embed/")
+        ? new Response(
+            embedPage({ state: { data: { entity: playlistEntity }, settings: { session: {} } } }),
+          )
+        : undefined,
+    );
+    await fetchSpotifyPlaylist("playlist", PLAYLIST, { signedIn: async () => undefined });
+    expect(fetch.mock.calls.map(([url]) => new URL(url).hostname)).toEqual(["open.spotify.com"]);
+  });
+
+  it("keeps the songs before a page that fails, and says when Spotify refused", async () => {
+    standIn(300, (url) =>
+      url.pathname.endsWith("/items") && url.searchParams.get("offset") === "200"
+        ? new Response("{}", { status: 429, headers: { "retry-after": "30" } })
+        : undefined,
+    );
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST, { signedIn });
+    expect(playlist.tracks).toHaveLength(200);
+    expect(playlist.maybeMore).toBe(true);
+    expect(playlist.more?.reason).toBe("refused");
+    // Your own quota: the anonymous route's refusal is left alone.
+    expect(webApiRefusal.until).toBe(0);
+  });
+
+  it(`stops at ${PLAYLIST_MAX_SONGS} songs`, async () => {
+    standIn(PLAYLIST_MAX_SONGS + 40);
+    const playlist = await fetchSpotifyPlaylist("playlist", PLAYLIST, { signedIn });
+    expect(playlist.tracks).toHaveLength(PLAYLIST_MAX_SONGS);
+    expect(playlist.more).toEqual({ reason: "limit" });
+  });
+});
+
+describe("fetchMyPlaylists", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("lists your playlists with their song counts, page after page", async () => {
+    const playlist = (n: number) => ({
+      id: `${String(n).padStart(4, "0")}aBcDeFgHiJkLmNoPqR`.slice(0, 22),
+      name: `List ${n}`,
+      owner: { display_name: "Shayan" },
+      images: [{ url: `https://i.scdn.co/${n}`, width: 640 }],
+      items: { total: n },
+    });
+    const fetch = vi.fn(async (url: string) => {
+      const offset = Number(new URL(url).searchParams.get("offset"));
+      const count = offset === 0 ? 50 : 3;
+      return Response.json({
+        items: Array.from({ length: count }, (_, i) => playlist(offset + i)),
+        next: offset === 0 ? "more" : null,
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const list = await fetchMyPlaylists("BQDyourOwnPassFromSigningIn0000000000000");
+    expect(list).toHaveLength(53);
+    expect(list[52]).toEqual({
+      id: playlist(52).id,
+      url: `https://open.spotify.com/playlist/${playlist(52).id}`,
+      name: "List 52",
+      by: "Shayan",
+      image: "https://i.scdn.co/52",
+      songs: 52,
+    });
+    expect(fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      "/v1/me/playlists",
+      "/v1/me/playlists",
+    ]);
+  });
+
+  it("says to sign in again when Spotify no longer takes the pass", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 401 })),
+    );
+    await expect(fetchMyPlaylists("BQDexpired0000000000000000")).rejects.toMatchObject({
+      status: 401,
+      message: "Your Spotify sign-in ended. Sign in again.",
+    });
   });
 });
 

@@ -30,6 +30,8 @@ import {
   sourceHealthReportSchema,
   spotifyIdSchema,
   spotifyPlaylistSchema,
+  spotifyAccountSchema,
+  ownPlaylistSchema,
   spotifyTrackSchema,
 } from "./schema";
 
@@ -250,6 +252,47 @@ export const api = {
         200: spotifyPlaylistSchema,
         400: errorSchemas.validation,
         404: errorSchemas.notFound,
+        502: errorSchemas.internal,
+      },
+    },
+  },
+  /**
+   * Signing in with Spotify, so your own playlists list whole (see
+   * server/spotify-sign-in.ts). Only a browser on the computer running the
+   * app can see or change it.
+   */
+  spotifyAccount: {
+    /** Whether there's a Client ID, who is signed in, and the address to give Spotify. */
+    status: {
+      method: "GET" as const,
+      path: "/api/spotify/account" as const,
+      responses: { 200: spotifyAccountSchema },
+    },
+    /** Sets (or, with null, removes) your Spotify app's Client ID; a new one signs you out. */
+    clientId: {
+      method: "PUT" as const,
+      path: "/api/spotify/account/client-id" as const,
+      input: z.object({ clientId: z.string().max(100).nullable() }),
+      responses: { 200: spotifyAccountSchema, 400: errorSchemas.validation },
+    },
+    /** Starts a sign-in: where to send the browser (Spotify's sign-in page). */
+    signIn: {
+      method: "POST" as const,
+      path: "/api/spotify/account/sign-in" as const,
+      responses: { 200: z.object({ url: z.string() }), 400: errorSchemas.validation },
+    },
+    signOut: {
+      method: "POST" as const,
+      path: "/api/spotify/account/sign-out" as const,
+      responses: { 200: spotifyAccountSchema },
+    },
+    /** Your playlists on Spotify, to open one without finding its link. */
+    playlists: {
+      method: "GET" as const,
+      path: "/api/spotify/account/playlists" as const,
+      responses: {
+        200: z.array(ownPlaylistSchema),
+        401: errorSchemas.validation,
         502: errorSchemas.internal,
       },
     },

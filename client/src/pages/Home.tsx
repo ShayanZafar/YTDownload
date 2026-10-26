@@ -12,6 +12,7 @@ import { RecentExtractions } from "@/components/recent-extractions";
 import { SaveToSetting } from "@/components/save-to-setting";
 import { FolderPicker } from "@/components/folder-picker";
 import { RecentPlaylists } from "@/components/recent-playlists";
+import { SpotifyAccount } from "@/components/spotify-account";
 import { SpotifyPlaylistPanel } from "@/components/spotify-playlist";
 import { MusicLibrary } from "@/components/music-library";
 import {
@@ -597,12 +598,15 @@ export default function Home() {
         />
 
         {mode === "playlist" && (
-          <RecentPlaylists
-            playlists={recentPlaylists.list}
-            openLink={playlistLink}
-            onOpen={openPlaylist}
-            onForget={recentPlaylists.forget}
-          />
+          <>
+            <SpotifyAccount openLink={playlistLink} onOpen={openPlaylist} />
+            <RecentPlaylists
+              playlists={recentPlaylists.list}
+              openLink={playlistLink}
+              onOpen={openPlaylist}
+              onForget={recentPlaylists.forget}
+            />
+          </>
         )}
 
         {/* Where downloads go — visible before a video is opened, and used by Redownload too. */}
