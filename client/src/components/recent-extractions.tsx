@@ -39,7 +39,13 @@ type RecentExtractionsProps = {
   /** Saves into the folder that are running, by their download link. */
   saves: Record<string, ActiveSave>;
   /** A Redownload link was clicked: false when the page handles it (a save into the folder). */
-  onDownload: (event: React.MouseEvent, href: string, request: SaveRequest) => boolean;
+  /** `title`: what the song is called while it's saved. */
+  onDownload: (
+    event: React.MouseEvent,
+    href: string,
+    request: SaveRequest,
+    title: string,
+  ) => boolean;
   /** Finds a download's song (its id in the player) in Your music. */
   onLocate: (song: string) => void;
 };
@@ -371,11 +377,12 @@ export function RecentExtractions({
                       href={href}
                       download
                       onClick={(event) =>
-                        onDownload(event, href, {
-                          url: item.url,
-                          format,
-                          spotifyId: item.spotifyId,
-                        })
+                        onDownload(
+                          event,
+                          href,
+                          { url: item.url, format, spotifyId: item.spotifyId },
+                          item.title,
+                        )
                       }
                       aria-label={`Redownload ${item.title}`}
                       title={
