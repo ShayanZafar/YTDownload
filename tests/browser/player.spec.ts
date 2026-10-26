@@ -570,7 +570,9 @@ test.describe("Music player (browser)", () => {
       await library
         .getByRole("button", { name: "Fix name: “Wrong Name” is really a .m4a file" })
         .click();
-      await expect(page.getByText("“Wrong Name” is now Wrong Name.m4a.")).toBeVisible();
+      await expect(
+        page.getByText("“Wrong Name” is now Wrong Name.m4a.", { exact: true }),
+      ).toBeVisible();
       await expect(library.getByRole("button", { name: /^Fix name/ })).toHaveCount(0);
       await fs.stat(path.join(odd, "Wrong Name.m4a"));
       await expect(fs.stat(path.join(odd, "Wrong Name.mp3"))).rejects.toThrow();
