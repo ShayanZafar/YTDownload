@@ -523,6 +523,25 @@ describe("Music player (API)", () => {
       undefined,
       undefined,
     ]);
+
+    // Rename on an M4A named .mp3, its tags as they were: it's renamed all the same.
+    await tone(path.join(sub, "Daft Punk - One More Time.mp3"), 1, [
+      ...["-c:a", "aac", "-f", "mp4", "-metadata", "title=One More Time"],
+      ...["-metadata", "artist=Daft Punk"],
+    ]);
+    const misnamed = musicLibrarySchema
+      .parse((await request(app).get("/api/music")).body)
+      .tracks.find((track) => track.path === path.join("Tidy", "Daft Punk - One More Time.mp3"))!;
+    const renamed = await request(app)
+      .post(`/api/music/${misnamed.id}/rename`)
+      .send({ name: "Daft Punk - One More Time", title: "One More Time", artist: "Daft Punk" })
+      .expect(200);
+    expect(renamed.body.track).toMatchObject({
+      path: path.join("Tidy", "Daft Punk - One More Time.m4a"),
+      title: "One More Time",
+      artist: "Daft Punk",
+    });
+    expect(renamed.body.track.id).not.toBe(misnamed.id);
     await fs.rm(sub, { recursive: true });
   });
 

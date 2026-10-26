@@ -571,11 +571,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         if (!file) return res.status(404).json({ message: SONG_GONE });
       }
       if (retagging) {
-        changed = (await writeSongDetails(file, {}, { replace: { title, artist } })).length > 0;
+        const retagged =
+          (await writeSongDetails(file, {}, { replace: { title, artist } })).length > 0;
+        changed ||= retagged;
         void logDetails({
           kind: "write",
           song: file.relative,
-          outcome: changed ? "renamed" : "nothing to change",
+          outcome: retagged ? "renamed" : "nothing to change",
           details: [title && `title ${title}`, artist && `artist ${artist}`].filter(
             (word): word is string => !!word,
           ),
