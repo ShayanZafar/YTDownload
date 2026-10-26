@@ -233,6 +233,27 @@ describe("Fill in details (API)", () => {
     expect(lines.some((line) => line.includes("Misnamed.mp3  can't be written"))).toBe(true);
   });
 
+  it("offers another version's genre, and only that, saying so", async () => {
+    // Twenty seconds long: the catalogue's three-second "Test Tone" is another version of it.
+    const file = path.join(folder, "Sine Wave - Test Tone (Extended).mp3");
+    await ffmpeg([
+      ...["-f", "lavfi", "-i", "sine=frequency=440:duration=20"],
+      ...["-c:a", "libmp3lame", "-b:a", "128k", file],
+    ]);
+    try {
+      const { id } = (await songs())["Sine Wave - Test Tone (Extended).mp3"];
+      const res = await request(app).get(`/api/music/${id}/details`).expect(200);
+      expect(res.body).toMatchObject({
+        found: { genre: "Electronic" },
+        match: { title: "Test Tone", note: "another version of it, for its genre only" },
+        source: "itunes",
+      });
+      expect(Object.keys(res.body.found)).toEqual(["genre"]);
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+
   it("takes only details that make sense, as JSON, by a song's id", async () => {
     const { id } = (await songs())["Rock Song.mp3"];
     await request(app).post(`/api/music/${id}/details`).send({ year: 12 }).expect(400);

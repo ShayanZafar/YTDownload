@@ -67,7 +67,7 @@ export function lookupEntry(song: string, lookup: SongLookup): DetailsLogEntry {
     lookup.source === "name"
       ? "no catalogue has it: from its file name"
       : lookup.match
-        ? `matched “${lookup.match.title}” by ${lookup.match.artist} on ${source}`
+        ? `matched “${lookup.match.title}” by ${lookup.match.artist} on ${source}${lookup.match.note ? ` (${lookup.match.note})` : ""}`
         : `on ${source}`;
   return { kind, song, outcome: "found", details: [lacks, matched, ...detailWords(lookup.found)] };
 }

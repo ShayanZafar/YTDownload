@@ -13,6 +13,8 @@ import {
   lookUpSong,
   lookUpSongNoted,
   pickMatch,
+  pickVersion,
+  musicBrainzArtistGenre,
   resetCatalogues,
   CATALOGUE_LIMITS,
   type CatalogueSong,
@@ -251,7 +253,7 @@ describe("pickMatch", () => {
   });
 
   it("takes a version named after a dash or with a year when it's the same length", () => {
-    const heathen = song({ title: "Heathen (Live)", artist: "Bob Marley", duration: 300 });
+    const heathen = song({ title: "Heathen (Live at Ahoy)", artist: "Bob Marley", duration: 300 });
     expect(pickMatch([heathen], { track: "Heathen - Live 1978", artist: "Bob Marley" }, 301)).toBe(
       heathen,
     );
@@ -260,6 +262,7 @@ describe("pickMatch", () => {
     );
     expect(bareTitle("Mindfields original")).toBe("Mindfields");
     expect(bareTitle("By Myself - (Hybrid Theory)")).toBe("By Myself");
+    expect(bareTitle("Close To Me - T.O.S. - Exclusive")).toBe("Close To Me");
     expect(bareTitle("Rhythm Of The Night (Extended Version) HD 1993")).toBe("Rhythm Of The Night");
     // A title that's only a year stays.
     expect(bareTitle("1999")).toBe("1999");
@@ -276,11 +279,109 @@ describe("pickMatch", () => {
     ).toBe(souls);
   });
 
+  it("takes a title spelt a little differently, but never another number", () => {
+    const sober = song({ title: "Call Me When You're Sober", artist: "Evanescence" });
+    expect(pickMatch([sober], { track: "Call Me When Your Sober", artist: "Evanescence" })).toBe(
+      sober,
+    );
+    const kyur = song({ title: "Kyur4 th Ich", artist: "LINKIN PARK" });
+    expect(pickMatch([kyur], { track: "Kyur 4 Th Ich", artist: "Linkin Park" })).toBe(kyur);
+    const two = song({ title: "Test Tone Part 2" });
+    expect(pickMatch([two], { track: "Test Tone Part 1", artist: "Sine Wave" })).toBe(undefined);
+    expect(
+      pickMatch([song({ title: "Toast Tune" })], { track: "Test Tone", artist: "Sine Wave" }),
+    ).toBe(undefined);
+  });
+
+  it("takes a title with a year or “original” after it, a Remix for a Mix, and notes the same recording has", () => {
+    const heaven = song({ title: "Heaven (Lange Remix)", artist: "Agenda" });
+    expect(pickMatch([heaven], { track: "Heaven Lange Remix 1999", artist: "Agenda" })).toBe(
+      heaven,
+    );
+    expect(pickMatch([heaven], { track: "Heaven (Lange Mix)", artist: "Agenda" })).toBe(heaven);
+    const angel = song({ title: "Angel (Original Mix)", artist: "Jezper Söderlund" });
+    expect(pickMatch([angel], { track: "Angel (Original)", artist: "Jezper Söderlund" })).toBe(
+      angel,
+    );
+    const name = song({ title: "My Name (feat. Eminem & Nate Dogg) [Amended]", artist: "Xzibit" });
+    expect(pickMatch([name], { track: "My Name ft. Eminem & Nate Dogg", artist: "Xzibit" })).toBe(
+      name,
+    );
+    // A year that's the title's own still has to be there.
+    const party = song({ title: "Party Like It's 1999", artist: "Prince" });
+    expect(pickMatch([party], { track: "Party Like It's 1999", artist: "Prince" })).toBe(party);
+  });
+
+  it("takes an artist named with or without “and” or “the”", () => {
+    const know = song({ title: "Do You Know", artist: "Black And White" });
+    expect(pickMatch([know], { track: "Do You Know", artist: "Black White" })).toBe(know);
+    const warning = song({ title: "Warning", artist: "The Notorious B.I.G." });
+    expect(pickMatch([warning], { track: "Warning", artist: "Notorious B.I.G." })).toBe(warning);
+  });
+
+  it("takes a film's name for the artist when the song is on its album", () => {
+    const bandhan = song({
+      title: "Pairon Mein Bandhan Hai",
+      artist: "Anand Bakshi",
+      album: "Mohabbatein (Original Motion Picture Soundtrack)",
+    });
+    expect(pickMatch([bandhan], { track: "Pairon Mein Bandhan Hai", artist: "Mohabbatein" })).toBe(
+      bandhan,
+    );
+    // Not an album that only starts with the name, nor a tribute's cover; the artist's own first.
+    const starts = song({ title: "Bohemian Rhapsody", artist: "Someone", album: "Queen Tribute" });
+    expect(pickMatch([starts], { track: "Bohemian Rhapsody", artist: "Queen" })).toBe(undefined);
+    const tribute = song({
+      title: "Bohemian Rhapsody",
+      artist: "Someone",
+      album: "Queen (A Tribute)",
+    });
+    expect(pickMatch([tribute], { track: "Bohemian Rhapsody", artist: "Queen" })).toBe(undefined);
+    const own = song({
+      title: "Bohemian Rhapsody",
+      artist: "Queen",
+      album: "A Night at the Opera",
+    });
+    const named = song({ title: "Bohemian Rhapsody", artist: "Someone", album: "Queen" });
+    expect(pickMatch([named, own], { track: "Bohemian Rhapsody", artist: "Queen" })).toBe(own);
+  });
+
+  it("takes a dash-less name whose words are the title's and an artist's, in any order", () => {
+    const sammi = song({
+      title: "Sammi Meri Waar (Coke Studio Season 8)",
+      artist: "Quratulain Balouch & Umair Jaswal",
+    });
+    expect(
+      pickMatch([sammi], {
+        track: "Coke Studio Season 8 Sammi Meri Waar Umair Jaswal & Quratulain Balouch",
+        artist: "",
+      }),
+    ).toBe(sammi);
+    const cream = song({ title: "Cream (Paul Van Dyk Remix)", artist: "Blank & Jones" });
+    expect(pickMatch([cream], { track: "Blank Jones Cream Paul van Dyk Remix", artist: "" })).toBe(
+      cream,
+    );
+  });
+
   it("without an artist, takes only a song the same length", () => {
     const search = { track: "Test Tone", artist: "" };
     expect(pickMatch([song({ duration: 200 })], search, 180)).toBe(undefined);
     expect(pickMatch([song({ duration: 200 })], search)).toBe(undefined);
     expect(pickMatch([song({ duration: 181 })], search, 180)).toBeDefined();
+  });
+});
+
+describe("pickVersion", () => {
+  it("finds another version of the song by its artist, one with a genre first", () => {
+    const search = { track: "Breathe (In The Air) (Extended)", artist: "Pink Floyd" };
+    const plain = { title: "Breathe (In the Air)", artist: "Pink Floyd" };
+    const withGenre = { title: "Breathe", artist: "Pink Floyd", genre: "Rock" };
+    expect(pickVersion([plain, withGenre], search)).toBe(withGenre);
+    expect(pickVersion([plain], search)).toBe(plain);
+    // The other way round too; never another artist's, nor a name with no artist.
+    expect(pickVersion([plain], { track: "Pink Floyd", artist: "Breathe (Extended)" })).toBe(plain);
+    expect(pickVersion([{ ...plain, artist: "Someone Else" }], search)).toBe(undefined);
+    expect(pickVersion([plain], { track: "Pink Floyd Breathe", artist: "" })).toBe(undefined);
   });
 });
 
@@ -305,7 +406,9 @@ describe("lookUpSong", () => {
     const asked: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {
       asked.push(new URL(url).host + new URL(url).pathname);
-      if (url.startsWith("https://itunes.apple.com/")) return new Response("", { status: 403 });
+      if (url.startsWith("https://itunes.apple.com/")) {
+        return new Response("", { status: 403, headers: { "retry-after": "3600" } });
+      }
       if (url.includes("/search?")) {
         return json({
           data: [{ id: 42, title: "Test Tone", artist: { name: "Sine Wave" }, album: { id: 7 } }],
@@ -397,6 +500,8 @@ describe("lookUpSong", () => {
     expect(asked.sort()).toEqual([
       'recording:"Nowhere Tone" AND artist:"Sine Wave"',
       'recording:"Pipeline" AND artist:"Man With No Name"',
+      // The halves the other way round: "Song - Artist".
+      'recording:"Sine Wave" AND artist:"Nowhere Tone"',
     ]);
     // The second waited its turn.
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
@@ -496,7 +601,9 @@ describe("lookUpSong", () => {
     let itunesBusy = true;
     vi.stubGlobal("fetch", async (url: string) => {
       if (url.startsWith("https://itunes.apple.com/")) {
-        if (itunesBusy) return new Response("", { status: 403 });
+        // Busy for an hour: longer than its own limit's minute, so not waited for.
+        if (itunesBusy)
+          return new Response("", { status: 403, headers: { "retry-after": "3600" } });
         return json(itunesAnswer({ ...SINE_SONG, trackName: "Test Tone (Live)" }));
       }
       return json({ data: [{ id: 1, title: "Test Tone", artist: { name: "Someone Else" } }] });
@@ -507,23 +614,24 @@ describe("lookUpSong", () => {
       notes: [
         "iTunes was busy, so it wasn't asked",
         "Deezer, “Sine Wave Test Tone”: 1 answer; closest “Test Tone” by Someone Else: a different artist",
-        "Deezer, “SineWave Sine Wave - Test Tone”: 1 answer, none with that title or artist (first: “Test Tone” by Someone Else)",
+        "Deezer, “SineWave Sine Wave - Test Tone”: 2 answers, none with that title or artist (first: “Test Tone” by Someone Else)",
         "MusicBrainz, “Sine Wave Test Tone”: nothing came back",
         "MusicBrainz, “SineWave Sine Wave - Test Tone”: nothing came back",
       ],
       // iTunes wasn't asked: it may have the song.
       noneHasIt: false,
     });
-    // With iTunes answering: its closest answer, and why it wasn't taken.
+    // With iTunes answering: its closest answer, and why it wasn't taken (its genre
+    // would be another version's, but the album is what's wanted).
     resetCatalogues();
     itunesBusy = false;
-    const again = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" });
+    const again = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" }, ["album"]);
     expect(again.notes[0]).toBe(
       "iTunes, “Sine Wave Test Tone”: 1 answer; closest “Test Tone (Live)” by Sine Wave: a different version, and the song's length isn't known",
     );
   });
 
-  it("asks each catalogue no faster than its published limit, waiting only when there's no other", async () => {
+  it("asks each catalogue no faster than its published limit, waiting for one's turn when it's the only one left", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
     try {
       const asked = { itunes: 0, deezer: 0, musicbrainz: 0 };
@@ -546,16 +654,146 @@ describe("lookUpSong", () => {
       // iTunes' 20 a minute, then Deezer's 50 in 5 seconds; the rest wait for Deezer.
       // MusicBrainz, for the songs neither has, one a second.
       expect(asked).toEqual({ itunes: 20, deezer: 50, musicbrainz: 1 });
-      // A minute later all 60 have been asked of MusicBrainz too (the 10 Deezer
-      // was busy for went to MusicBrainz first, then back to Deezer).
+      // A minute later all 60 have been asked of MusicBrainz too, and 40 still
+      // wait for iTunes: there's no other catalogue left to ask them.
       await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.musicbrainz.perMs * 60);
+      expect(asked).toMatchObject({ deezer: 60, musicbrainz: 60 });
+      expect(asked.itunes).toBeLessThan(60);
+      // Two minutes on, iTunes has had its turns for all of them.
+      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.itunes.perMs * 2);
       const answers = await Promise.all(songs);
-      expect(asked).toEqual({ itunes: 20, deezer: 60, musicbrainz: 60 });
-      expect(answers[59].notes[0]).toBe("iTunes was busy, so it wasn't asked");
-      expect(answers.every((answer) => answer.match === null)).toBe(true);
+      expect(asked).toEqual({ itunes: 60, deezer: 60, musicbrainz: 60 });
+      // Every catalogue answered: none has them.
+      expect(answers.every((answer) => answer.match === null && answer.noneHasIt)).toBe(true);
+      expect(answers.some((answer) => answer.notes.some((note) => /busy/.test(note)))).toBe(false);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("waits once for a catalogue that refused, when there's no other left; if it refuses again, it's busy", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
+    try {
+      let itunes = 0;
+      vi.stubGlobal("fetch", async (url: string) => {
+        if (url.startsWith("https://itunes.apple.com/")) {
+          itunes++;
+          return new Response("", { status: 403 }); // no Retry-After: its own minute
+        }
+        return json(url.startsWith("https://musicbrainz.org/") ? { recordings: [] } : { data: [] });
+      });
+      const answer = lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" });
+      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.itunes.perMs * 3);
+      expect(await answer).toMatchObject({
+        match: null,
+        noneHasIt: false,
+        notes: expect.arrayContaining(["iTunes was busy, so it wasn't asked"]),
+      });
+      expect(itunes).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("finds a “Song - Artist” name the other way round", async () => {
+    const searched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) return json(itunesAnswer());
+      if (url.startsWith("https://musicbrainz.org/")) return json({ recordings: [] });
+      if (!url.includes("/search?")) return json({});
+      searched.push(new URL(url).searchParams.get("q")!);
+      return json({
+        data: [
+          { id: 1, title: "Rebellion (feat. Daron Malakian)", artist: { name: "Linkin Park" } },
+        ],
+      });
+    });
+    const match = await lookUpSong({ title: "Rebellion - Linkin Park (feat. Daron Malakian)" });
+    expect(match).toMatchObject({ source: "deezer", song: { artist: "Linkin Park" } });
+    expect(searched).toEqual(["Rebellion Linkin Park"]);
+  });
+
+  it("asks Deezer again without what versions add when its answers aren't the song", async () => {
+    const searched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) return json(itunesAnswer());
+      if (!url.includes("/search?")) return json({});
+      const q = new URL(url).searchParams.get("q")!;
+      searched.push(q);
+      return json({
+        data: q.includes("Remastered")
+          ? [{ id: 1, title: "Vou Festejar", artist: { name: "Sambabook" } }]
+          : [{ id: 2, title: "Kiss From A Rose", artist: { name: "Seal" }, duration: 288 }],
+      });
+    });
+    const match = await lookUpSong({
+      title: "Seal - Kiss From A Rose - Remastered study",
+      duration: 289,
+    });
+    expect(searched).toEqual(["Seal Kiss From A Rose - Remastered study", "Seal Kiss From A Rose"]);
+    expect(match).toMatchObject({ source: "deezer", song: { title: "Kiss From A Rose" } });
+  });
+
+  it("takes another version's genre, and nothing else, when no catalogue has the song", async () => {
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) {
+        return json(
+          itunesAnswer({
+            ...SINE_SONG,
+            trackName: "Breathe (In the Air)",
+            artistName: "Pink Floyd",
+            primaryGenreName: "Rock",
+            trackTimeMillis: 169_000,
+          }),
+        );
+      }
+      return json(url.startsWith("https://musicbrainz.org/") ? { recordings: [] } : { data: [] });
+    });
+    const song = { title: "Pink Floyd - Breathe (In The Air) (Extended)", duration: 319 };
+    const genre = await lookUpSongNoted(song, ["genre", "album", "year"]);
+    expect(genre.match).toEqual({
+      source: "itunes",
+      otherVersion: true,
+      song: { title: "Breathe (In the Air)", artist: "Pink Floyd", genre: "Rock" },
+    });
+    // Not when the genre isn't wanted: then no catalogue has it.
+    expect((await lookUpSongNoted(song, ["album"])).match).toBe(null);
+  });
+
+  it("gives a song MusicBrainz has without a genre its artist's", async () => {
+    const asked: string[] = [];
+    const artist = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) return json(itunesAnswer());
+      if (!url.startsWith("https://musicbrainz.org/")) return json({ data: [] });
+      asked.push(new URL(url).pathname);
+      if (url.includes(`/artist/${artist}`)) {
+        return json({
+          genres: [
+            { name: "trance", count: 3 },
+            { name: "house", count: 1 },
+          ],
+        });
+      }
+      return json({
+        recordings: [
+          {
+            title: "Pulse",
+            "artist-credit": [{ name: "Darren Tate", artist: { id: artist } }],
+            releases: [{ title: "Pulse", date: "2001" }],
+          },
+        ],
+      });
+    });
+    const answer = await lookUpSongNoted({ title: "Darren Tate - Pulse" }, ["genre"]);
+    expect(answer.match).toMatchObject({
+      source: "musicbrainz",
+      song: { title: "Pulse", genre: "Trance", genreOf: "artist" },
+    });
+    expect(answer.match?.song).not.toHaveProperty("artistId");
+    expect(asked).toEqual(["/ws/2/recording", `/ws/2/artist/${artist}`]);
+    expect(musicBrainzArtistGenre({ tags: [{ name: "psy-trance", count: 1 }] })).toBe("Psy-Trance");
+    expect(musicBrainzArtistGenre({})).toBe(undefined);
   });
 
   it("says when neither catalogue can be reached", async () => {
@@ -994,6 +1232,33 @@ describe("lookUpDetails", () => {
         coverUrl: COVER_URL,
       },
     });
+  });
+
+  it("adds only the genre of another version of the song, and says so", async () => {
+    resetCatalogues();
+    await tone(path.join(dir, "Bare.mp3"), ["-c:a", "libmp3lame", "-b:a", "128k"]);
+    await fs.rename(
+      path.join(dir, "Bare.mp3"),
+      path.join(dir, "Sine Wave - Test Tone (Extended).mp3"),
+    );
+    vi.stubGlobal("fetch", async (url: string) =>
+      url.startsWith("https://itunes.apple.com/")
+        ? json(itunesAnswer({ ...SINE_SONG, trackTimeMillis: 200_000 }))
+        : json(url.startsWith("https://musicbrainz.org/") ? { recordings: [] } : { data: [] }),
+    );
+    const lookup = await lookUpDetails(await scanned("Sine Wave - Test Tone (Extended).mp3"));
+    expect(lookup).toMatchObject({
+      source: "itunes",
+      found: { genre: "Electronic" },
+      match: {
+        title: "Test Tone",
+        artist: "Sine Wave",
+        note: "another version of it, for its genre only",
+      },
+      notFound: false,
+    });
+    // Not its title, artist, album, year, track or cover: those are the other version's.
+    expect(Object.keys(lookup.found!)).toEqual(["genre"]);
   });
 
   it("takes the title and artist from an “Artist - Song” name no catalogue has, for a song without them", async () => {

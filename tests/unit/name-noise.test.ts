@@ -51,6 +51,11 @@ describe("withoutNameNoise", () => {
       ["yt1s.com - David Guetta feat Snoop Dogg Sweat", "David Guetta feat Snoop Dogg Sweat"],
       ["y2mate.com - Queen - Bohemian Rhapsody", "Queen - Bohemian Rhapsody"],
       ["Mötley Crüe - Kickstart My Heart - Official", "Mötley Crüe - Kickstart My Heart"],
+      // "HD " in front, who produced it, "High Quality", "Lyrical Video".
+      ["HD Pink Floyd - The Great Gig In The Sky", "Pink Floyd - The Great Gig In The Sky"],
+      ["Saba - Soap Box (prod. Saba & Phoelix)", "Saba - Soap Box"],
+      ["Linkin Park LPU 10.0 Halo High Quality", "Linkin Park LPU 10.0 Halo"],
+      ["Aaj Ki Raat Lyrical Video", "Aaj Ki Raat"],
     ];
     for (const [name, clean] of cases) expect(withoutNameNoise(name)).toBe(clean);
   });

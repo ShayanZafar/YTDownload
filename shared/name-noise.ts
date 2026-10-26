@@ -20,9 +20,10 @@ export function decodeEntities(text: string): string {
 }
 
 // In brackets: "(Official Video)", "[HD]", "(Lyric Video)", "(Remastered 2011)",
-// "(Full Song)", "(con subtítulos)", "[HQExplicit]", "(High Quality)", a year "(1998)" and a copy's "(1)".
+// "(Full Song)", "(con subtítulos)", "[HQExplicit]", "(High Quality)", "(prod. Saba & Phoelix)",
+// a year "(1998)" and a copy's "(1)".
 const BRACKETED_NOISE_RE =
-  /\s*[([](?:official\b[^)\]]*|[^)\]]*\b(?:video|audio|visuali[sz]er|lyrics?|lyric video|hd|hq\w*|high quality|4k|explicit|full song|subt[ií]tulos|subtitulad[oa]|letra|remaster(?:ed)?(?: \d{4})?)\b[^)\]]*|(?:19|20)\d{2}|\d)[)\]]/gi;
+  /\s*[([](?:official\b[^)\]]*|(?:prod\.?|produced by)\s[^)\]]*|[^)\]]*\b(?:video|audio|visuali[sz]er|lyrics?|lyric video|hd|hq\w*|high quality|4k|explicit|full song|subt[ií]tulos|subtitulad[oa]|letra|remaster(?:ed)?(?: \d{4})?)\b[^)\]]*|(?:19|20)\d{2}|\d)[)\]]/gi;
 
 // At the end, without brackets: "HQ", "Official HD Video", "Audio HQ", "Lyrics Video",
 // "w Lyrics", "HQ 320 Kbps", "High Quality Audio" (even run on: "ChandaHigh Quality Audio")…
@@ -34,9 +35,9 @@ const RUN_ON_NOISE_RE = /\s*high quality audio$/i;
 const FILM_NOISE_RE = /(?<=\S)\s*[-–—|]?\s*\b(?:full (?:video )?song|hd video song)\b.*$/i;
 
 const TRAILING_NOISE_RE =
-  /(?:\s+|\s*[-–—|]+\s*|\s+\.+\s*)(?:audio (?:hq|hd)|(?:w\/?|with) lyrics|(?:hq )?\d{2,3} ?kbps|official(?: (?:hd|hq|4k))?(?: music| lyrics?)? (?:video|audio)|(?:hd|hq) (?:video|audio)|lyrics? video|music video|full song|lyrics|hq|hd|4k|1080p|720p|remaster(?:ed)?(?: \d{4})?)$/i;
+  /(?:\s+|\s*[-–—|]+\s*|\s+\.+\s*)(?:audio (?:hq|hd)|(?:w\/?|with) lyrics|(?:hq )?\d{2,3} ?kbps|official(?: (?:hd|hq|4k))?(?: music| lyrics?)? (?:video|audio)|(?:hd|hq) (?:video|audio)|lyrics? video|lyrical(?: video)?|music video|full song|lyrics|high quality|hq|hd|4k|1080p|720p|remaster(?:ed)?(?: \d{4})?)$/i;
 
-// At the start: the site a download came from ("yt1s.com - ", "y2mate.com - ").
+// At the start: the site a download came from ("yt1s.com - ", "y2mate.com - "), or "HD ".
 const SITE_NOISE_RE =
   /^\s*(?:www\.)?(?:yt1s|y2mate|ytmp3|savefrom|flvto|mp3juices|onlinevideoconverter|x2convert|notube|tomp3)\b[\w.-]*\.(?:com|net|org|cc|is|io|me|to|ch|biz|info|app)\s*[-–—_|]+\s*/i;
 
@@ -44,6 +45,7 @@ const SITE_NOISE_RE =
 export function withoutNameNoise(text: string): string {
   let clean = decodeEntities(text)
     .replace(SITE_NOISE_RE, "")
+    .replace(/^(?:HD|HQ)\s+(?=\S)/, "")
     .replace(BRACKETED_NOISE_RE, "")
     .replace(FILM_NOISE_RE, "")
     .replace(RUN_ON_NOISE_RE, "");

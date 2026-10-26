@@ -466,6 +466,11 @@ function Review({
                         {match.album && `, on ${match.album}`} ({catalogueName(source)})
                       </span>
                     )}
+                    {match?.note && (
+                      <span className="block text-xs text-amber-700 dark:text-amber-400">
+                        {match.note[0].toUpperCase() + match.note.slice(1)}.
+                      </span>
+                    )}
                   </span>
                 </label>
               </li>

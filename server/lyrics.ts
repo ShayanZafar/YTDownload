@@ -79,7 +79,8 @@ export function cleanArtist(artist: string): string {
 
 /**
  * The ways to ask for a song: by its title and artist, and, for a title like
- * a YouTube video's "Artist - Song", by the two halves of it.
+ * a YouTube video's "Artist - Song" (or, with no dash, "Artist, Song"), by
+ * the two halves of it — which may be the other way round ("Song - Artist").
  */
 export function searchesFor({ title, artist }: SongToLookUp): { track: string; artist: string }[] {
   const searches: { track: string; artist: string }[] = [];
@@ -91,8 +92,15 @@ export function searchesFor({ title, artist }: SongToLookUp): { track: string; a
   if (dashed)
     searches.push({ artist: `${halves[1].trim()}-${dashed[1]}`, track: dashed[2].trim() });
   else if (halves) searches.push({ artist: halves[1].trim(), track: halves[2].trim() });
+  if (!halves && !artist?.trim()) {
+    // "Yar Daddi, Ali Zafar", "Oliver Cheatham, Get Down Saturday Night": a comma between them.
+    const comma = /^([^,]+),\s+(.+)$/.exec(clean);
+    if (comma) searches.push({ artist: comma[1].trim(), track: comma[2].trim() });
+  }
   if (artist?.trim()) searches.push({ track: clean, artist: cleanArtist(artist) });
-  else if (!halves) searches.push({ track: clean, artist: "" });
+  // "George HarrisonMy Sweet Lord": words run together where a dash was, spaced again.
+  else if (!halves)
+    searches.push({ track: clean.replace(/(\p{Ll}{3})(\p{Lu})/gu, "$1 $2"), artist: "" });
   return searches.filter((s) => s.track);
 }
 

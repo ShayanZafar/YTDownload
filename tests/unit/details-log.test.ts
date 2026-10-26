@@ -114,6 +114,26 @@ describe("the log's lines", () => {
         }),
       ).details,
     ).toEqual(["lacks genre, year", "matched “A” by B on Deezer", "genre Rock", "year 1987"]);
+    // Another version's genre says so.
+    expect(
+      lookupEntry(
+        "A.mp3",
+        lookup({
+          found: { genre: "Rock" },
+          match: {
+            title: "A",
+            artist: "B",
+            album: null,
+            note: "another version of it, for its genre only",
+          },
+          source: "itunes",
+        }),
+      ).details,
+    ).toEqual([
+      "lacks genre, year",
+      "matched “A” by B on iTunes (another version of it, for its genre only)",
+      "genre Rock",
+    ]);
     expect(lookupEntry("A.mp3", lookup({ missing: [] })).outcome).toBe("has every detail already");
     expect(
       lookupEntry("A.mp3", lookup({ writable: false, problem: "it's really an M4A file" })),

@@ -76,6 +76,18 @@ describe("what's asked for", () => {
     expect(searchesFor({ title: "Untitled track" })).toEqual([
       { track: "Untitled track", artist: "" },
     ]);
+    // No dash: a comma between them, or words run together where the dash was.
+    expect(searchesFor({ title: "Yar Daddi, Ali Zafar" })).toEqual([
+      { artist: "Yar Daddi", track: "Ali Zafar" },
+      { track: "Yar Daddi, Ali Zafar", artist: "" },
+    ]);
+    expect(searchesFor({ title: "George HarrisonMy Sweet Lord" })).toEqual([
+      { track: "George Harrison My Sweet Lord", artist: "" },
+    ]);
+    // Not a name's own capitals.
+    expect(searchesFor({ title: "Paul McCartney Say Say Say" })).toEqual([
+      { track: "Paul McCartney Say Say Say", artist: "" },
+    ]);
   });
 });
 
