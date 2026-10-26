@@ -91,6 +91,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── schema.ts              # Zod schemas + types (history, search, settings, folders, save progress)
 │   ├── routes.ts              # Typed API route definitions
 │   ├── filename.ts            # safeFileName(): download names Windows accepts
+│   ├── fold-text.ts           # Names folded for matching: lower case, no accents or punctuation
 │   ├── name-noise.ts          # What videos and copies add to a name ("(Official Video)", "HQ"…), taken out
 │   ├── song-name.ts           # A song's artist and title: downloads' "Artist - Title", Sanitize's tidy tags
 │   ├── youtube-link.ts        # extractVideoId(): which links are YouTube videos (server checks, page spots copied ones)
@@ -446,6 +447,12 @@ What each file does, and the function and constant names to look for. This was C
   `https://api.soundcloud.com/tracks/<digits>`, from that or the URL-encoded URN form yt-dlp lists —
   exact text matching, nothing else) and `audioLinkOf()` (what a download or save may fetch: a
   YouTube video's canonical watch link or a SoundCloud track's — the only links that reach yt-dlp);
+  `shared/fold-text.ts` is how every name is folded for matching (`foldCase()`, `foldWords()`,
+  `foldSquashed()`: lower case, accents gone, punctuation a space): search ranking
+  (`normalize()`), finding songs in the folder (`words()`), the catalogues (`plain()`), Sanitize's
+  artist keys (`artistKey()`), song names and the page's filters all call it, each saying which
+  marks go (`"all"`, `"latin"` or `"keep"`, as they did before; a new comparison uses
+  `foldWords()`; pinned in `tests/unit/fold-text.test.ts`);
   `shared/filename.ts` has
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the

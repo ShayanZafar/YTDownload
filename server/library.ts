@@ -22,6 +22,7 @@ import path from "path";
 import type { IAudioMetadata, IOptions } from "music-metadata";
 import { AUDIO_TYPES, genresOf } from "@shared/audio-types";
 import { safeFileName } from "@shared/filename";
+import { foldWords } from "@shared/fold-text";
 import {
   foundByValues,
   historyFoundByValues,
@@ -344,22 +345,12 @@ export async function readSongFiles(
 
 // --- Matching songs to files ------------------------------------------------------
 
-// Built with `new RegExp`: TypeScript refuses the "u" flag in a regex literal
-// at this project's default (ES5) target, though Node runs it fine.
-const ACCENTS_RE = new RegExp("\\p{M}+", "gu");
-const NOT_LETTERS_RE = new RegExp("[^\\p{L}\\p{N}]+", "gu");
-
 /**
  * Text reduced to its words, in any alphabet: lowercase, accents gone, and
  * anything that isn't a letter or digit a space. "Beyoncé — Halo!" → "beyonce halo".
  */
 export function words(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(ACCENTS_RE, "")
-    .replace(NOT_LETTERS_RE, " ")
-    .trim();
+  return foldWords(text, "all");
 }
 
 /** Does `text` have `phrase` in it, as whole words? */
