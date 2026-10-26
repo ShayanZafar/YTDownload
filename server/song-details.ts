@@ -232,8 +232,9 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
       : { ...none, notes, notFound };
   }
   await setNotFound(file, false);
-  const { song, source } = match;
-  const found = detailsFor(missing, song);
+  const { song, source, otherVersion } = match;
+  // Another version of the song gives its genre and nothing else.
+  const found = detailsFor(otherVersion ? missing.filter((f) => f === "genre") : missing, song);
   if (Object.keys(found).length === 0) {
     const catalogue = sourceName(source);
     return {
@@ -249,7 +250,16 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
     problem,
     notes: [],
     found,
-    match: { title: song.title, artist: song.artist, album: song.album ?? null },
+    match: {
+      title: song.title,
+      artist: song.artist,
+      album: song.album ?? null,
+      note: otherVersion
+        ? "another version of it, for its genre only"
+        : song.genreOf === "artist"
+          ? "the genre is the artist's: the song itself has none"
+          : null,
+    },
     source,
     notFound: false,
   };

@@ -40,16 +40,23 @@ export type CatalogueSong = {
   compilation?: boolean;
   /** A single or EP rather than an album. */
   single?: boolean;
+  /** The genre is the artist's (MusicBrainz's tags for the artist), the song itself having none. */
+  genreOf?: "artist";
 };
 
-export type CatalogueMatch = { song: CatalogueSong; source: CatalogueSource };
+/** A catalogue's song, and which catalogue — or, with `otherVersion`, another version's genre. */
+export type CatalogueMatch = { song: CatalogueSong; source: CatalogueSource; otherVersion?: true };
 
 /** Neither catalogue could be reached (not "no such song": that's null). */
 export class CatalogueError extends Error {}
 
 /** The catalogue said no (it's busy); try it again after `retryAt` (ms since 1970). */
 class Refused extends Error {
-  constructor(readonly retryAt: number) {
+  /** `paced`: its published limit is used up (we didn't ask), rather than it saying no. */
+  constructor(
+    readonly retryAt: number,
+    readonly paced = false,
+  ) {
     super("refused");
   }
 }
@@ -57,6 +64,7 @@ class Refused extends Error {
 const ITUNES_SEARCH = "https://itunes.apple.com/search";
 const DEEZER_API = "https://api.deezer.com";
 const MUSICBRAINZ_SEARCH = "https://musicbrainz.org/ws/2/recording";
+const MUSICBRAINZ_ARTIST = "https://musicbrainz.org/ws/2/artist";
 // MusicBrainz asks every app to name itself and say where it's from.
 const MUSICBRAINZ_USER_AGENT = "YTDownload/1.0 ( https://github.com/ShayanZafar/YTDownload )";
 const FETCH_TIMEOUT_MS = 8_000;
@@ -69,8 +77,6 @@ export const CATALOGUE_LIMITS: Record<CatalogueSource, { requests: number; perMs
   deezer: { requests: 50, perMs: 5_000 },
   musicbrainz: { requests: 1, perMs: 1_000 },
 };
-/** The longest a look-up waits for a busy catalogue when it has asked the other one already. */
-const SHORT_WAIT_MS = CATALOGUE_LIMITS.deezer.perMs;
 /** Songs whose details (or lack of them) are remembered. */
 const CACHE_SIZE = 2_000;
 
@@ -100,34 +106,69 @@ export function plain(text: string): string {
 /** A title's words in order of the alphabet: "Remix (Paul Oakenfold)" is "(Paul Oakenfold Remix)". */
 const wordSet = (text: string) => text.split(" ").sort().join(" ");
 
-const sameTitle = (a: string, b: string) => {
-  const [x, y] = [plain(cleanSongTitle(a)), plain(cleanSongTitle(b))];
-  return x === y || wordSet(x) === wordSet(y);
-};
+/** What a file name adds at the end of a title: "Mindfields original", "Heaven Lange Remix 1999". */
+const END_WORDS_RE = /\s+(?:(?:19|20)\d{2}|original|official|hq|hd|high quality)$/i;
+
+/** Without END_WORDS_RE's words, however many. */
+function withoutEndWords(title: string): string {
+  let bare = title.trim();
+  for (let before = ""; before !== bare;) {
+    before = bare;
+    bare = bare.replace(END_WORDS_RE, "").trim();
+  }
+  return bare;
+}
+
+// The same recording's own notes, which one catalogue writes and another doesn't:
+// "(Original Mix)", "(Album Version)", "[Amended]", "(Studio Recording)".
+const SAME_RECORDING_RE =
+  /\s*[([](?:original(?: mix| version)?|album version|amended|clean|studio recording|mono|stereo)[)\]]/gi;
+
+/** A title as compared: "Remix" is "Mix" ("The Thrillseekers Mix", "The Thrillseekers Remix"). */
+const compared = (title: string) => plain(title).replace(/\bremix\b/g, "mix");
 
 /**
- * A title without what versions add — anything in brackets, after a last dash,
+ * The catalogue's title and ours the same — word for word, in another order,
+ * but for spaces ("Kyur4 th Ich") or a letter or two ("Call Me When Your
+ * Sober"), never another number ("Part 2") — ours also without a year or
+ * "original" at its end.
+ */
+function sameTitle(theirs: string, ours: string): boolean {
+  const clean = (title: string) => cleanSongTitle(title).replace(SAME_RECORDING_RE, "");
+  const a = compared(clean(theirs));
+  return [compared(clean(ours)), compared(withoutEndWords(clean(ours)))].some(
+    (b) =>
+      b !== "" &&
+      (a === b ||
+        wordSet(a) === wordSet(b) ||
+        squash(a) === squash(b) ||
+        (digitsOf(a) === digitsOf(b) && nearlySpelled(squash(a), squash(b)))),
+  );
+}
+
+const squash = (text: string) => text.replace(/ /g, "");
+const digitsOf = (text: string) => text.replace(/\D/g, "");
+
+/**
+ * A title without what versions add — anything in brackets, after a dash,
  * or a year or "Original" at the end: "Heer (Coke Studio Season 8)" → "heer",
- * "Heathen - Live 1978" → "heathen", "Mindfields original" → "mindfields".
+ * "Heathen - Live 1978" → "heathen", "Mindfields original" → "mindfields",
+ * "Close To Me - T.O.S. - Exclusive" → "close to me".
  */
 export function bareTitle(title: string): string {
   let bare = cleanSongTitle(title).replace(/\s*[([][^)\]]*[)\]]/g, " ");
-  bare = bare.replace(/\s+[-–—]\s+[^-–—]*$/, "");
-  for (let before = ""; before !== bare;) {
-    before = bare;
-    bare = bare.trim().replace(/\s+(?:(?:19|20)\d{2}|original|official|hq|hd)$/i, "");
-  }
-  return bare.replace(/\s+/g, " ").trim();
+  bare = bare.replace(/\s+[-–—]\s+.*$/, "");
+  return withoutEndWords(bare).replace(/\s+/g, " ").trim();
 }
 
 const baseTitle = (title: string) => plain(bareTitle(title)) || plain(title);
 
 /**
  * The same title, or the same but for something in brackets ("(Long
- * Version; 2002 Remaster)" against our "(long version)") — taken only for a
- * song the same length.
+ * Version; 2002 Remaster)" against our "(long version)") or spaces
+ * ("Kyur4 th Ich") — taken only for a song the same length.
  */
-const nearlySameTitle = (a: string, b: string) => baseTitle(a) === baseTitle(b);
+const nearlySameTitle = (a: string, b: string) => squash(baseTitle(a)) === squash(baseTitle(b));
 
 /** How many letters to add, take out or change to make `a` into `b`. */
 function editDistance(a: string, b: string): number {
@@ -155,14 +196,20 @@ function namesBoth(song: CatalogueSong, name: string): boolean {
   const ours = [plain(cleanSongTitle(name)), baseTitle(name)];
   const title = plain(cleanSongTitle(song.title));
   // The rest of the name, before or after the title, is the artist — or one of them
-  // ("Michael Jackson & Paul McCartney Say Say Say" for Paul McCartney's).
+  // ("Michael Jackson & Paul McCartney Say Say Say" for Paul McCartney's) — or its
+  // words are the title's and an artist's, in any order ("Coke Studio Season 8 Sammi
+  // Meri Waar Umair Jaswal & Quratulain Balouch").
+  const artists = artistNames(song.artist);
   return ours.some((whole) => {
     const rest = whole.startsWith(`${title} `)
       ? whole.slice(title.length + 1)
       : whole.endsWith(` ${title}`)
         ? whole.slice(0, -title.length - 1)
         : undefined;
-    return rest !== undefined && sameArtist(rest, song.artist);
+    return (
+      (rest !== undefined && sameArtist(rest, song.artist)) ||
+      artists.some((artist) => wordSet(whole) === wordSet(`${title} ${artist}`))
+    );
   });
 }
 
@@ -182,11 +229,35 @@ function artistNames(credit: string): string[] {
 function sameArtist(ours: string, theirs: string): boolean {
   const mine = artistNames(ours);
   const found = artistNames(theirs);
-  const squash = (name: string) => name.replace(/ /g, "");
+  // "Black White" is "Black And White", "Notorious B.I.G." "The Notorious B.I.G.".
+  const squashed = (name: string) => squash(name.replace(/\b(?:and|the)\b/g, ""));
   return mine.some((a) =>
-    found.some((b) => a === b || squash(a) === squash(b) || nearlySpelled(a, b)),
+    found.some((b) => a === b || squashed(a) === squashed(b) || nearlySpelled(a, b)),
   );
 }
+
+/**
+ * Is our "artist" the film or album the song is from? Film songs are named
+ * after their film: "Mohabbatein - Pairon Mein Bandhan Hai" is on the album
+ * "Mohabbatein (Original Motion Picture Soundtrack)".
+ */
+function fromAlbum(ours: string, song: CatalogueSong): boolean {
+  const album = song.album ? plain(bareTitle(song.album)) : "";
+  return (
+    album.length >= 4 &&
+    album === plain(ours) &&
+    // Not someone else's cover of it on an album named after the artist ("Queen (A Tribute)").
+    !COVERS_RE.test(`${song.album} ${song.artist}`)
+  );
+}
+
+const COVERS_RE = /\b(?:tribute|karaoke|covers?|made famous|originally performed|in the style)\b/i;
+
+/** The other way round: "Rebellion - Linkin Park" asked as Linkin Park's "Rebellion". */
+const swapped = (search: { track: string; artist: string }) => ({
+  track: search.artist,
+  artist: search.track,
+});
 
 /**
  * The catalogue's song that is ours: the same title (or the same but for
@@ -208,16 +279,49 @@ export function pickMatch(
     (song) =>
       ((sameTitle(song.title, search.track) ||
         (nearlySameTitle(song.title, search.track) && sameLength(song))) &&
-        (search.artist ? sameArtist(search.artist, song.artist) : sameLength(song))) ||
+        (search.artist
+          ? sameArtist(search.artist, song.artist) || fromAlbum(search.artist, song)
+          : sameLength(song))) ||
       (!search.artist && namesBoth(song, search.track)),
   );
   const score = (song: CatalogueSong) =>
+    (!search.artist || sameArtist(search.artist, song.artist) ? 16 : 0) +
     (sameTitle(song.title, search.track) || namesBoth(song, search.track) ? 8 : 0) +
     (sameLength(song) ? 4 : 0) +
     (song.compilation ? 0 : 2) +
     (song.single ? 0 : 1);
   // A stable sort: equal ones stay in the catalogue's own order.
   return [...ours].sort((a, b) => score(b) - score(a))[0];
+}
+
+/** `pickMatch()`, the halves of a name also taken the other way round ("Song - Artist"). */
+function pickEither(
+  candidates: readonly CatalogueSong[],
+  search: { track: string; artist: string },
+  duration?: number,
+): CatalogueSong | undefined {
+  return (
+    pickMatch(candidates, search, duration) ??
+    (search.artist ? pickMatch(candidates, swapped(search), duration) : undefined)
+  );
+}
+
+/**
+ * Another version of the song — the same artist, the same title but for what
+ * versions add ("Breathe (In the Air)" for our "Breathe (In The Air)
+ * (Extended)") — for its genre when the catalogues don't have ours.
+ */
+export function pickVersion(
+  candidates: readonly CatalogueSong[],
+  search: { track: string; artist: string },
+): CatalogueSong | undefined {
+  const of = (s: { track: string; artist: string }) =>
+    candidates.filter(
+      (song) => nearlySameTitle(song.title, s.track) && sameArtist(s.artist, song.artist),
+    );
+  if (!search.artist) return undefined;
+  const versions = [...of(search), ...of(swapped(search))];
+  return versions.find((song) => song.genre) ?? versions[0];
 }
 
 /**
@@ -389,7 +493,7 @@ type MusicBrainzRecording = {
   title?: unknown;
   length?: unknown;
   "first-release-date"?: unknown;
-  "artist-credit"?: { name?: unknown; joinphrase?: unknown }[];
+  "artist-credit"?: { name?: unknown; joinphrase?: unknown; artist?: { id?: unknown } }[];
   tags?: { name?: unknown; count?: unknown }[];
   releases?: MusicBrainzRelease[];
 };
@@ -428,7 +532,7 @@ function ownRelease(releases: MusicBrainzRelease[]): MusicBrainzRelease | undefi
 }
 
 /** MusicBrainz's search answer as catalogue songs (no covers: it doesn't say which releases have one). */
-export function musicBrainzSongs(answer: unknown): CatalogueSong[] {
+export function musicBrainzSongs(answer: unknown): (CatalogueSong & { artistId?: string })[] {
   const recordings = (answer as { recordings?: unknown })?.recordings;
   if (!Array.isArray(recordings)) return [];
   return (recordings as MusicBrainzRecording[]).flatMap((r) => {
@@ -465,9 +569,30 @@ export function musicBrainzSongs(answer: unknown): CatalogueSong[] {
             /^various artists$/i.test(str(credit?.name) ?? ""),
           ),
         single: group?.["primary-type"] === "Single" || group?.["primary-type"] === "EP",
+        artistId: str(credits[0]?.artist?.id),
       },
     ];
   });
+}
+
+/** An artist's genre from MusicBrainz's answer for them: their genre counted most, else tag. */
+export function musicBrainzArtistGenre(answer: unknown): string | undefined {
+  const { genres, tags } = (answer ?? {}) as { genres?: unknown; tags?: unknown };
+  const top = (list: unknown) =>
+    (Array.isArray(list) ? (list as { name?: unknown; count?: unknown }[]) : [])
+      .filter((tag) => str(tag?.name))
+      .sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0))[0];
+  const best = top(genres) ?? top(tags);
+  return best ? tagAsGenre(str(best.name)!) : undefined;
+}
+
+/** The genre of a MusicBrainz artist (its id from a recording's credit), for a recording with none. */
+async function genreOfArtist(artistId: string): Promise<string | undefined> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(artistId)) return;
+  const params = new URLSearchParams({ inc: "genres+tags", fmt: "json" });
+  return musicBrainzArtistGenre(
+    await getJson("musicbrainz", `${MUSICBRAINZ_ARTIST}/${artistId}?${params}`),
+  );
 }
 
 /** A phrase for MusicBrainz's search (Lucene): in quotes, its own quotes and backslashes escaped. */
@@ -497,7 +622,7 @@ function takeTurn(source: CatalogueSource) {
   const now = Date.now();
   const times = asked[source];
   while (times.length > 0 && times[0] <= now - perMs) times.shift();
-  if (times.length >= requests) throw new Refused(times[0] + perMs);
+  if (times.length >= requests) throw new Refused(times[0] + perMs, true);
   times.push(now);
 }
 
@@ -562,58 +687,89 @@ async function getJson(source: CatalogueSource, url: string): Promise<unknown> {
 export const sourceName = (source: CatalogueSource) =>
   source === "itunes" ? "iTunes" : source === "deezer" ? "Deezer" : "MusicBrainz";
 
+/** A catalogue's answer as it came, with the ids that say where to ask for more. */
+type Answer = CatalogueSong & { id?: number; albumId?: number; artistId?: string };
+
+/** Another version of a song, from one catalogue's answers (`pickVersion()`). */
+type Version = { song: Answer; source: CatalogueSource };
+
+const searchIn = (source: CatalogueSource, search: { track: string; artist: string }) =>
+  source === "itunes"
+    ? searchItunes(search)
+    : source === "deezer"
+      ? searchDeezer(search)
+      : searchMusicBrainz(search);
+
 /**
  * The song in one catalogue, or undefined if it doesn't have it — in which
- * case `notes` says, for each search, why none of the answers was it.
+ * case `notes` says, for each search, why none of the answers was it, and
+ * `versions` gets another version of it that one had (for its genre).
+ * `wantsGenre`: a song MusicBrainz has without a genre gets its artist's.
  */
 async function lookUpIn(
   source: CatalogueSource,
   song: SongToLookUp,
   notes: string[],
+  versions: Version[],
+  wantsGenre: boolean,
 ): Promise<CatalogueSong | undefined> {
   const searches = searchesFor(song);
+  const tagged = song.artist?.trim() ? cleanArtist(song.artist) : undefined;
   if (searches.length === 0) notes.push(`${sourceName(source)}: nothing to search by`);
   for (const search of searches) {
     const asked = [search.artist, search.track].filter(Boolean).join(" ");
-    if (source === "itunes") {
-      const answers = await searchItunes(search);
-      const found = pickMatch(answers, search, song.duration);
-      if (found) return found;
-      notes.push(`iTunes, “${asked}”: ${explainMiss(answers, search, song.duration)}`);
-      continue;
-    }
-    // Deezer's plain search finds nothing for a title with words in brackets
-    // that its own title hasn't got ("(extended version)", seen October 2026),
-    // and MusicBrainz's search for the title as a phrase can't: then each is
-    // asked without them, nor what else versions add ("- Live 1978").
+    let answers: Answer[] = await searchIn(source, search);
+    let found: Answer | undefined = pickEither(answers, search, song.duration);
+    // iTunes is asked once a search: it allows the fewest (20 a minute). Deezer's plain
+    // search finds nothing for a title with words in brackets its own title hasn't got
+    // ("(extended version)", seen October 2026), and finds others for one with words it
+    // has never heard of ("Soap Box (prod. Saba & Phoelix)"); MusicBrainz's search for
+    // the title as a phrase can't: then each is asked without them, nor what else versions
+    // add ("- Live 1978").
     const bare = bareTitle(search.track);
-    if (source === "musicbrainz") {
-      let answers = await searchMusicBrainz(search);
-      if (answers.length === 0 && bare && bare !== search.track) {
-        answers = await searchMusicBrainz({ ...search, track: bare });
-      }
-      const found = pickMatch(answers, search, song.duration);
-      if (found) return found;
-      notes.push(`MusicBrainz, “${asked}”: ${explainMiss(answers, search, song.duration)}`);
-      continue;
+    const again = source === "deezer" ? !found : answers.length === 0;
+    if (source !== "itunes" && again && bare && bare !== search.track) {
+      answers = [...answers, ...(await searchIn(source, { ...search, track: bare }))];
+      found = pickEither(answers, search, song.duration);
     }
-    let answers = await searchDeezer(search);
-    if (answers.length === 0 && bare && bare !== search.track) {
-      answers = await searchDeezer({ ...search, track: bare });
+    // MusicBrainz searches title and artist apart: a name's halves the other way round
+    // ("Rebellion - Linkin Park") are another search.
+    if (source === "musicbrainz" && !found && search.artist && search.artist !== tagged) {
+      answers = [...answers, ...(await searchIn(source, swapped(search)))];
+      found = pickEither(answers, search, song.duration);
     }
-    const found = pickMatch(answers, search, song.duration) as
-      ReturnType<typeof deezerSongs>[number] | undefined;
     if (!found) {
-      notes.push(`Deezer, “${asked}”: ${explainMiss(answers, search, song.duration)}`);
+      notes.push(
+        `${sourceName(source)}, “${asked}”: ${explainMiss(answers, search, song.duration)}`,
+      );
+      const version = pickVersion(answers, search);
+      if (version) versions.push({ song: version, source });
       continue;
     }
-    const [track, album] = await Promise.all([
-      getJson("deezer", `${DEEZER_API}/track/${found.id}`),
-      found.albumId ? getJson("deezer", `${DEEZER_API}/album/${found.albumId}`) : undefined,
-    ]);
-    const { id: _id, albumId: _albumId, ...details } = found;
-    return { ...details, ...deezerDetails(track, album) };
+    const { id, albumId, artistId, ...details } = found;
+    if (source === "deezer" && id !== undefined) {
+      const [track, album] = await Promise.all([
+        getJson("deezer", `${DEEZER_API}/track/${id}`),
+        albumId ? getJson("deezer", `${DEEZER_API}/album/${albumId}`) : undefined,
+      ]);
+      return { ...details, ...deezerDetails(track, album) };
+    }
+    if (source === "musicbrainz" && wantsGenre && !details.genre && artistId) {
+      const genre = await genreOfArtist(artistId);
+      if (genre) return { ...details, genre, genreOf: "artist" };
+    }
+    return details;
   }
+  return undefined;
+}
+
+/** The genre of another version of the song: its own, its album's (Deezer) or its artist's (MusicBrainz). */
+async function genreOfVersion({ song, source }: Version): Promise<string | undefined> {
+  if (song.genre) return song.genre;
+  if (source === "deezer" && song.albumId) {
+    return deezerDetails({}, await getJson("deezer", `${DEEZER_API}/album/${song.albumId}`)).genre;
+  }
+  if (source === "musicbrainz" && song.artistId) return genreOfArtist(song.artistId);
   return undefined;
 }
 
@@ -664,28 +820,34 @@ export async function lookUpSongNoted(
   };
 
   const tried = new Set<CatalogueSource>();
+  // Refused this look-up again after its time was up, or busy for longer than its own
+  // limit's window: not asked.
+  const busy = new Set<CatalogueSource>();
+  const refusals: Record<CatalogueSource, number> = { itunes: 0, deezer: 0, musicbrainz: 0 };
   const failures: string[] = [];
   const notes: string[] = [];
+  const versions: Version[] = [];
+  const wantsGenre = !needs || needs.includes("genre");
   for (;;) {
-    const untried = catalogueSources.filter((source) => !tried.has(source));
+    const untried = catalogueSources.filter((source) => !tried.has(source) && !busy.has(source));
     if (untried.length === 0) break;
     const open = untried.filter((source) => refusedUntil[source] <= Date.now());
-    // The rest are busy: wait for whichever is back first — there's nothing else
-    // to ask — unless one has answered (it doesn't have the song) and the rest
-    // are busy for longer than a moment.
+    // The rest are busy, and there's nothing else to ask: wait for whichever is back
+    // first — iTunes' turn, say, for a song Deezer and MusicBrainz don't have.
     if (open.length === 0) {
-      const back = Math.min(...untried.map((s) => refusedUntil[s]));
-      if (tried.size > 0 && back - Date.now() > SHORT_WAIT_MS) {
-        notes.unshift(...untried.map((s) => `${sourceName(s)} was busy, so it wasn't asked`));
-        break;
+      for (const source of untried) {
+        if (refusedUntil[source] - Date.now() > CATALOGUE_LIMITS[source].perMs) busy.add(source);
       }
-      await sleep(Math.max(0, back - Date.now()));
+      const waiting = untried.filter((source) => !busy.has(source));
+      if (waiting.length === 0) continue;
+      await sleep(Math.max(0, Math.min(...waiting.map((s) => refusedUntil[s])) - Date.now()));
       continue;
     }
     const source = open[0];
     const noted = notes.length;
+    const versionsBefore = versions.length;
     try {
-      const found = await lookUpIn(source, song, notes);
+      const found = await lookUpIn(source, song, notes, versions, wantsGenre);
       tried.add(source);
       if (found && has(found) === 0) {
         notes.push(
@@ -699,7 +861,10 @@ export async function lookUpSongNoted(
     } catch (err) {
       if (err instanceof Refused) {
         notes.length = noted; // it'll be asked again from the start
+        versions.length = versionsBefore;
         refusedUntil[source] = Math.max(refusedUntil[source], err.retryAt);
+        // A catalogue that says no again once its time is up is having a busy spell.
+        if (!err.paced && ++refusals[source] >= 2) busy.add(source);
         continue; // the next catalogue, at once
       }
       tried.add(source);
@@ -707,16 +872,29 @@ export async function lookUpSongNoted(
       notes.push(`${sourceName(source)} couldn't be reached (${(err as Error).message})`);
     }
   }
+  notes.unshift(...[...busy].map((s) => `${sourceName(s)} was busy, so it wasn't asked`));
+  const complete = tried.size === catalogueSources.length && !failures.length;
   // Remembered only when every catalogue answered: one that was busy may have had more.
-  if (best)
-    return answerWith(best.match, tried.size === catalogueSources.length && !failures.length);
+  if (best) return answerWith(best.match, complete);
+  // None has the song, but one has another version of it ("(Radio Edit)" for our
+  // "(Extended Mix)"): its genre, which is the song's too — and nothing else.
+  if (wantsGenre) {
+    for (const version of versions) {
+      const genre = await genreOfVersion(version).catch(() => undefined);
+      if (!genre) continue;
+      const { title, artist } = version.song;
+      return answerWith(
+        { song: { title, artist, genre }, source: version.source, otherVersion: true },
+        complete,
+      );
+    }
+  }
   if (failures.length === catalogueSources.length) {
     throw new CatalogueError(`Couldn't reach the music catalogues (${failures.join("; ")}).`);
   }
-  const noneHasIt = tried.size === catalogueSources.length && failures.length === 0;
-  const answer = { match: null, notes, noneHasIt };
+  const answer = { match: null, notes, noneHasIt: complete };
   // Not remembered when a catalogue was busy or unreachable: it may have the song.
-  if (noneHasIt) remember(key, answer);
+  if (complete) remember(key, answer);
   return answer;
 }
 

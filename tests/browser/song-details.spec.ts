@@ -75,8 +75,15 @@ test("songs can be shown by genre, and missing details filled in after a look", 
         missing: bare ? ["album", "genre", "year", "track", "cover"] : ["year", "track", "cover"],
         writable: true,
         found: bare ? { genre: "Electronic", album: "Pure Tones" } : null,
-        match: bare ? { title: "Bare Tone", artist: "Sine Wave", album: "Pure Tones" } : null,
-        source: bare ? "itunes" : null,
+        match: bare
+          ? {
+              title: "Bare Tone",
+              artist: "Sine Wave",
+              album: "Pure Tones",
+              note: "the genre is the artist's: the song itself has none",
+            }
+          : null,
+        source: bare ? "musicbrainz" : null,
         notes: bare ? [] : [`iTunes, “${track.title}”: nothing came back`],
       },
     });
@@ -106,7 +113,7 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   // Each song's outcome shows the moment it's done, while the others are still being looked up.
   const each = panel.getByRole("log", { name: "Each song" });
   await expect(each.getByRole("listitem").filter({ hasText: "“Bare Tone”" })).toContainText(
-    "found on iTunes: Genre: Electronic · Album: Pure Tones",
+    "found on MusicBrainz: Genre: Electronic · Album: Pure Tones",
   );
   await expect(each.getByRole("listitem").filter({ hasText: "“Jazz One”" })).toContainText(
     "couldn't be looked up: Couldn't reach the music catalogues (iTunes: no connection).",
@@ -131,7 +138,11 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await expect(tick).toBeChecked();
   await expect(panel.getByText("Adds Genre: Electronic · Album: Pure Tones")).toBeVisible();
   await expect(
-    panel.getByText(/Matched “Bare Tone” by Sine Wave, on Pure Tones \(iTunes\)/),
+    panel.getByText(/Matched “Bare Tone” by Sine Wave, on Pure Tones \(MusicBrainz\)/),
+  ).toBeVisible();
+  // When the genre isn't the song's own, the review says whose it is.
+  await expect(
+    panel.getByText("The genre is the artist's: the song itself has none."),
   ).toBeVisible();
 
   // Unticked, there's nothing to write.

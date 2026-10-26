@@ -380,9 +380,18 @@ export const songLookupSchema = z.object({
   notes: z.array(z.string()).default([]),
   /** What was found, just for the details it lacks — null when nothing was. */
   found: songDetailsSchema.nullable(),
-  /** The catalogue's song it matched, to show who's who before anything is written. */
+  /**
+   * The catalogue's song it matched, to show who's who before anything is
+   * written — with `note` when it isn't the song's own details: another
+   * version's genre, or the artist's.
+   */
   match: z
-    .object({ title: z.string(), artist: z.string(), album: z.string().nullable() })
+    .object({
+      title: z.string(),
+      artist: z.string(),
+      album: z.string().nullable(),
+      note: z.string().nullable().default(null),
+    })
     .nullable(),
   /**
    * The catalogue that answered — or "name" for a song with no title or
