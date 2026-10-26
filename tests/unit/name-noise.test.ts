@@ -47,6 +47,10 @@ describe("withoutNameNoise", () => {
         "Tujh Mein Rab Dikhta Hai",
       ],
       ["Baazigar O Baazigar-HD VIDEO SONG Shahrukh Khan & Kajol", "Baazigar O Baazigar"],
+      // The site a download came from, and "- Official".
+      ["yt1s.com - David Guetta feat Snoop Dogg Sweat", "David Guetta feat Snoop Dogg Sweat"],
+      ["y2mate.com - Queen - Bohemian Rhapsody", "Queen - Bohemian Rhapsody"],
+      ["Mötley Crüe - Kickstart My Heart - Official", "Mötley Crüe - Kickstart My Heart"],
     ];
     for (const [name, clean] of cases) expect(withoutNameNoise(name)).toBe(clean);
   });
@@ -60,6 +64,7 @@ describe("withoutNameNoise", () => {
       "Love Song (Part 2)",
       "Full Song",
       "Explicit Content",
+      "Make It Official",
     ]) {
       expect(withoutNameNoise(name)).toBe(name);
     }

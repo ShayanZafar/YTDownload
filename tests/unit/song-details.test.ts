@@ -16,6 +16,7 @@ import {
   resetCatalogues,
   CATALOGUE_LIMITS,
   type CatalogueSong,
+  bareTitle,
 } from "../../server/catalogues";
 import { readId3Frames, withFramesFrom } from "../../server/id3-frames";
 import { findAudioFiles, parseFile, type AudioFile } from "../../server/library";
@@ -219,6 +220,60 @@ describe("pickMatch", () => {
     expect(pickMatch([earth], { track: "Michael Jackson Earth Song Live", artist: "" })).toBe(
       undefined,
     );
+  });
+
+  it("compares whole artist names: one of a duo isn't someone else of that first name", () => {
+    const menace = song({ title: "Menace", artist: "Fred Lark Brown" });
+    expect(pickMatch([menace], { track: "Menace", artist: "Fred & Ginger" })).toBe(undefined);
+    const wailers = song({ title: "Heathen", artist: "Bob Marley & The Wailers" });
+    expect(pickMatch([wailers], { track: "Heathen", artist: "Bob Marley" })).toBe(wailers);
+    const sayx3 = song({ title: "Say Say Say", artist: "Paul McCartney" });
+    expect(
+      pickMatch([sayx3], { track: "Say Say Say", artist: "Michael Jackson & Paul McCartney" }),
+    ).toBe(sayx3);
+    // The same but for spaces and punctuation.
+    const bells = song({ title: "Hells Bells", artist: "AC/DC" });
+    expect(pickMatch([bells], { track: "Hells Bells", artist: "ACDC" })).toBe(bells);
+  });
+
+  it("takes a title with a featured artist after it, or its words in another order", () => {
+    const despacito = song({ title: "Despacito", artist: "Luis Fonsi" });
+    expect(
+      pickMatch([despacito], { track: "Despacito ft. Daddy Yankee", artist: "Luis Fonsi" }),
+    ).toBe(despacito);
+    const requiem = song({ title: "Requiem For A Dream (Paul Oakenfold Remix)", artist: "Leama" });
+    expect(
+      pickMatch([requiem], {
+        track: "Requiem for a Dream Remix (Paul Oakenfold)",
+        artist: "Leama",
+      }),
+    ).toBe(requiem);
+  });
+
+  it("takes a version named after a dash or with a year when it's the same length", () => {
+    const heathen = song({ title: "Heathen (Live)", artist: "Bob Marley", duration: 300 });
+    expect(pickMatch([heathen], { track: "Heathen - Live 1978", artist: "Bob Marley" }, 301)).toBe(
+      heathen,
+    );
+    expect(pickMatch([heathen], { track: "Heathen - Live 1978", artist: "Bob Marley" }, 200)).toBe(
+      undefined,
+    );
+    expect(bareTitle("Mindfields original")).toBe("Mindfields");
+    expect(bareTitle("By Myself - (Hybrid Theory)")).toBe("By Myself");
+    expect(bareTitle("Rhythm Of The Night (Extended Version) HD 1993")).toBe("Rhythm Of The Night");
+    // A title that's only a year stays.
+    expect(bareTitle("1999")).toBe("1999");
+  });
+
+  it("takes a dash-less name whose other words are one of the song's artists", () => {
+    const sayx3 = song({ title: "Say Say Say", artist: "Paul McCartney" });
+    expect(
+      pickMatch([sayx3], { track: "Michael Jackson & Paul McCartney Say Say Say", artist: "" }),
+    ).toBe(sayx3);
+    const souls = song({ title: "Beneath, Between, Beyond", artist: "Static-X" });
+    expect(
+      pickMatch([souls], { track: "Static-X Beneath, Between, Beyond (Song)", artist: "" }),
+    ).toBe(souls);
   });
 
   it("without an artist, takes only a song the same length", () => {

@@ -60,6 +60,7 @@ const MUSICBRAINZ_SEARCH = "https://musicbrainz.org/ws/2/recording";
 // MusicBrainz asks every app to name itself and say where it's from.
 const MUSICBRAINZ_USER_AGENT = "YTDownload/1.0 ( https://github.com/ShayanZafar/YTDownload )";
 const FETCH_TIMEOUT_MS = 8_000;
+const MUSICBRAINZ_TIMEOUT_MS = 20_000;
 /** A found song this many seconds longer or shorter than ours is another recording. */
 export const SAME_LENGTH_SECONDS = 3;
 /** The catalogues' published limits: how many requests in how long. */
@@ -96,11 +97,30 @@ export function plain(text: string): string {
     .trim();
 }
 
-const sameTitle = (a: string, b: string) => plain(cleanSongTitle(a)) === plain(cleanSongTitle(b));
+/** A title's words in order of the alphabet: "Remix (Paul Oakenfold)" is "(Paul Oakenfold Remix)". */
+const wordSet = (text: string) => text.split(" ").sort().join(" ");
 
-/** A title without anything in brackets: "Heer (Coke Studio Season 8)" → "heer". */
-const baseTitle = (title: string) =>
-  plain(cleanSongTitle(title).replace(/\s*[([][^)\]]*[)\]]/g, "")) || plain(title);
+const sameTitle = (a: string, b: string) => {
+  const [x, y] = [plain(cleanSongTitle(a)), plain(cleanSongTitle(b))];
+  return x === y || wordSet(x) === wordSet(y);
+};
+
+/**
+ * A title without what versions add — anything in brackets, after a last dash,
+ * or a year or "Original" at the end: "Heer (Coke Studio Season 8)" → "heer",
+ * "Heathen - Live 1978" → "heathen", "Mindfields original" → "mindfields".
+ */
+export function bareTitle(title: string): string {
+  let bare = cleanSongTitle(title).replace(/\s*[([][^)\]]*[)\]]/g, " ");
+  bare = bare.replace(/\s+[-–—]\s+[^-–—]*$/, "");
+  for (let before = ""; before !== bare;) {
+    before = bare;
+    bare = bare.trim().replace(/\s+(?:(?:19|20)\d{2}|original|official|hq|hd)$/i, "");
+  }
+  return bare.replace(/\s+/g, " ").trim();
+}
+
+const baseTitle = (title: string) => plain(bareTitle(title)) || plain(title);
 
 /**
  * The same title, or the same but for something in brackets ("(Long
@@ -131,24 +151,40 @@ const nearlySpelled = (a: string, b: string) =>
  * title ("Michael Jackson Earth Song", "Earth Song Michael Jackson")?
  */
 function namesBoth(song: CatalogueSong, name: string): boolean {
-  const ours = plain(cleanSongTitle(name));
+  // Ours with or without what versions add ("(Song)", "- Live"), but their title as it is.
+  const ours = [plain(cleanSongTitle(name)), baseTitle(name)];
   const title = plain(cleanSongTitle(song.title));
-  return [plain(song.artist), plain(cleanArtist(song.artist))].some(
-    (artist) => artist !== "" && (ours === `${artist} ${title}` || ours === `${title} ${artist}`),
-  );
+  // The rest of the name, before or after the title, is the artist — or one of them
+  // ("Michael Jackson & Paul McCartney Say Say Say" for Paul McCartney's).
+  return ours.some((whole) => {
+    const rest = whole.startsWith(`${title} `)
+      ? whole.slice(title.length + 1)
+      : whole.endsWith(` ${title}`)
+        ? whole.slice(0, -title.length - 1)
+        : undefined;
+    return rest !== undefined && sameArtist(rest, song.artist);
+  });
 }
 
-/** Is one of the found song's artists ours (or the other way round)? */
+/** Each artist a credit names, as compared: "Bob Marley & The Wailers" → both, and all of it. */
+function artistNames(credit: string): string[] {
+  const parts = credit.split(
+    /\s*(?:,|&|;|\+|\/(?=\s)|\band\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bwith\b|\bx\b|\bvs\.?)\s*/i,
+  );
+  return [credit, cleanArtist(credit), ...parts].map(plain).filter(Boolean);
+}
+
+/**
+ * Is one of the found song's artists ours (or the other way round)? Whole
+ * names are compared — "Fred & Ginger" isn't "Fred Lark Brown" — spelt the
+ * same but for spaces ("ACDC", "AC/DC") or a letter or two ("Ozzy Osborne").
+ */
 function sameArtist(ours: string, theirs: string): boolean {
-  const a = plain(cleanArtist(ours));
-  const b = plain(theirs);
-  const c = plain(cleanArtist(theirs));
-  return (
-    a !== "" &&
-    (a === c ||
-      ` ${b} `.includes(` ${a} `) ||
-      ` ${plain(ours)} `.includes(` ${c} `) ||
-      nearlySpelled(a, c))
+  const mine = artistNames(ours);
+  const found = artistNames(theirs);
+  const squash = (name: string) => name.replace(/ /g, "");
+  return mine.some((a) =>
+    found.some((b) => a === b || squash(a) === squash(b) || nearlySpelled(a, b)),
   );
 }
 
@@ -492,7 +528,10 @@ async function getJson(source: CatalogueSource, url: string): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(url, {
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      // MusicBrainz is often slower to answer (seen taking over 8 s, October 2026).
+      signal: AbortSignal.timeout(
+        source === "musicbrainz" ? MUSICBRAINZ_TIMEOUT_MS : FETCH_TIMEOUT_MS,
+      ),
       ...(source === "musicbrainz" && { headers: { "User-Agent": MUSICBRAINZ_USER_AGENT } }),
     });
   } catch (err) {
@@ -546,8 +585,8 @@ async function lookUpIn(
     // Deezer's plain search finds nothing for a title with words in brackets
     // that its own title hasn't got ("(extended version)", seen October 2026),
     // and MusicBrainz's search for the title as a phrase can't: then each is
-    // asked without them.
-    const bare = search.track.replace(/\s*[([][^)\]]*[)\]]/g, "").trim();
+    // asked without them, nor what else versions add ("- Live 1978").
+    const bare = bareTitle(search.track);
     if (source === "musicbrainz") {
       let answers = await searchMusicBrainz(search);
       if (answers.length === 0 && bare && bare !== search.track) {

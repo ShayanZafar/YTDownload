@@ -43,6 +43,10 @@ describe("what's asked for", () => {
     expect(cleanSongTitle("Song [Official Audio] (feat. Someone) (Lyrics)")).toBe("Song");
     expect(cleanSongTitle("Bohemian Rhapsody - Remastered 2011")).toBe("Bohemian Rhapsody");
     expect(cleanSongTitle("Live Forever (Live)")).toBe("Live Forever (Live)");
+    // A featured artist after the title, without brackets.
+    expect(cleanSongTitle("Despacito ft. Daddy Yankee")).toBe("Despacito");
+    expect(cleanSongTitle("Medicine Man feat Eminem")).toBe("Medicine Man");
+    expect(cleanSongTitle("Daft Funk")).toBe("Daft Funk");
     expect(cleanArtist("RickAstleyVEVO")).toBe("RickAstley");
     expect(cleanArtist("Daft Punk - Topic")).toBe("Daft Punk");
     expect(cleanArtist("Daft Punk, Pharrell Williams")).toBe("Daft Punk");
@@ -64,6 +68,10 @@ describe("what's asked for", () => {
     );
     expect(searchesFor({ title: "Get Lucky", artist: "Daft Punk, Pharrell Williams" })).toEqual([
       { track: "Get Lucky", artist: "Daft Punk" },
+    ]);
+    // An artist with a dash in it: "Static - X".
+    expect(searchesFor({ title: "Static - X - Dead Souls" })).toEqual([
+      { artist: "Static-X", track: "Dead Souls" },
     ]);
     expect(searchesFor({ title: "Untitled track" })).toEqual([
       { track: "Untitled track", artist: "" },

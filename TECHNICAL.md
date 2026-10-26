@@ -290,9 +290,15 @@ What each file does, and the function and constant names to look for. This was C
   asked in turn until one has all of it, and the one with the most is used (the earlier on a tie;
   one with none of it is passed over); `noneHasIt` says every catalogue answered and none had it.
   A name with no dash and no artist ("Michael Jackson Earth Song") matches a song whose artist and
-  title it is (`namesBoth()`). `pickMatch()` takes only the same title by the same artist (or, without an artist, the same
+  title it is, or one of its artists and its title (`namesBoth()`). `pickMatch()` takes only the same title by the same artist (or, without an artist, the same
   length) — or a title that differs only in brackets, the same length — best the same title and
-  length on the artist's own album; each is asked no faster than its published limit
+  length on the artist's own album. The same title can have its words in another order ("Remix
+  (Paul Oakenfold)"), and a featured artist after it ("ft. Daddy Yankee") is left out; the same
+  artist is a whole name, one of a credit's names ("Bob Marley & The Wailers"), spelt the same but
+  for spaces and signs ("ACDC", "AC/DC") or a letter or two out: never part of a name ("Fred &
+  Ginger" isn't "Fred Lark Brown"). A search that finds nothing is asked again with the bare title
+  (`bareTitle()`: without brackets, a last "- Live 1978", or a year, "original", "HD" at the end).
+  MusicBrainz is given 20 seconds to answer, the others 8. Each is asked no faster than its published limit
   (`CATALOGUE_LIMITS`: iTunes 20 a minute, Deezer 50 in 5 s, MusicBrainz 1 a second; past it Deezer answers "nothing" for
   songs it has), and one that refuses (iTunes `403`/`429`, Deezer error 4) or whose limit is used up
   is skipped at once until its time is up; covers only from
@@ -341,7 +347,9 @@ What each file does, and the function and constant names to look for. This was C
   it's left as it is
 - `server/lyrics.ts` — lyrics for the player from LRCLIB's search (`lrclib.net`, free, no key; only
   title, artist and length sent): `searchesFor()`, `pickLyrics()` (same length ±3 s, synced first),
-  `parseLrc()`; answers cached in memory. Pure parts unit-tested
+  `parseLrc()`; answers cached in memory. `cleanSongTitle()` and `searchesFor()` are also how
+  the catalogues are searched ("Static - X - Dead Souls" is Static-X's "Dead Souls"). Pure parts
+  unit-tested
 - `server/youtube-url.ts` — pure URL-parsing and thumbnail helpers (unit-tested)
 - `server/storage.ts` — `FileStorage`: newest 1,000 entries (`MAX_HISTORY`), queued writes,
   temp-file + rename; `server/retry-when-busy.ts` retries the renames and deletes Windows briefly
@@ -355,7 +363,8 @@ What each file does, and the function and constant names to look for. This was C
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
   default name of any download found from Spotify); `shared/name-noise.ts` has `withoutNameNoise()`
-  (a name without "(Official Video)", "HQ", "Lyrics Video", "(1998)", a copy's "(1)", and
+  (a name without "(Official Video)", "HQ", "Lyrics Video", "(1998)", a copy's "(1)", a
+  converter site's "yt1s.com - " in front, and
   `decodeEntities()` for "&#39"), used before the catalogues and LRCLIB are searched and for a
   download's title tag, and `sanitizedFileName()` (Sanitize Filename's tidy name, also a download's
   default file name, on the page and the server; parts in capitals put in title case by
@@ -739,7 +748,7 @@ Browsers always put downloads in their own downloads folder, and a web page can'
 
 9. **Files that aren't what their name says:** each folder file's first bytes are checked once (`server/file-kind.ts`, cached with its tags). One that's another kind of audio than its extension (an M4A named `.mp3`) is listed with `realType`, played as what it is (its real MIME type and `canPlayType()` check), and gets a **Fix name** button (amber, a file with a warning sign): `POST /api/music/<id>/fix-name` renames it to that extension (`Song.m4a`; refused if another file has that name), out of the player first. One that isn't audio at all (a program, an archive, a web page…) is listed with `notAudio`, can't be played (the row says what it is) and keeps only its bin button; the server answers `415` to playing, converting or reading it, and it never counts as a playlist song in the folder.
 
-10. **Sanitize Filename and Rename:** **Sanitize Filename** (`client/src/components/sanitize-names.tsx`, Save to folder only) lists the songs listed — not the one playing — whose file name carries what videos and copies add ("(Official Audio)", "HQ", "Lyrics Video", a year in brackets, a copy's "(1)", "&#39", "Artist- Song"), each with the tidy name `sanitizedFileName()` suggests in an editable box, ticked — and any song that's another kind of audio than its name says (`realType`: an M4A named .mp3), with its own name and the right extension. "Song - Artist" is put round (`artistFirst()`, with `artistsOf()` the listed songs' artists); **Rename N songs** renames the ticked ones one per CPU core through `POST /api/music/:id/rename`, each shown under its new name at once (set into the folder list's query, out of the Up next queue). A name another song in its folder has — or that an earlier song in the list is to get — is never given, nor a number added (`clashesOf()`): the song is unticked, shown with the other's file name and both lengths, and a **Delete** button for each opens the usual Delete from folder dialog, so a copy can go to the bin; once one is gone the rename is ticked again. **Rename** (`client/src/components/rename-song-dialog.tsx`, each folder song's pencil button) changes one song's file name, title and artist tags; its **Sanitize** button fills in the suggested name, and the song playing leaves the player first.
+10. **Sanitize Filename and Rename:** **Sanitize Filename** (`client/src/components/sanitize-names.tsx`, Save to folder only) lists the songs listed — not the one playing — whose file name carries what videos and copies add ("(Official Audio)", "HQ", "Lyrics Video", a year in brackets, a copy's "(1)", "&#39", "Artist- Song"), each with the tidy name `sanitizedFileName()` suggests in an editable box, ticked — and any song that's another kind of audio than its name says (`realType`: an M4A named .mp3), with its own name and the right extension. "Song - Artist" is put round (`artistFirst()`, with `artistsOf()` the listed songs' artists); **Rename N songs** renames the ticked ones one per CPU core through `POST /api/music/:id/rename`, each shown under its new name at once (set into the folder list's query, out of the Up next queue). A name another song in its folder has — or that an earlier song in the list is to get — is never given, nor a number added (`clashesOf()`): the song is unticked, shown with the other's file name and both lengths, and for each a **Play** button (`player.play([song], 0)`: the song on its own, to hear which is which; Pause when it's playing) and a **Delete** button, which opens the usual Delete from folder dialog, so a copy can go to the bin — the one playing too, as it leaves the player first; once one is gone the rename is ticked again. A song listened to and then renamed leaves the player before its file is renamed; the one playing as the panel opens isn't offered. **Rename** (`client/src/components/rename-song-dialog.tsx`, each folder song's pencil button) changes one song's file name, title and artist tags; its **Sanitize** button fills in the suggested name, and the song playing leaves the player first.
 
 11. **Housekeeping:** **Housekeeping** (`client/src/components/housekeeping.tsx`, Save to folder only) checks the songs listed, one per CPU core, through `GET /api/music/<id>/check` (`server/housekeeping.ts`): each is decoded all the way through by ffmpeg, so a file that isn't audio, one that ends long before the length its header gives (a download cut short: "Plays 0:44 of the 7:50 it says it is"), or one that can't be read through is found; and its bitrate is weighed against the quality bar (the owner's choice: below 128 kbps by default; 192, 256, anything not lossless, or off; lossless files always pass), a setting kept in `data/settings.json` (`qualityBar`) and changed from the panel, which lists the songs again at once without checking them again. It also lists the folder's files that aren't songs (`GET /api/folder-files`): pictures, programs, text, and downloads that didn't finish (`.part`, ticked) — never playlists, the system's `desktop.ini` and the like, or a download being saved now. Each is listed under Not audio, Cut short, Damaged, Low quality or Other files with why, as each song is checked; everything but other files is ticked. Nothing is deleted until the person presses **Delete N files** and confirms; then the ticked ones go to the Recycle Bin / Trash (`DELETE /api/music/<id>` or `DELETE /api/folder-files/<id>`), leaving Your music and the Up next queue at once, and a drive with no bin is asked about again before deleting for good. The song playing is left alone.
 
