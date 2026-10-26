@@ -55,9 +55,12 @@ export function lookupEntry(song: string, lookup: SongLookup): DetailsLogEntry {
   const lacks = `lacks ${lookup.missing.join(", ")}`;
   if (!lookup.found) return { kind, song, outcome: "not found", details: [lacks, ...lookup.notes] };
   const source = lookup.source === "deezer" ? "Deezer" : "iTunes";
-  const matched = lookup.match
-    ? `matched “${lookup.match.title}” by ${lookup.match.artist} on ${source}`
-    : `on ${source}`;
+  const matched =
+    lookup.source === "name"
+      ? "no catalogue has it: from its file name"
+      : lookup.match
+        ? `matched “${lookup.match.title}” by ${lookup.match.artist} on ${source}`
+        : `on ${source}`;
   return { kind, song, outcome: "found", details: [lacks, matched, ...detailWords(lookup.found)] };
 }
 

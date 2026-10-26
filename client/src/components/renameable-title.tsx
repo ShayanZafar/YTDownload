@@ -1,9 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { safeFileName } from "@shared/filename";
+import { sanitizedFileName } from "@shared/name-noise";
 
 type RenameableTitleProps = {
-  /** The video's own title, shown until you rename the file. */
+  /** The video's own title: sanitized, it's the name shown until you rename the file. */
   title: string;
   /** The new file name, or null to use the title. */
   fileName: string | null;
@@ -16,7 +17,7 @@ type RenameableTitleProps = {
 
 /**
  * The preview card's title, which is also the downloaded file's name. It shows
- * the video's title with a dashed underline and a pencil; click it to rename
+ * the video's title, sanitized, with a dashed underline and a pencil; click it to rename
  * the file right there, as a browser's "Save as" dialog would let you. Enter
  * (or clicking away) keeps the new name, Escape cancels.
  */
@@ -36,8 +37,9 @@ export function RenameableTitle({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
   const hintId = useId();
-  const defaultName = safeFileName(title);
-  const shown = fileName ?? title;
+  // What the server saves it as when it isn't renamed: without "(Official Video)", "HQ"…
+  const defaultName = sanitizedFileName(title);
+  const shown = fileName ?? defaultName;
 
   const start = () => {
     setDraft(fileName ?? defaultName);

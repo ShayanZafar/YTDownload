@@ -371,8 +371,11 @@ export const songLookupSchema = z.object({
   match: z
     .object({ title: z.string(), artist: z.string(), album: z.string().nullable() })
     .nullable(),
-  /** The catalogue that answered. */
-  source: z.enum(["itunes", "deezer"]).nullable(),
+  /**
+   * The catalogue that answered — or "name" for a song with no title or
+   * artist tags that no catalogue has: its "Artist - Song" file name's two halves.
+   */
+  source: z.enum(["itunes", "deezer", "name"]).nullable(),
 });
 
 export type SongLookup = z.infer<typeof songLookupSchema>;

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Eraser, Loader2, X } from "lucide-react";
 import type { MusicTrack } from "@shared/schema";
-import { renameFolderSong, sanitizedNameOf, type PlayerTrack } from "@/lib/music";
+import { artistsOf, renameFolderSong, sanitizedNameOf, type PlayerTrack } from "@/lib/music";
 import { eachAtOnce } from "@/lib/song-details";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +27,9 @@ const secondary = `${button} border border-border bg-card text-foreground hover:
 
 const fileOf = (track: FolderTrack) => track.fileName.split(/[\\/]/).pop() ?? track.fileName;
 const extOf = (track: FolderTrack) => /\.[^.]+$/.exec(fileOf(track))?.[0] ?? "";
+/** The extension it will have: the right one for what's in it ("Song.mp3" that's an M4A: .m4a). */
+const newExtOf = (track: FolderTrack) => track.realType ?? extOf(track);
+const nameOf = (track: FolderTrack) => fileOf(track).slice(0, -extOf(track).length || undefined);
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
@@ -56,13 +59,21 @@ export function SanitizeNames({
   onRenamed: () => void;
   onClose: () => void;
 }) {
-  const [stage, setStage] = useState<Stage>(() => ({
-    name: "review",
-    renames: tracks.flatMap((track) => {
-      const name = track.key === playingKey ? undefined : sanitizedNameOf(track);
-      return name ? [{ track, name, keep: true }] : [];
-    }),
-  }));
+  const [stage, setStage] = useState<Stage>(() => {
+    // "Song - Artist" is put round when the folder's other songs name that artist.
+    const artists = artistsOf(tracks);
+    return {
+      name: "review",
+      renames: tracks.flatMap((track) => {
+        // A tidier name, or (for an M4A named .mp3, say) the same name with the right extension.
+        const name =
+          track.key === playingKey
+            ? undefined
+            : (sanitizedNameOf(track, artists) ?? (track.realType ? nameOf(track) : undefined));
+        return name ? [{ track, name, keep: true }] : [];
+      }),
+    };
+  });
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
@@ -228,9 +239,10 @@ function Review({
       </p>
       <p className="text-xs text-muted-foreground">
         Takes out what videos and copies add to a name: “(Official Video)”, “HQ”, “Lyrics Video”, a
-        year in brackets, a copy's “(1)”. The extension stays, and a name that's taken gets a
-        number. Playlists saved as .m3u8 files list songs by name, so they won't find a renamed
-        song.{skipsPlaying && " The song that's playing is left out."}
+        year in brackets, a copy's “(1)”. The extension stays (unless it's wrong: an M4A named .mp3
+        becomes .m4a), and a name that's taken gets a number. Playlists saved as .m3u8 files list
+        songs by name, so they won't find a renamed song.
+        {skipsPlaying && " The song that's playing is left out."}
       </p>
       {renames.length > 0 && (
         <ul className="max-h-80 divide-y divide-border/60 overflow-y-auto rounded-lg border border-border bg-card">
@@ -256,7 +268,7 @@ function Review({
                     aria-label={`New name for “${fileOf(track)}”`}
                     className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
                   />
-                  <span className="shrink-0 text-xs text-muted-foreground">{extOf(track)}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{newExtOf(track)}</span>
                 </span>
               </span>
             </li>

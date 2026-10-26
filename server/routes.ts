@@ -8,6 +8,7 @@ import { extractVideoId } from "./youtube-url";
 import { SearchFailed, searchSongs, searchSoundCloudOnly, type SongSearchOptions } from "./search";
 import { audioLinkOf } from "@shared/soundcloud-link";
 import { safeFileName } from "@shared/filename";
+import { sanitizedFileName, withoutNameNoise } from "@shared/name-noise";
 import { audioTypeOf, songNameOf } from "@shared/audio-types";
 import { musicIdSchema, type SaveSettings } from "@shared/schema";
 import {
@@ -483,10 +484,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       let file = await songFor(req, res, { anyFile: name !== undefined && !title && !artist });
       if (!file) return;
       const { saveFolder } = await settings.get();
+      // Its extension stays — or, for a song that's another kind of audio than
+      // its name says (an M4A named .mp3), becomes the right one, as Fix name's.
       const fileName =
         name === undefined
           ? undefined
-          : `${safeFileName(name, songNameOf(file.relative))}${path.extname(file.relative)}`;
+          : `${safeFileName(name, songNameOf(file.relative))}${file.realType ?? path.extname(file.relative)}`;
       const renaming = fileName !== undefined && fileName !== path.basename(file.relative);
       const retagging = title !== undefined || artist !== undefined;
       if (!renaming && !retagging) {
@@ -791,7 +794,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // error before a streaming response is opened. (A refusal from YouTube
       // is answered at once with a 502 that says so.)
       const info = await lookUpAudio(link);
-      const tags = { ...info, ...(await songTags), spotifyId };
+      // Its title without what videos add ("(Official Video)", "HQ"…), unless Spotify names it.
+      const tags = { ...info, title: withoutNameNoise(info.title), ...(await songTags), spotifyId };
       // Its genre (and for a song without an album, its album) from the music
       // catalogues, looked up meanwhile. It never fails or holds the download up.
       const lookedUp = lookUpDownload(tags, info.duration);
@@ -810,10 +814,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       void later.then((found) => logDetails(downloadEntry(name || info.title, found)));
       output = await prepareAudioOutput(format, tags, info.acodec, ownCover, later);
       if (clientGone) return;
-      // Saved as the name chosen on the page, or the video's title. res.attachment
-      // writes both a plain filename and a UTF-8 one (filename*), so accents and
-      // non-Latin titles survive.
-      const fileName = `${safeFileName(name || info.title)}.${output.ext}`;
+      // Saved as the name chosen on the page, or the video's title sanitized
+      // (sanitizedFileName). res.attachment writes both a plain filename and a
+      // UTF-8 one (filename*), so accents and non-Latin titles survive.
+      const fileName = `${name ? safeFileName(name) : sanitizedFileName(info.title)}.${output.ext}`;
       res.attachment(fileName);
       res.header("Content-Type", output.contentType);
 

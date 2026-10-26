@@ -147,6 +147,29 @@ describe("Fill in details (API)", () => {
     expect(res.body).toMatchObject({ writable: true, found: null });
   });
 
+  it("takes the title and artist from an untagged “Artist - Song” name no catalogue has", async () => {
+    await tone(path.join(folder, "Sine Wave - Rare Tone.mp3"), [
+      ...["-c:a", "libmp3lame", "-b:a", "128k"],
+    ]);
+    const { id } = (await songs())["Sine Wave - Rare Tone.mp3"];
+    const lookup = songLookupSchema.parse(
+      (await request(app).get(`/api/music/${id}/details`).expect(200)).body,
+    );
+    expect(lookup).toMatchObject({
+      source: "name",
+      match: null,
+      found: { title: "Rare Tone", artist: "Sine Wave" },
+    });
+    await request(app).post(`/api/music/${id}/details`).send(lookup.found).expect(200);
+    expect((await songs())["Sine Wave - Rare Tone.mp3"]).toMatchObject({
+      title: "Rare Tone",
+      artist: "Sine Wave",
+    });
+    const log = (await request(app).get("/api/details-log").expect(200)).text;
+    expect(log).toContain("no catalogue has it: from its file name; title Rare Tone");
+    await fs.rm(path.join(folder, "Sine Wave - Rare Tone.mp3"));
+  });
+
   it("says a file that can't hold tags can't be changed", async () => {
     const { id } = (await songs())["Old Song.wma"];
     expect((await request(app).get(`/api/music/${id}/details`).expect(200)).body).toMatchObject({

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { decodeEntities, sanitizedFileName, withoutNameNoise } from "../../shared/name-noise";
+import {
+  artistFirst,
+  decodeEntities,
+  fromAllCaps,
+  knownArtists,
+  sanitizedFileName,
+  withoutNameNoise,
+} from "../../shared/name-noise";
 import { searchesFor } from "../../server/lyrics";
 
 // What video titles and file names add to a song's name (shared/name-noise.ts),
@@ -23,11 +30,23 @@ describe("withoutNameNoise", () => {
       ["OSA Official HD Video", "OSA"],
       ["Lithium HQ", "Lithium"],
       ["Linkin Park - Numb Lyrics", "Linkin Park - Numb"],
+      // A dot that's part of the name stays (a file name can't end in one, but a title can).
+      ["Gorillaz - Feel Good Inc. Lyrics", "Gorillaz - Feel Good Inc."],
       ["Yanni - Dance With a Stranger remaster", "Yanni - Dance With a Stranger"],
       [
         "2 Unlimited - The Magic Friend (Extended Version) 1992",
         "2 Unlimited - The Magic Friend (Extended Version)",
       ],
+      ["Dead Prez - Hip-Hop [HQExplicit]", "Dead Prez - Hip-Hop"],
+      ["ZZ Top - Just Got Paid (HIGH QUALITY)", "ZZ Top - Just Got Paid"],
+      ["Koyla Dekha Tujhe Tho High Quality Audio", "Koyla Dekha Tujhe Tho"],
+      ["Koyla Ghungte Mein ChandaHigh Quality Audio", "Koyla Ghungte Mein Chanda"],
+      // What follows "Full Song" is the film and its stars.
+      [
+        "Tujh Mein Rab Dikhta Hai - Full Song Rab Ne Bana Di Jodi Shah Rukh Khan",
+        "Tujh Mein Rab Dikhta Hai",
+      ],
+      ["Baazigar O Baazigar-HD VIDEO SONG Shahrukh Khan & Kajol", "Baazigar O Baazigar"],
     ];
     for (const [name, clean] of cases) expect(withoutNameNoise(name)).toBe(clean);
   });
@@ -39,6 +58,8 @@ describe("withoutNameNoise", () => {
       "1999",
       "HQ",
       "Love Song (Part 2)",
+      "Full Song",
+      "Explicit Content",
     ]) {
       expect(withoutNameNoise(name)).toBe(name);
     }
@@ -70,6 +91,20 @@ describe("sanitizedFileName", () => {
       ["Genetic - Trancemission . HQ", "Genetic - Trancemission"],
       ["Jimi Hendrix Purple Haze (1)", "Jimi Hendrix Purple Haze"],
       ["Rock &quot;n&quot; Roll", "Rock n Roll"],
+      [
+        "Immortal Technique - Point of No Return w Lyrics",
+        "Immortal Technique - Point of No Return",
+      ],
+      [
+        "Immortal Technique- Caught In a Hustle(con subtitulos)",
+        "Immortal Technique - Caught In a Hustle",
+      ],
+      [
+        "Aliotta Haynes Jeremiah - Lake Shore Drive Album (1971) - HQ 320 Kbps",
+        "Aliotta Haynes Jeremiah - Lake Shore Drive Album",
+      ],
+      ["Heart --Magic Man - HQ Audio -- LYRICS", "Heart - Magic Man"],
+      ["Linkin Park - Pts.of.Athrty HD 720p", "Linkin Park - Pts.of.Athrty"],
     ];
     for (const [name, clean] of cases) expect(sanitizedFileName(name)).toBe(clean);
   });
@@ -83,5 +118,57 @@ describe("sanitizedFileName", () => {
     ]) {
       expect(sanitizedFileName(name)).toBe(name);
     }
+  });
+});
+
+describe("fromAllCaps", () => {
+  it("puts names in capitals in title case, leaving short words and mixed case alone", () => {
+    const cases: [string, string][] = [
+      ["MICHAEL JACKSON", "Michael Jackson"],
+      ["SPEED DEMON (EXTENDED VERSION)", "Speed Demon (Extended Version)"],
+      ["DON'T STOP", "Don't Stop"],
+      ["ROCKY II THEME", "Rocky II Theme"],
+      ["DMX", "DMX"],
+      ["AC/DC", "AC/DC"],
+      ["SPEED DEMON (Extended MoonWalker Version)", "Speed Demon (Extended MoonWalker Version)"],
+      ["Feel Good Inc (DJ Remix)", "Feel Good Inc (DJ Remix)"],
+      ["X", "X"],
+      ["ZZ TOP", "ZZ Top"],
+      ["M.U.T.E.", "M.U.T.E."],
+      ["K.U.S.H. FOREVER", "K.U.S.H. Forever"],
+      ["FRGT10 REMIX", "FRGT10 Remix"],
+      ["LOST IN THE ECHO", "Lost In The Echo"],
+    ];
+    for (const [part, cased] of cases) expect(fromAllCaps(part)).toBe(cased);
+    expect(sanitizedFileName("SPEED DEMON (Extended Version) - MICHAEL JACKSON")).toBe(
+      "Speed Demon (Extended Version) - Michael Jackson",
+    );
+    expect(sanitizedFileName("MOHD RAFI - PARDA HAI PARDA")).toBe("Mohd Rafi - Parda Hai Parda");
+  });
+});
+
+describe("artistFirst", () => {
+  const artists = knownArtists([
+    { name: "Linkin Park - Numb", artist: null },
+    { name: "Linkin Park - Faint", artist: null },
+    { name: "Promises I Can't Keep - Mike Shinoda", artist: "Mike Shinoda" },
+    { name: "Crush - Paul van Dyk", artist: null },
+  ]);
+
+  it("puts “Song - Artist” round when the folder names that artist, and nothing else", () => {
+    expect(artistFirst("Papercut - Linkin Park", artists)).toBe("Linkin Park - Papercut");
+    expect(artistFirst("Promises I Can't Keep - Mike Shinoda", artists)).toBe(
+      "Mike Shinoda - Promises I Can't Keep",
+    );
+    expect(artistFirst("Coke Studio - Tajdar - Linkin Park", artists)).toBe(
+      "Linkin Park - Coke Studio - Tajdar",
+    );
+    // Already artist first, an artist named once only by a file name, or one part.
+    expect(artistFirst("Linkin Park - Numb", artists)).toBe("Linkin Park - Numb");
+    expect(artistFirst("Crush - Paul van Dyk", artists)).toBe("Crush - Paul van Dyk");
+    expect(artistFirst("Linkin Park", artists)).toBe("Linkin Park");
+    // In capitals: spelt as the folder spells it.
+    expect(artistFirst("NUMB - LINKIN PARK", artists)).toBe("Linkin Park - NUMB");
+    expect(artistFirst("LINKIN PARK - Numb", artists)).toBe("Linkin Park - Numb");
   });
 });

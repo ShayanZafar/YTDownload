@@ -22,6 +22,7 @@ import { findAudioFiles, parseFile, type AudioFile } from "../../server/library"
 import {
   canWriteDetails,
   detailsArgs,
+  detailsFromName,
   lookUpDetails,
   muxerFor,
   parseProbe,
@@ -197,6 +198,17 @@ describe("pickMatch", () => {
     expect(pickMatch([song({})], { track: "Test Tone HQ (1)", artist: "Sine Wave" })).toBeDefined();
   });
 
+  it("takes an artist spelt a letter out, not another artist", () => {
+    const ozzy = song({ title: "Shot In The Dark", artist: "Ozzy Osbourne" });
+    expect(pickMatch([ozzy], { track: "Shot in the Dark", artist: "Ozzy Osborne" })).toBe(ozzy);
+    const tone = song({ artist: "Sine Wavy" });
+    expect(pickMatch([tone], { track: "Test Tone", artist: "Sine Wave" })).toBe(tone);
+    expect(pickMatch([song({ artist: "Abba" })], { track: "Test Tone", artist: "Abby" })).toBe(
+      undefined,
+    );
+    expect(pickMatch([tone], { track: "Test Tone", artist: "Sun Wake" })).toBe(undefined);
+  });
+
   it("without an artist, takes only a song the same length", () => {
     const search = { track: "Test Tone", artist: "" };
     expect(pickMatch([song({ duration: 200 })], search, 180)).toBe(undefined);
@@ -254,6 +266,34 @@ describe("lookUpSong", () => {
     expect(await lookUpSong({ title: "Test Tone", artist: "Sine Wave" })).toMatchObject({
       source: "deezer",
     });
+  });
+
+  it("asks Deezer again without the brackets when they find nothing", async () => {
+    const searched: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) return json(itunesAnswer());
+      if (!url.includes("/search?")) return json({});
+      const q = new URL(url).searchParams.get("q")!;
+      searched.push(q);
+      return json({
+        data: q.includes("(")
+          ? []
+          : [
+              {
+                id: 1,
+                title: "Test Tone (Extended)",
+                artist: { name: "Sine Wave" },
+                duration: 300,
+              },
+            ],
+      });
+    });
+    const match = await lookUpSong({
+      title: "Sine Wave - Test Tone (extended version)",
+      duration: 301,
+    });
+    expect(searched).toEqual(["Sine Wave Test Tone (extended version)", "Sine Wave Test Tone"]);
+    expect(match).toMatchObject({ source: "deezer", song: { title: "Test Tone (Extended)" } });
   });
 
   it("says why a song wasn't found: each search, its closest answer, a catalogue that was busy", async () => {
@@ -745,5 +785,27 @@ describe("lookUpDetails", () => {
         coverUrl: COVER_URL,
       },
     });
+  });
+
+  it("takes the title and artist from an “Artist - Song” name no catalogue has, for a song without them", async () => {
+    resetCatalogues();
+    await tone(path.join(dir, "Bare.mp3"), ["-c:a", "libmp3lame", "-b:a", "128k"]);
+    await fs.rename(path.join(dir, "Bare.mp3"), path.join(dir, "Sine Wave - Rare Tone HQ.mp3"));
+    vi.stubGlobal("fetch", async (url: string) =>
+      url.startsWith("https://itunes.apple.com/") ? json(itunesAnswer()) : json({ data: [] }),
+    );
+    const lookup = await lookUpDetails(await scanned("Sine Wave - Rare Tone HQ.mp3"));
+    expect(lookup).toMatchObject({
+      source: "name",
+      match: null,
+      found: { title: "Rare Tone", artist: "Sine Wave" },
+    });
+    expect(lookup.notes.length).toBeGreaterThan(0);
+    // Not for a name without two halves, or a song with a title or artist already.
+    expect(detailsFromName("Rare Tone.mp3", ["title", "artist"])).toEqual({});
+    expect(detailsFromName("A - B.mp3", ["album", "genre"])).toEqual({});
+    expect(
+      detailsFromName("Sub/2Pac - Hit 'Em Up (Official Video).mp3", ["title", "artist"]),
+    ).toEqual({ artist: "2Pac", title: "Hit 'Em Up" });
   });
 });
