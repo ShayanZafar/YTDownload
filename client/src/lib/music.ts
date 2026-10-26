@@ -6,6 +6,7 @@
  */
 import { api, buildUrl } from "@shared/routes";
 import { AUDIO_TYPES, audioTypeOf, songNameOf } from "@shared/audio-types";
+import { foldSquashed } from "@shared/fold-text";
 import {
   deletedSongSchema,
   musicLibrarySchema,
@@ -412,12 +413,7 @@ export function facetChoicesOf(
 }
 
 /** Letters and digits only, lower case, without accents: "Hip-Hop/Rap" → "hiphoprap". */
-const squashed = (text: string) =>
-  text
-    .toLocaleLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\p{L}\p{N}]+/gu, "");
+const squashed = (text: string) => foldSquashed(text, "latin", (t) => t.toLocaleLowerCase());
 
 /**
  * The choices whose name has what's typed — in any case, without accents,

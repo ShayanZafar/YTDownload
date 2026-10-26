@@ -4,6 +4,7 @@
  * the browser, as you type.
  */
 import type { Download } from "@shared/schema";
+import { foldWords } from "@shared/fold-text";
 
 export const historyRanges = ["all", "week", "month", "older"] as const;
 export type HistoryRange = (typeof historyRanges)[number];
@@ -34,17 +35,11 @@ export const historyRangePhrases: Record<HistoryRange, string> = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Anything that isn't a letter or digit, in any language. (Built with
 // new RegExp because the "u" flag needs a newer compile target than ours.)
-const NON_WORD = new RegExp("[^\\p{L}\\p{N}]+", "gu");
 const NON_WORD_SPLIT = new RegExp("[^\\p{L}\\p{N}]+", "u");
 
 /** Lowercase, no accents or punctuation: "Beyoncé - Halo!" → "beyonce halo". Works for any script. */
 export function searchableText(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(NON_WORD, " ")
-    .trim();
+  return foldWords(text, "latin");
 }
 
 /**

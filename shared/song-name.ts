@@ -8,6 +8,7 @@
  */
 
 import { safeFileName } from "./filename";
+import { foldCase, foldSquashed, foldWords } from "./fold-text";
 import {
   artistFirst,
   artistKey,
@@ -47,21 +48,9 @@ const isVersionNote = (text: string) =>
   VERSION_WORDS.test(text) || /^live (?:at|in|from)\b/i.test(text) || /^[([].*[)\]]$/.test(text);
 
 /** A name to compare, loosely: no case, accents, "The" or anything but letters and digits. */
-const loose = (name: string) =>
-  name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .replace(/^the\s+/, "")
-    .replace(/[^\p{L}\p{N}]+/gu, "");
+const loose = (name: string) => foldSquashed(foldCase(name, "all").replace(/^the\s+/, ""), "all");
 /** Its words, to look for one name inside another: " ace ventura astrix ". */
-const words = (name: string) =>
-  ` ${name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()} `;
+const words = (name: string) => ` ${foldWords(name, "all")} `;
 const sameArtist = (a: string, b: string) => !!loose(a) && loose(a) === loose(b);
 /** Its spaces and punctuation: "Dr. Dre" has more than "Dr Dre", "Jay-Z" more than "JayZ". */
 const separators = (name: string) => name.replace(/[\p{L}\p{N}]/gu, "").length;

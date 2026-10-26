@@ -6,6 +6,7 @@
  */
 
 import { safeFileName } from "./filename";
+import { foldWords } from "./fold-text";
 
 const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
 
@@ -123,12 +124,7 @@ export function sanitizedFileName(name: string): string {
 }
 
 /** An artist's name to compare: lower case, letters and digits only (KnownArtists keys). */
-export const artistKey = (name: string) =>
-  name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
+export const artistKey = (name: string) => foldWords(name, "keep");
 
 /** A folder's artists (knownArtists()): by artistKey(), each as the folder spells it. */
 export type KnownArtists = ReadonlyMap<string, string>;

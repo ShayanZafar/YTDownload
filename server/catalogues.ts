@@ -20,6 +20,7 @@
  * longer than Deezer's 5 seconds is not found.
  */
 import { cleanArtist, cleanSongTitle, searchesFor, type SongToLookUp } from "./lyrics";
+import { foldWords } from "@shared/fold-text";
 
 export const catalogueSources = ["itunes", "deezer", "musicbrainz"] as const;
 export type CatalogueSource = (typeof catalogueSources)[number];
@@ -101,13 +102,7 @@ export const isCatalogueCoverUrl = (url: string) =>
 
 /** Text to compare: lower case, no accents or punctuation. */
 export function plain(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
-    .replace(/&/g, " and ")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim();
+  return foldWords(text.replace(/&/g, " and "), "latin");
 }
 
 /** A title's words in order of the alphabet: "Remix (Paul Oakenfold)" is "(Paul Oakenfold Remix)". */
