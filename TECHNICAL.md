@@ -693,7 +693,7 @@ The project's rules and pitfalls, with the reasons behind them, are kept by area
 | [`scripts.md`](.claude/rules/scripts.md)                             | the run scripts (Windows, macOS, Linux) and the owner's PC                                                                |
 | [`dev-server.md`](.claude/rules/dev-server.md)                       | the server's startup and the dev server (Vite's `server.fs`)                                                              |
 | [`dependencies.md`](.claude/rules/dependencies.md)                   | dependencies, licences, npm versions, npm scripts, Prettier                                                               |
-| [`code.md`](.claude/rules/code.md)                                   | TypeScript, Zod 4 and Tailwind CSS 4 quirks                                                                               |
+| [`code.md`](.claude/rules/code.md)                                   | TypeScript, Zod 4 and Tailwind CSS 4 quirks, and the shared helpers to use instead of writing another                     |
 
 ---
 
