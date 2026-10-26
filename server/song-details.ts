@@ -16,6 +16,7 @@ import os from "os";
 import path from "path";
 import type { IAudioMetadata } from "music-metadata";
 import { extensionOf, songNameOf } from "@shared/audio-types";
+import { sanitizedFileName } from "@shared/name-noise";
 import type { SongDetailField, SongDetails, SongLookup } from "@shared/schema";
 import { lookUpSongNoted } from "./catalogues";
 import { fetchCover } from "./cover";
@@ -131,7 +132,7 @@ export function muxerFor(
   const what = `${codec.toUpperCase()} audio${right ? "" : ` in a file ffmpeg calls “${container.split(",")[0]}”`}`;
   return {
     problem: right
-      ? `it's really ${KINDS[right]} file (${what}) named ${ext}: rename it to end in ${right}, then try again`
+      ? `it's really ${KINDS[right]} file (${what}) named ${ext}: rename it to end in ${right} (Fix name or Sanitize Filename does that), then try again`
       : `it's really ${what}, though it's named ${ext}, and the app can't add tags to that`,
   };
 }
@@ -170,6 +171,18 @@ function detailsFor(fields: SongDetailField[], found: SongDetails): SongDetails 
 }
 
 /**
+ * A title and artist from an "Artist - Song" file name, for a song with
+ * neither tag that no catalogue has: what a player shows for it otherwise is
+ * the whole file name as its title, and no artist.
+ */
+export function detailsFromName(file: string, missing: SongDetailField[]): SongDetails {
+  if (!missing.includes("title") || !missing.includes("artist")) return {};
+  const halves = /^(.+?) - (.+)$/.exec(sanitizedFileName(songNameOf(file)));
+  if (!halves) return {};
+  return { title: halves[2].trim(), artist: halves[1].trim() };
+}
+
+/**
  * What a folder song lacks, and what the catalogues have for it: looked up
  * by its title and artist tags, or, for a song without them, its file name
  * ("Artist - Song.mp3"). Throws CatalogueError if neither catalogue can be reached.
@@ -196,7 +209,12 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
     artist: tags.trackArtist,
     duration: tags.duration,
   });
-  if (!match) return { ...none, notes };
+  if (!match) {
+    const named = tags.title || tags.trackArtist ? {} : detailsFromName(file.relative, missing);
+    return Object.keys(named).length > 0
+      ? { ...none, notes, found: named, source: "name" }
+      : { ...none, notes };
+  }
   const { song, source } = match;
   const found = detailsFor(missing, song);
   if (Object.keys(found).length === 0) {

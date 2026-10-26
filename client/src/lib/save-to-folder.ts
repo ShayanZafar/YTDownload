@@ -49,6 +49,21 @@ export async function errorFrom(res: Response): Promise<ApiError> {
   );
 }
 
+/**
+ * The error for an OK answer that isn't what the page expected. A web page
+ * instead of JSON means the app's server doesn't know the request: it's an
+ * older version than the page (updated, but not restarted).
+ */
+export function unexpectedAnswer(res: Response): ApiError {
+  if (res.headers.get("content-type")?.includes("text/html")) {
+    return new ApiError(
+      "The app needs restarting: it's still running an older version than this page. Stop it and start it again, then try again.",
+      res.status,
+    );
+  }
+  return new ApiError("The app sent an answer the page didn't expect.", res.status);
+}
+
 export async function requestJson<T>(
   schema: z.ZodType<T>,
   url: string,
@@ -63,8 +78,7 @@ export async function requestJson<T>(
   });
   if (!res.ok) throw await errorFrom(res);
   const parsed = schema.safeParse(await res.json().catch(() => undefined));
-  if (!parsed.success)
-    throw new ApiError("The app sent an answer the page didn't expect.", res.status);
+  if (!parsed.success) throw unexpectedAnswer(res);
   return parsed.data;
 }
 

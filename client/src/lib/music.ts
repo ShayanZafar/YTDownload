@@ -17,9 +17,14 @@ import {
   type RenamedSong,
   type SanitizedSong,
 } from "@shared/schema";
-import { sanitizedFileName } from "@shared/name-noise";
+import {
+  artistFirst,
+  knownArtists,
+  sanitizedFileName,
+  type KnownArtists,
+} from "@shared/name-noise";
 import { searchableText } from "@/lib/history-filter";
-import { ApiError, errorFrom, requestJson } from "@/lib/save-to-folder";
+import { errorFrom, requestJson, unexpectedAnswer } from "@/lib/save-to-folder";
 
 /** A song the player can play. */
 export type PlayerTrack = {
@@ -129,8 +134,7 @@ export async function deleteFolderSong(
   }
   if (!res.ok) throw await errorFrom(res);
   const done = deletedSongSchema.safeParse(await res.json().catch(() => undefined));
-  if (!done.success)
-    throw new ApiError("The app sent an answer the page didn't expect.", res.status);
+  if (!done.success) throw unexpectedAnswer(res);
   return { deleted: true, ...done.data };
 }
 
@@ -143,20 +147,32 @@ export async function fixFolderSongName(id: string): Promise<RenamedSong> {
   });
   if (!res.ok) throw await errorFrom(res);
   const done = renamedSongSchema.safeParse(await res.json().catch(() => undefined));
-  if (!done.success)
-    throw new ApiError("The app sent an answer the page didn't expect.", res.status);
+  if (!done.success) throw unexpectedAnswer(res);
   return done.data;
 }
 
-/**
- * Sanitize Filename: the name a folder song's file should have, without its
- * folder or extension ("Junoon - Heer"), or undefined if it has it already.
- */
-export function sanitizedNameOf(track: { fileName: string }): string | undefined {
+/** A folder song's file name without its folder or extension. */
+export function songFileName(track: { fileName: string }): string {
   const file = track.fileName.split(/[\\/]/).pop() ?? track.fileName;
   const ext = /\.[^.]+$/.exec(file)?.[0] ?? "";
-  const name = file.slice(0, file.length - ext.length);
-  const clean = sanitizedFileName(name);
+  return file.slice(0, file.length - ext.length);
+}
+
+/** The artists a folder's songs name (knownArtists()), for sanitizedNameOf(). */
+export const artistsOf = (tracks: readonly { fileName: string; artist: string | null }[]) =>
+  knownArtists(tracks.map((track) => ({ name: songFileName(track), artist: track.artist })));
+
+/**
+ * Sanitize Filename: the name a folder song's file should have, without its
+ * folder or extension ("Junoon - Heer"), or undefined if it has it already —
+ * "Song - Artist" put round when `artists` (artistsOf()) names its artist.
+ */
+export function sanitizedNameOf(
+  track: { fileName: string; artist: string | null },
+  artists: KnownArtists = artistsOf([track]),
+): string | undefined {
+  const name = songFileName(track);
+  const clean = artistFirst(sanitizedFileName(name), artists);
   return clean !== name ? clean : undefined;
 }
 

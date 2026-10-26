@@ -67,3 +67,7 @@ export function detailLabels(found: SongDetails): string[] {
 
 export const catalogueName = (source: SongLookup["source"]) =>
   source === "deezer" ? "Deezer" : "iTunes";
+
+/** Where what was found came from: "found on Deezer", "from its file name". */
+export const foundWhere = (source: SongLookup["source"]) =>
+  source === "name" ? "from its file name" : `found on ${catalogueName(source)}`;

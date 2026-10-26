@@ -7,6 +7,7 @@ import {
   catalogueName,
   detailLabels,
   eachAtOnce,
+  foundWhere,
   lookUpSongDetails,
   writeSongDetails,
 } from "@/lib/song-details";
@@ -122,7 +123,7 @@ export function FillInDetails({
               key,
               title,
               result: "found",
-              text: `found on ${catalogueName(lookup.source)}: ${detailLabels(lookup.found).join(" · ")}`,
+              text: `${foundWhere(lookup.source)}: ${detailLabels(lookup.found).join(" · ")}`,
             });
           } else {
             notFound++;

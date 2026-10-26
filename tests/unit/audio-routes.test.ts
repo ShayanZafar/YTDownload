@@ -686,6 +686,21 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await fs.rm(path.join(folder, "Saved tone.mp3"));
   });
 
+  it("a save not renamed on the page is named and tagged without what the video adds", async () => {
+    await useFolder();
+    fake.audioInfo.mockResolvedValue({
+      title: "Test - Tone (Official Video) HQ",
+      artist: "Test",
+      formatId: "251",
+      acodec: "opus",
+    });
+    const lines = await saveLines({ url: VIDEO });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Test - Tone.mp3" });
+    const file = path.join(folder, "Test - Tone.mp3");
+    expect((await readTags(file)).common.title).toBe("Test - Tone");
+    await fs.rm(file);
+  });
+
   it("a saved download is found in the folder from the history, and isn't once it's gone", async () => {
     await useFolder();
     const lines = await saveLines({ url: VIDEO, name: "Found again" });

@@ -4,6 +4,7 @@ import {
   folderName,
   parseSaveEvent,
   saveOnServer,
+  unexpectedAnswer,
 } from "../../client/src/lib/save-to-folder";
 import { REFUSED_MESSAGE } from "../../server/youtube-limits";
 
@@ -152,5 +153,16 @@ describe("folderName", () => {
     expect(folderName("D:\\")).toBe("D:");
     expect(folderName("/home/me/Music")).toBe("Music");
     expect(folderName("/")).toBe("/");
+  });
+});
+
+describe("an answer the page didn't expect", () => {
+  it("says to restart the app when it's a web page: the app is older than the page", async () => {
+    const page = new Response("<!doctype html>", {
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+    expect(unexpectedAnswer(page).message).toMatch(/^The app needs restarting/);
+    const odd = new Response("{}", { headers: { "content-type": "application/json" } });
+    expect(unexpectedAnswer(odd).message).toBe("The app sent an answer the page didn't expect.");
   });
 });

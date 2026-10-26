@@ -20,21 +20,32 @@ export function decodeEntities(text: string): string {
 }
 
 // In brackets: "(Official Video)", "[HD]", "(Lyric Video)", "(Remastered 2011)",
-// "(Full Song)", a year "(1998)" and a copy's "(1)".
+// "(Full Song)", "(con subtítulos)", "[HQExplicit]", "(High Quality)", a year "(1998)" and a copy's "(1)".
 const BRACKETED_NOISE_RE =
-  /\s*[([](?:official\b[^)\]]*|[^)\]]*\b(?:video|audio|visuali[sz]er|lyrics?|lyric video|hd|hq|4k|full song|remaster(?:ed)?(?: \d{4})?)\b[^)\]]*|(?:19|20)\d{2}|\d)[)\]]/gi;
+  /\s*[([](?:official\b[^)\]]*|[^)\]]*\b(?:video|audio|visuali[sz]er|lyrics?|lyric video|hd|hq\w*|high quality|4k|explicit|full song|subt[ií]tulos|subtitulad[oa]|letra|remaster(?:ed)?(?: \d{4})?)\b[^)\]]*|(?:19|20)\d{2}|\d)[)\]]/gi;
 
-// At the end, without brackets: "HQ", "Official HD Video", "Audio HQ", "Lyrics Video"…
+// At the end, without brackets: "HQ", "Official HD Video", "Audio HQ", "Lyrics Video",
+// "w Lyrics", "HQ 320 Kbps", "High Quality Audio" (even run on: "ChandaHigh Quality Audio")…
 // (a bare "Video" or "Audio" can be the song's name: "Radio Video").
+const RUN_ON_NOISE_RE = /\s*high quality audio$/i;
+
+// "- Full Song Rab Ne Bana Di Jodi Shah Rukh Khan…", "-HD VIDEO SONG Shahrukh Khan & Kajol…":
+// what follows is the film and its stars.
+const FILM_NOISE_RE = /(?<=\S)\s*[-–—|]?\s*\b(?:full (?:video )?song|hd video song)\b.*$/i;
+
 const TRAILING_NOISE_RE =
-  /(?:\s+|\s*[-–—|.]\s*)(?:audio (?:hq|hd)|official(?: (?:hd|hq|4k))?(?: music| lyrics?)? (?:video|audio)|(?:hd|hq) (?:video|audio)|lyrics? video|music video|full song|lyrics|hq|hd|4k|1080p|720p|remaster(?:ed)?(?: \d{4})?)$/i;
+  /(?:\s+|\s*[-–—|]+\s*|\s+\.+\s*)(?:audio (?:hq|hd)|(?:w\/?|with) lyrics|(?:hq )?\d{2,3} ?kbps|official(?: (?:hd|hq|4k))?(?: music| lyrics?)? (?:video|audio)|(?:hd|hq) (?:video|audio)|lyrics? video|music video|full song|lyrics|hq|hd|4k|1080p|720p|remaster(?:ed)?(?: \d{4})?)$/i;
 
 /** `text` without the words above, or `text` itself if nothing else would be left. */
 export function withoutNameNoise(text: string): string {
-  let clean = decodeEntities(text).replace(BRACKETED_NOISE_RE, "");
+  let clean = decodeEntities(text)
+    .replace(BRACKETED_NOISE_RE, "")
+    .replace(FILM_NOISE_RE, "")
+    .replace(RUN_ON_NOISE_RE, "");
   for (let before = ""; before !== clean;) {
     before = clean;
-    clean = clean.replace(TRAILING_NOISE_RE, "").replace(/\s*[-–—|.]+$/, "");
+    // And a dash or a lone dot left at the end ("Song -", "Song ."), not "Inc.".
+    clean = clean.replace(TRAILING_NOISE_RE, "").replace(/\s*[-–—|]+$|\s+\.+$/, "");
   }
   // "(Extended Version) 1992": a year after the brackets.
   clean = clean.replace(/\)\s+(?:19|20)\d{2}$/, ")");
@@ -42,18 +53,120 @@ export function withoutNameNoise(text: string): string {
   return clean || text.trim();
 }
 
+const ROMAN_RE = /^[IVXLC]+$/;
+
+/**
+ * A word in capitals that stays so: a Roman numeral ("II"), one with digits
+ * ("FRGT10"), initials ("M.U.T.E.", "T.O.S."), or two letters without a vowel ("ZZ", "DJ").
+ */
+const keepsCapitals = (word: string) =>
+  ROMAN_RE.test(word) ||
+  /\p{Ll}|\d/u.test(word) ||
+  /\p{L}\.\p{L}/u.test(word) ||
+  /^[^\p{L}]*[B-DF-HJ-NP-TV-XZ]{1,2}[^\p{L}]*$/u.test(word);
+
+/**
+ * A part of a name in capitals ("MICHAEL JACKSON", "SPEED DEMON") in title
+ * case ("Michael Jackson"), its words with small letters as they are. A part
+ * with small letters outside brackets stays as it is, and so does a single
+ * short word ("DMX", "ABBA", "AC/DC") and any word keepsCapitals() keeps.
+ */
+export function fromAllCaps(part: string): string {
+  // Judged without what's in brackets: "SPEED DEMON (Extended Version)" is in capitals.
+  const outside = part.replace(/[([][^)\]]*[)\]]/g, "");
+  if (/\p{Ll}/u.test(outside) || !/\p{Lu}.*\p{Lu}/u.test(outside)) return part;
+  const words = part.trim().split(/\s+/);
+  if (words.length === 1 && words[0].length <= 5) return part;
+  return part.replace(/\S+/g, (word) =>
+    keepsCapitals(word)
+      ? word
+      : word
+          .toLowerCase()
+          .replace(
+            /(^|[([\-/"“])(\p{Ll})/gu,
+            (_, before: string, letter: string) => before + letter.toUpperCase(),
+          ),
+  );
+}
+
 /**
  * Sanitize Filename: a song's file name (without its extension) as it should
- * read — without the noise above, "Artist- Song" and "Artist_-_Song" as
+ * read — without the noise above, parts in capitals in title case, "Artist- Song" and "Artist_-_Song" as
  * "Artist - Song", no stray dashes at either end — and safe to save
  * (safeFileName). The name itself if nothing's left of it.
  */
 export function sanitizedFileName(name: string): string {
   let clean = /\s/.test(name) ? name : name.replace(/_+/g, " ");
   clean = withoutNameNoise(clean)
-    .replace(/\s*[-–—]\s+|\s+[-–—]\s*/g, " - ")
+    .replace(/\s*[-–—]+\s+|\s+[-–—]+\s*/g, " - ")
     .replace(/^[\s\-–—_.]+|[\s\-–—_]+$/g, "")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .split(" - ")
+    .map(fromAllCaps)
+    .join(" - ");
   return clean ? safeFileName(clean, name) : name;
+}
+
+/** An artist's name to compare: lower case, letters and digits only. */
+const artistKey = (name: string) =>
+  name
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+
+/** A folder's artists (knownArtists()): by artistKey(), each as the folder spells it. */
+export type KnownArtists = ReadonlyMap<string, string>;
+
+const hasSmallLetters = (text: string) => /\p{Ll}/u.test(text);
+
+/**
+ * The artists a folder's songs name: their artist tags, and the first half of
+ * "Artist - Song" file names that two or more songs share — each spelt as
+ * the folder spells it, not in capitals if any song has it otherwise. For artistFirst().
+ */
+export function knownArtists(
+  songs: readonly { name: string; artist?: string | null }[],
+): Map<string, string> {
+  const artists = new Map<string, string>();
+  const firsts = new Map<string, { count: number; spelt: string }>();
+  const add = (spelt: string) => {
+    const key = artistKey(spelt);
+    const known = artists.get(key);
+    if (key && (!known || (!hasSmallLetters(known) && hasSmallLetters(spelt)))) {
+      artists.set(key, spelt.trim());
+    }
+  };
+  for (const { name, artist } of songs) {
+    if (artist?.trim()) add(artist);
+    const halves = name.split(" - ");
+    if (halves.length < 2) continue;
+    const key = artistKey(halves[0]);
+    const seen = firsts.get(key);
+    firsts.set(key, {
+      count: (seen?.count ?? 0) + 1,
+      spelt: seen && hasSmallLetters(seen.spelt) ? seen.spelt : halves[0],
+    });
+  }
+  for (const { count, spelt } of firsts.values()) if (count >= 2) add(spelt);
+  return artists;
+}
+
+/**
+ * "Song - Artist" put round to "Artist - Song", as the rest of a folder's
+ * songs are named: when its last part is one of `artists` and its first
+ * isn't. An artist in capitals ("QUEEN") is spelt as the folder spells it.
+ * Any other name as it is.
+ */
+export function artistFirst(name: string, artists: KnownArtists): string {
+  const parts = name.split(" - ");
+  if (parts.length < 2) return name;
+  const spelt = (part: string) =>
+    hasSmallLetters(part) ? part : (artists.get(artistKey(part)) ?? part);
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if (artists.has(artistKey(first))) return [spelt(first), ...parts.slice(1)].join(" - ");
+  if (!artists.has(artistKey(last))) return name;
+  return [spelt(last), ...parts.slice(0, -1)].join(" - ");
 }

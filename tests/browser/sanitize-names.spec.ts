@@ -27,6 +27,9 @@ const NAMES = [
   "Lithium HQ",
   "Queen - Bohemian Rhapsody",
   "Tone (1)",
+  "Queen - Under Pressure",
+  // In capitals, and the song first: the folder names Queen twice.
+  "SOMEBODY TO LOVE - QUEEN",
 ];
 
 test.beforeAll(async () => {
@@ -38,13 +41,18 @@ test.beforeAll(async () => {
       ...["-c:a", "libmp3lame", "-b:a", "128k", path.join(folder, `${name}.mp3`)],
     ]);
   }
+  // An M4A named .mp3, with a tidy name: offered for its extension alone.
+  await ffmpeg([
+    ...["-f", "lavfi", "-i", "sine=frequency=440:duration=2"],
+    ...["-c:a", "aac", "-f", "mp4", path.join(folder, "Faithless - Insomnia.mp3")],
+  ]);
 });
 
 test.afterAll(async () => {
   await fs.rm(folder, { recursive: true, force: true });
 });
 
-test("Sanitize Filename suggests tidy names and renames only the ones ticked, and Rename changes one", async ({
+test("Sanitize Filename suggests tidy names and right extensions, renames only the ones ticked, and Rename changes one", async ({
   page,
   request,
 }) => {
@@ -54,18 +62,24 @@ test("Sanitize Filename suggests tidy names and renames only the ones ticked, an
   const library = page.getByRole("region", { name: "Your music" });
   // The songs' own list (the panel's lists are listed too).
   const rows = library.locator("ol > li");
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(7);
 
   await library.getByRole("button", { name: "Sanitize Filename" }).click();
   const panel = library.getByRole("region", { name: "Sanitize Filename" });
   // The tidy one isn't offered.
   await expect(
-    panel.getByText("3 songs could have a tidier name.", { exact: false }),
+    panel.getByText("5 songs could have a tidier name.", { exact: false }),
   ).toBeVisible();
   await expect(panel.getByRole("checkbox", { name: /Queen/ })).toHaveCount(0);
   await expect(
     panel.getByRole("textbox", { name: "New name for “Junoon - Heer (Official Audio).mp3”" }),
   ).toHaveValue("Junoon - Heer");
+  const insomnia = panel.getByRole("listitem").filter({ hasText: "Faithless - Insomnia.mp3" });
+  await expect(insomnia.getByRole("textbox")).toHaveValue("Faithless - Insomnia");
+  await expect(insomnia).toContainText(".m4a");
+  await expect(
+    panel.getByRole("textbox", { name: "New name for “SOMEBODY TO LOVE - QUEEN.mp3”" }),
+  ).toHaveValue("Queen - Somebody To Love");
   // A name can be changed first; one is left as it is.
   await panel
     .getByRole("textbox", { name: "New name for “Lithium HQ.mp3”" })
@@ -78,8 +92,8 @@ test("Sanitize Filename suggests tidy names and renames only the ones ticked, an
     if (route.request().method() !== "GET") return route.continue();
     return new Promise<void>((resolve) => held.push(() => route.continue().then(resolve)));
   });
-  await panel.getByRole("button", { name: "Rename 2 songs" }).click();
-  await expect(panel.getByText("Renamed 2 songs.")).toBeVisible();
+  await panel.getByRole("button", { name: "Rename 4 songs" }).click();
+  await expect(panel.getByText("Renamed 4 songs.")).toBeVisible();
   await expect(rows.filter({ hasText: "Nirvana - Lithium" })).toHaveCount(1);
   await expect(rows.filter({ hasText: "Official Audio" })).toHaveCount(0);
   const each = panel.getByRole("log", { name: "Each song" });
@@ -90,14 +104,17 @@ test("Sanitize Filename suggests tidy names and renames only the ones ticked, an
   await page.unroute("**/api/music");
 
   expect((await fs.readdir(folder)).sort()).toEqual([
+    "Faithless - Insomnia.m4a",
     "Junoon - Heer.mp3",
     "Nirvana - Lithium.mp3",
     "Queen - Bohemian Rhapsody.mp3",
+    "Queen - Somebody To Love.mp3",
+    "Queen - Under Pressure.mp3",
     "Tone (1).mp3",
   ]);
   await panel.getByRole("button", { name: "Close", exact: true }).click();
   await expect(panel).toBeHidden();
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(7);
 
   // Rename one song: its title and artist tags, and its file name with Sanitize's suggestion.
   await library.getByRole("button", { name: "Rename: “Tone (1)”" }).click();
@@ -109,6 +126,6 @@ test("Sanitize Filename suggests tidy names and renames only the ones ticked, an
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(dialog).toBeHidden();
   await expect(rows.filter({ hasText: "Test Tone" })).toContainText("Sine Wave");
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(7);
   expect(await fs.readdir(folder)).toContain("Tone.mp3");
 });

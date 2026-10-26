@@ -340,6 +340,17 @@ describe("Music player (API)", () => {
     const again = await request(app).post(`/api/music/${fixed.body.id}/fix-name`).send({});
     expect(again.status).toBe(409);
 
+    // Rename and Sanitize Filename fix the extension too, even keeping the name.
+    await fs.copyFile(path.join(folder, "Really M4A.m4a"), path.join(folder, "Also M4A.mp3"));
+    const relisted = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    const also = relisted.find((track) => track.path === "Also M4A.mp3")!;
+    const renamed = await request(app)
+      .post(`/api/music/${also.id}/rename`)
+      .send({ name: "Also M4A" });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.track).toMatchObject({ path: "Also M4A.m4a", realType: null });
+    await fs.rm(path.join(folder, "Also M4A.m4a"));
+
     // The program can still be deleted.
     expect(
       (await request(app).delete(`/api/music/${program.id}`).send({ permanently: true })).status,

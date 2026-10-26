@@ -105,13 +105,34 @@ const baseTitle = (title: string) =>
  */
 const nearlySameTitle = (a: string, b: string) => baseTitle(a) === baseTitle(b);
 
+/** How many letters to add, take out or change to make `a` into `b`. */
+function editDistance(a: string, b: string): number {
+  let row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) {
+      next[j] = Math.min(row[j] + 1, next[j - 1] + 1, row[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    row = next;
+  }
+  return row[b.length];
+}
+
+/** A name spelt a letter out ("Ozzy Osborne" for "Ozzy Osbourne"), or two in a long one. */
+const nearlySpelled = (a: string, b: string) =>
+  Math.min(a.length, b.length) >= 6 && editDistance(a, b) <= (a.length >= 12 ? 2 : 1);
+
 /** Is one of the found song's artists ours (or the other way round)? */
 function sameArtist(ours: string, theirs: string): boolean {
   const a = plain(cleanArtist(ours));
   const b = plain(theirs);
   const c = plain(cleanArtist(theirs));
   return (
-    a !== "" && (a === c || ` ${b} `.includes(` ${a} `) || ` ${plain(ours)} `.includes(` ${c} `))
+    a !== "" &&
+    (a === c ||
+      ` ${b} `.includes(` ${a} `) ||
+      ` ${plain(ours)} `.includes(` ${c} `) ||
+      nearlySpelled(a, c))
   );
 }
 
@@ -372,7 +393,14 @@ async function lookUpIn(
       notes.push(`iTunes, “${asked}”: ${explainMiss(answers, search, song.duration)}`);
       continue;
     }
-    const answers = await searchDeezer(search);
+    let answers = await searchDeezer(search);
+    // Deezer's plain search finds nothing for a title with words in brackets
+    // that its own title hasn't got ("(extended version)", seen October 2026):
+    // then it's asked without them.
+    const bare = search.track.replace(/\s*[([][^)\]]*[)\]]/g, "").trim();
+    if (answers.length === 0 && bare && bare !== search.track) {
+      answers = await searchDeezer({ ...search, track: bare });
+    }
     const found = pickMatch(answers, search, song.duration) as
       ReturnType<typeof deezerSongs>[number] | undefined;
     if (!found) {
