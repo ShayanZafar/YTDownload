@@ -138,7 +138,7 @@ test.describe("Recent Extractions: finding downloads in the folder (browser)", (
     await fs.rm(folder, { recursive: true, force: true });
   });
 
-  test("says which downloads are in the folder, plays one from there, and lists the missing", async ({
+  test("says which downloads are in the folder, finds one in Your music, plays it, and lists the missing", async ({
     page,
   }) => {
     await page.goto("/");
@@ -150,6 +150,20 @@ test.describe("Recent Extractions: finding downloads in the folder (browser)", (
     await expect(rows.nth(0)).toContainText("In folder");
     await expect(rows.nth(1)).toContainText("Not in folder");
     await expect(rows.nth(1).getByRole("button", { name: /from the folder$/ })).toHaveCount(0);
+
+    // In folder: it's found in Your music, scrolled to and picked out.
+    await section
+      .getByRole("button", {
+        name: "Show Velvet Static - Neon Harbour (Official Video) in Your music",
+      })
+      .click();
+    const located = page
+      .getByRole("region", { name: "Your music" })
+      .locator("li[data-located=true]");
+    await expect(located).toHaveCount(1);
+    await expect(located).toContainText("Neon Harbour");
+    await expect(located).toBeInViewport();
+    await expect(located.getByRole("button", { name: /^Play “Neon Harbour”/ })).toBeFocused();
 
     // Play: the player plays the file from the folder.
     await section

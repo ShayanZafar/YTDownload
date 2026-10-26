@@ -40,6 +40,8 @@ type RecentExtractionsProps = {
   saves: Record<string, ActiveSave>;
   /** A Redownload link was clicked: false when the page handles it (a save into the folder). */
   onDownload: (event: React.MouseEvent, href: string, request: SaveRequest) => boolean;
+  /** Finds a download's song (its id in the player) in Your music. */
+  onLocate: (song: string) => void;
 };
 
 /**
@@ -47,7 +49,8 @@ type RecentExtractionsProps = {
  * and filtered in the browser (lib/history-filter.ts), 25 at a time. A song
  * can be taken out of it (×), or the whole list cleared, with Undo after.
  * With a "Save to" folder (on the computer running the app), each download
- * says whether it's in the folder still, and plays from there; the list can
+ * says whether it's in the folder still, finds it in Your music (In folder)
+ * and plays from there; the list can
  * show only the downloads in it, or only those that aren't.
  */
 export function RecentExtractions({
@@ -57,6 +60,7 @@ export function RecentExtractions({
   folder,
   saves,
   onDownload,
+  onLocate,
 }: RecentExtractionsProps) {
   const isOriginal = format === "original";
   const historyActions = useHistoryActions();
@@ -305,10 +309,18 @@ export function RecentExtractions({
                       {timeAgo(item.downloadedAt)}
                       {item.source === "soundcloud" && " · from SoundCloud"}
                       {folder && found && (
-                        <span title={inThere ? inThere.file : undefined}>
+                        <span>
                           {" · "}
                           {inThere ? (
-                            <span className="text-primary">In folder</span>
+                            <button
+                              type="button"
+                              onClick={() => onLocate(inThere.song)}
+                              aria-label={`Show ${item.title} in Your music`}
+                              title={`Show “${inThere.file}” in Your music`}
+                              className="font-medium text-primary underline-offset-2 hover:underline"
+                            >
+                              In folder
+                            </button>
                           ) : (
                             <span
                               title={
