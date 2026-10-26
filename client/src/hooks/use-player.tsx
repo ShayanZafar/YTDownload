@@ -126,9 +126,9 @@ const TimeContext = createContext<{ time: number; duration: number | null }>({
 
 // After a song fails, wait this long before moving on, so the reason can be read.
 const SKIP_AFTER_FAILURE_MS = 2000;
-// WebKit never finishes a seek past where a cut-short file stops (no "ended", as in
-// Chrome): a seek still going this long after, beyond all of the file it has and
-// fetching nothing more, is one.
+// WebKit doesn't end a song on a seek past where a cut-short file stops, as Chrome
+// does: it lands short of the place asked for and stands still there (seen on Windows),
+// or never finishes the seek. Still so this long after the seek, that's a file cut short.
 const STUCK_SEEK_MS = 4000;
 
 // Per-browser conveniences, remembered when storage allows.
@@ -234,6 +234,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const skipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Where the last seek asked to go, until the song gets there.
   const seekAsked = useRef<number | null>(null);
+  // Where a seek landed short of where it was asked to (WebKit, a file cut short).
+  const seekLanded = useRef<number | null>(null);
   const seekCheck = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const current = currentOf(queue) ?? null;
@@ -339,12 +341,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       );
     };
 
-    /** A seek got somewhere: where it was asked to, or (a file cut short) the end. */
+    /**
+     * A seek got somewhere: where it was asked to, or (a file cut short) the end, which
+     * `ended` follows, or short of it, which the check after the seek looks into.
+     */
     const seeked = () => {
       const element = audio();
       const asked = seekAsked.current;
       if (!element || asked === null) return;
-      if (!seekRanOffTheEnd(asked, element.currentTime, element.duration)) seekAsked.current = null;
+      if (Math.abs(element.currentTime - asked) <= 1) seekAsked.current = null;
+      else if (!seekRanOffTheEnd(asked, element.currentTime, element.duration))
+        seekLanded.current = element.currentTime;
     };
 
     /** The song ended by itself: the next one, the same one again, or stop. */
@@ -458,18 +465,22 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const end = Number.isFinite(element.duration) ? element.duration : seconds;
       const asked = Math.max(0, Math.min(seconds, end));
       seekAsked.current = asked;
+      seekLanded.current = null;
       element.currentTime = asked;
       setTime(element.currentTime);
       clearTimeout(seekCheck.current);
       seekCheck.current = setTimeout(() => {
-        const { buffered } = element;
-        const have = buffered.length > 0 ? buffered.end(buffered.length - 1) : 0;
-        const stuck =
-          seekAsked.current === asked &&
-          element.seeking &&
-          element.networkState !== HTMLMediaElement.NETWORK_LOADING &&
-          asked > have + 1;
-        if (!stuck) return;
+        if (seekAsked.current !== asked || element.paused) return;
+        const landed = seekLanded.current;
+        const stuck = element.seeking
+          ? // Waiting for the file, but not fetching any of it.
+            element.networkState !== HTMLMediaElement.NETWORK_LOADING
+          : // Short of the place asked for, and standing still.
+            landed !== null && element.currentTime - landed < 0.5;
+        if (!stuck) {
+          if (!element.seeking) seekAsked.current = null;
+          return;
+        }
         seekAsked.current = null;
         element.pause();
         cutShort(asked);
