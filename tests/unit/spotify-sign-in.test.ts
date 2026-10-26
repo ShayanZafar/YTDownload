@@ -146,6 +146,14 @@ describe("SpotifySignIn", () => {
     expect(signIn.lastError).toBeNull();
   });
 
+  it.skipIf(process.platform === "win32")(
+    "keeps the passes in a file only this user can read",
+    async () => {
+      await signInAs();
+      expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+    },
+  );
+
   it("takes each sign-in back once, and only one it started", async () => {
     const { state } = await signInAs();
     expect(await signIn.finish({ state, code: "again" })).toBeUndefined();
