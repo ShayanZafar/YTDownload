@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Loader2, Minus, Wand2, X } from "lucide-react";
-import type { SongLookup } from "@shared/schema";
+import { api } from "@shared/routes";
+import type { MusicTrack, SongLookup } from "@shared/schema";
 import type { PlayerTrack } from "@/lib/music";
 import {
   catalogueName,
@@ -63,6 +64,7 @@ export function FillInDetails({
   tracks,
   playingKey,
   atOnce,
+  onSongWritten,
   onWritten,
   onClose,
 }: {
@@ -72,6 +74,8 @@ export function FillInDetails({
   playingKey: string | null;
   /** How many songs at once: the app's computer's CPU cores. */
   atOnce: number;
+  /** One song's details are written: here it is as it is now, to show at once. */
+  onSongWritten: (track: MusicTrack) => void;
   /** Some files were changed: the list should be read again. */
   onWritten: () => void;
   onClose: () => void;
@@ -103,7 +107,10 @@ export function FillInDetails({
         const { key, title } = track;
         try {
           const lookup = await lookUpSongDetails(track.id, abort.signal);
-          if (lookup.missing.length === 0) {
+          if (lookup.problem) {
+            failed.push({ title, message: lookup.problem });
+            report({ key, title, result: "failed", text: `can't be changed: ${lookup.problem}` });
+          } else if (lookup.missing.length === 0) {
             complete++;
             report({ key, title, result: "none", text: "has every detail already" });
           } else if (!lookup.writable) {
@@ -119,7 +126,14 @@ export function FillInDetails({
             });
           } else {
             notFound++;
-            report({ key, title, result: "none", text: "not found in iTunes or Deezer" });
+            report({
+              key,
+              title,
+              result: "none",
+              text: ["not found in iTunes or Deezer", lookup.notes.join("; ")]
+                .filter(Boolean)
+                .join(": "),
+            });
           }
         } catch (err) {
           if (!abort.signal.aborted) {
@@ -168,6 +182,7 @@ export function FillInDetails({
           const written = await writeSongDetails(track.id, lookup.found, abort.signal);
           if (written.added.length > 0) {
             added++;
+            if (!abort.signal.aborted) onSongWritten(written.track);
             report({ key, title, result: "found", text: "details added" });
           } else {
             report({ key, title, result: "none", text: "had them all by now" });
@@ -323,6 +338,14 @@ function Outcomes({ outcomes }: { outcomes: Outcome[] }) {
           </li>
         ))}
       </ul>
+      <a
+        href={api.music.detailsLog.path}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-1 inline-block text-muted-foreground underline hover:text-foreground"
+      >
+        The details log: every song looked up, written or downloaded, and why
+      </a>
     </details>
   );
 }

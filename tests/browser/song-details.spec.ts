@@ -77,6 +77,7 @@ test("songs can be shown by genre, and missing details filled in after a look", 
         found: bare ? { genre: "Electronic", album: "Pure Tones" } : null,
         match: bare ? { title: "Bare Tone", artist: "Sine Wave", album: "Pure Tones" } : null,
         source: bare ? "itunes" : null,
+        notes: bare ? [] : [`iTunes, “${track.title}”: nothing came back`],
       },
     });
   });
@@ -118,7 +119,12 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await expect(panel.getByText("Found details for 1 song.")).toBeVisible();
   expect(lookedUp.sort()).toEqual(["Bare Tone", "Jazz One", "Rock One"]);
   await expect(each.getByRole("listitem").filter({ hasText: "“Rock One”" })).toContainText(
-    "not found in iTunes or Deezer",
+    "not found in iTunes or Deezer: iTunes, “Rock One”: nothing came back",
+  );
+  // Every song's outcome is also kept in the details log, which the panel links to.
+  await expect(panel.getByRole("link", { name: /The details log/ })).toHaveAttribute(
+    "href",
+    "/api/details-log",
   );
   await expect(panel.getByText("1 song wasn't found")).toBeVisible();
   const tick = panel.getByRole("checkbox", { name: "Add details to “Bare Tone”" });
@@ -132,8 +138,18 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await tick.uncheck();
   await expect(panel.getByRole("button", { name: "Add details to 0 songs" })).toBeDisabled();
   await tick.check();
+  // The list isn't read again meanwhile (its answers held back): the song written shows its
+  // new details at once all the same, from what the write answered.
+  const held: (() => Promise<void>)[] = [];
+  await page.route("**/api/music", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return new Promise<void>((resolve) => held.push(() => route.continue().then(resolve)));
+  });
   await panel.getByRole("button", { name: "Add details to 1 song" }).click();
   await expect(panel.getByText("Added details to 1 song.")).toBeVisible();
+  await expect(genre.locator("option", { hasText: "Electronic (1)" })).toHaveCount(1);
+  await page.unroute("**/api/music");
+  await Promise.all(held.map((go) => go()));
   await expect(each.getByRole("listitem")).toHaveText(["“Bare Tone” details added"]);
 
   // The file has them now: the list shows its new genre.
