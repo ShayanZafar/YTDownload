@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -701,47 +700,34 @@ export default function Home() {
       )}
 
       {/* Result Section */}
-      <AnimatePresence mode="wait">
-        {selected && (
-          <motion.section
-            key="preview"
-            ref={previewRef}
-            initial={{ opacity: 0, y: 20, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.98 }}
-            transition={{ duration: 0.4, ease: [0.23, 1, 0.32, 1] }}
-            className="w-full max-w-3xl mx-auto scroll-mt-24"
-          >
-            <PreviewCard
-              video={selected}
-              fileName={fileName}
-              onRename={setFileName}
-              format={format}
-              onFormatChange={setFormat}
-              href={selectedHref}
-              save={selectedSave}
-              done={selectedDone}
-              onDownload={handleDownload}
-              onClear={clear}
-            />
-          </motion.section>
-        )}
+      {selected && (
+        <section
+          ref={previewRef}
+          className="w-full max-w-3xl mx-auto scroll-mt-24 animate-in fade-in zoom-in-98 slide-in-from-bottom-5 duration-400 ease-[cubic-bezier(0.23,1,0.32,1)]"
+        >
+          <PreviewCard
+            video={selected}
+            fileName={fileName}
+            onRename={setFileName}
+            format={format}
+            onFormatChange={setFormat}
+            href={selectedHref}
+            save={selectedSave}
+            done={selectedDone}
+            onDownload={handleDownload}
+            onClear={clear}
+          />
+        </section>
+      )}
 
-        {error && (
-          <motion.div
-            key="error"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            className="max-w-2xl mx-auto w-full"
-          >
-            <div className="bg-destructive/10 text-destructive-foreground border border-destructive/20 rounded-2xl p-4 flex items-center gap-3">
-              <AlertCircle className="w-5 h-5 text-destructive" />
-              <p className="text-sm font-medium text-destructive">{error.message}</p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {error && (
+        <div className="max-w-2xl mx-auto w-full animate-in fade-in slide-in-from-bottom-2.5">
+          <div className="bg-destructive/10 text-destructive-foreground border border-destructive/20 rounded-2xl p-4 flex items-center gap-3">
+            <AlertCircle className="w-5 h-5 text-destructive" />
+            <p className="text-sm font-medium text-destructive">{error.message}</p>
+          </div>
+        </div>
+      )}
 
       {/* Search results */}
       {(isSearching || results) && (
