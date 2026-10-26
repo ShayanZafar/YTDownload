@@ -77,6 +77,13 @@ export const CATALOGUE_LIMITS: Record<CatalogueSource, { requests: number; perMs
   deezer: { requests: 50, perMs: 5_000 },
   musicbrainz: { requests: 1, perMs: 1_000 },
 };
+/**
+ * The longest a look-up waits for a busy catalogue once another has answered: a
+ * moment. Waiting out iTunes' minute instead made a folder's run seven times slower
+ * (the owner's PC, October 2026); a song it skips isn't marked Not found, so the
+ * next run asks again.
+ */
+const SHORT_WAIT_MS = CATALOGUE_LIMITS.deezer.perMs;
 /** Songs whose details (or lack of them) are remembered. */
 const CACHE_SIZE = 2_000;
 
@@ -820,8 +827,8 @@ export async function lookUpSongNoted(
   };
 
   const tried = new Set<CatalogueSource>();
-  // Refused this look-up again after its time was up, or busy for longer than its own
-  // limit's window: not asked.
+  // Refused this look-up again after its time was up, busy for longer than its own
+  // limit's window, or (once another has answered) for longer than a moment: not asked.
   const busy = new Set<CatalogueSource>();
   const refusals: Record<CatalogueSource, number> = { itunes: 0, deezer: 0, musicbrainz: 0 };
   const failures: string[] = [];
@@ -833,10 +840,12 @@ export async function lookUpSongNoted(
     if (untried.length === 0) break;
     const open = untried.filter((source) => refusedUntil[source] <= Date.now());
     // The rest are busy, and there's nothing else to ask: wait for whichever is back
-    // first — iTunes' turn, say, for a song Deezer and MusicBrainz don't have.
+    // first, if that's soon.
     if (open.length === 0) {
       for (const source of untried) {
-        if (refusedUntil[source] - Date.now() > CATALOGUE_LIMITS[source].perMs) busy.add(source);
+        const wait = refusedUntil[source] - Date.now();
+        if (wait > CATALOGUE_LIMITS[source].perMs || (tried.size > 0 && wait > SHORT_WAIT_MS))
+          busy.add(source);
       }
       const waiting = untried.filter((source) => !busy.has(source));
       if (waiting.length === 0) continue;

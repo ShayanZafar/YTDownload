@@ -317,9 +317,10 @@ What each file does, and the function and constant names to look for. This was C
   (`CATALOGUE_LIMITS`: iTunes 20 a minute, Deezer 50 in 5 s, MusicBrainz 1 a second; past it
   Deezer answers "nothing" for songs it has), and one that refuses (iTunes `403`/`429`, Deezer
   error 4) or whose limit is used up is skipped at once for the next; when the ones left are all
-  busy, the look-up waits for whichever is back first — iTunes' turn for a song Deezer and
-  MusicBrainz don't have — unless it's busy for longer than its own limit's window or says no
-  again once its time is up (then "was busy, so it wasn't asked"). Covers only from
+  busy, the look-up waits for whichever is back first, but once one has answered only for a
+  moment (`SHORT_WAIT_MS`, 5 s: waiting out iTunes' minute made a folder's run seven times
+  slower), and never past its own limit's window or after it says no again once its time is up
+  (then "was busy, so it wasn't asked", and the song isn't marked Not found). Covers only from
   `isCatalogueCoverUrl()` hosts (`mzstatic.com`, `dzcdn.net`); answers cached in memory. Pure parts
   unit-tested
 - `server/not-found.ts` — the songs marked **Not found** (`DETAILS_NOT_FOUND_FILE`, default
