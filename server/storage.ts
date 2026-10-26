@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { z } from "zod";
 import { downloadSchema, type Download, type InsertDownload } from "@shared/schema";
-import { retryWhenBusy } from "./retry-when-busy";
+import { oneAtATime, writeJsonFile } from "./json-file";
 
 /**
  * Download history, kept as a small JSON file (newest first):
@@ -53,16 +53,9 @@ async function readHistory(file: string): Promise<Download[]> {
   }
 }
 
-async function writeHistory(file: string, entries: Download[]): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(entries, null, 2) + "\n", "utf8");
-  await retryWhenBusy(() => fs.rename(tmp, file));
-}
-
 export class FileStorage implements IStorage {
   // Each write waits for the previous one to finish.
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly queue = oneAtATime();
 
   constructor(private readonly file: () => string = historyFilePath) {}
 
@@ -129,15 +122,12 @@ export class FileStorage implements IStorage {
    * back undefined: nothing to write), one change at a time.
    */
   private change<T>(edit: (entries: Download[]) => { entries: Download[] | undefined; result: T }) {
-    const run = async () => {
+    return this.queue(async () => {
       const file = this.file();
       const { entries, result } = edit(await readHistory(file));
-      if (entries) await writeHistory(file, entries.slice(0, MAX_HISTORY));
+      if (entries) await writeJsonFile(file, entries.slice(0, MAX_HISTORY));
       return result;
-    };
-    const result = this.queue.then(run, run);
-    this.queue = result.catch(() => {});
-    return result;
+    });
   }
 }
 

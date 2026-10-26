@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { z } from "zod";
 import { qualityBarSchema } from "@shared/schema";
-import { retryWhenBusy } from "./retry-when-busy";
+import { oneAtATime, writeJsonFile } from "./json-file";
 
 /**
  * App settings that live on the server, so every browser on this computer
@@ -28,7 +28,7 @@ export function settingsFilePath(): string {
 
 export class SettingsStore {
   // Each write waits for the previous one to finish.
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly queue = oneAtATime();
 
   constructor(private readonly file: () => string = settingsFilePath) {}
 
@@ -46,18 +46,11 @@ export class SettingsStore {
   }
 
   update(patch: Partial<Settings>): Promise<Settings> {
-    const run = async () => {
+    return this.queue(async () => {
       const next = { ...(await this.get()), ...patch };
-      const file = this.file();
-      await fs.mkdir(path.dirname(file), { recursive: true });
-      const tmp = `${file}.tmp`;
-      await fs.writeFile(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
-      await retryWhenBusy(() => fs.rename(tmp, file));
+      await writeJsonFile(this.file(), next);
       return next;
-    };
-    const result = this.queue.then(run, run);
-    this.queue = result.catch(() => {});
-    return result;
+    });
   }
 }
 

@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { retryWhenBusy } from "./retry-when-busy";
+import { oneAtATime, writeJsonFile } from "./json-file";
 
 /**
  * Fill in details' "Not found": the folder songs no music catalogue has —
@@ -25,7 +25,7 @@ type Song = { relative: string; size: number };
 let marked: Map<string, number> | undefined;
 let loading: Promise<Map<string, number>> | undefined;
 // Each write waits for the previous one to finish.
-let writing: Promise<unknown> = Promise.resolve();
+const queue = oneAtATime();
 
 /** Reads the marks from the file, once (a missing or damaged file: none). */
 export function loadNotFound(): Promise<Map<string, number>> {
@@ -54,16 +54,9 @@ export async function setNotFound(song: Song, notFound: boolean): Promise<void> 
   if (notFound ? marks.get(song.relative) === song.size : !marks.has(song.relative)) return;
   if (notFound) marks.set(song.relative, song.size);
   else marks.delete(song.relative);
-  const save = async () => {
-    const file = notFoundFilePath();
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(Object.fromEntries(marks), null, 2) + "\n", "utf8");
-    await retryWhenBusy(() => fs.rename(tmp, file));
-  };
-  const result = writing.then(save, save);
-  writing = result.catch((err) => console.error("Couldn't save the Not found songs", err));
-  await writing;
+  await queue(() => writeJsonFile(notFoundFilePath(), Object.fromEntries(marks))).catch((err) =>
+    console.error("Couldn't save the Not found songs", err),
+  );
 }
 
 /** Forgets the marks read (for tests, after pointing DETAILS_NOT_FOUND_FILE elsewhere). */

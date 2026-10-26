@@ -11,10 +11,9 @@
  * file is a report written from them, debounced to one write per few seconds
  * and through a temp file + rename, like the history (storage.ts).
  */
-import { promises as fs } from "fs";
 import path from "path";
 import type { SourceHealth, SourceHealthReport } from "@shared/schema";
-import { retryWhenBusy } from "./retry-when-busy";
+import { oneAtATime, writeJsonFile } from "./json-file";
 
 /**
  * The sources, what each is for (the job), and whether it's the one asked
@@ -208,7 +207,7 @@ export class SourceHealthStore {
   private timer: NodeJS.Timeout | undefined;
   private lastWriteAt = -Infinity;
   // Each write waits for the previous one to finish.
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly queue = oneAtATime();
 
   constructor({
     file = sourceHealthFilePath,
@@ -264,10 +263,7 @@ export class SourceHealthStore {
     clearTimeout(this.timer);
     this.timer = undefined;
     this.lastWriteAt = this.now();
-    const run = () => writeReport(this.file(), this.report());
-    const result = this.queue.then(run, run);
-    this.queue = result.catch(() => {});
-    return result;
+    return this.queue(() => writeJsonFile(this.file(), this.report()));
   }
 
   private scheduleWrite() {
@@ -278,13 +274,6 @@ export class SourceHealthStore {
       this.flush().catch((err) => console.error("Couldn't write the source-health file:", err));
     }, wait).unref();
   }
-}
-
-async function writeReport(file: string, report: SourceHealthReport): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(report, null, 2) + "\n", "utf8");
-  await retryWhenBusy(() => fs.rename(tmp, file));
 }
 
 export const sourceHealth = new SourceHealthStore();
