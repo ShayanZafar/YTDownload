@@ -104,6 +104,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── make-icons.ts          # The app's icons, drawn by Chrome (npx tsx scripts/make-icons.ts)
 │   ├── yt-dlp.mjs             # After npm install: yt-dlp's standalone build on macOS/Linux, checked against its SHA-256 sums; npm run update-yt-dlp
 │   ├── ffmpeg-check.mjs       # After npm install: ffmpeg checked against its pinned SHA-256
+│   ├── needs-build.mjs        # Whether a source copy needs npm run build before start.cmd/start.sh runs it
 │   ├── install/               # The install branch's README, .gitignore and Start/Stop/Update shortcuts
 │   ├── unix/                  # The same for macOS and Linux: app.sh (POSIX sh) + start/stop/update wrappers and .command files
 │   └── windows/               # Double-click helpers: start, stop, update, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
@@ -585,8 +586,9 @@ What each file does, and the function and constant names to look for. This was C
   `.command` files for Finder; `tests/unit/unix-scripts.test.ts` checks them). `app.ps1` is Windows
   PowerShell 5.1, plain ASCII and CRLF (`tests/unit/windows-scripts.test.ts` checks); it and `stop`
   have rules of their own in `.claude/rules/scripts.md`. The scripts serve two kinds of copy, told apart by
-  `server\index.ts`: the source (installs everything, runs `npm run dev`) and a ready-to-run build
-  (`npm ci --omit=dev`, `npm start`)
+  `server\index.ts`: the source (installs everything, runs `npm run build` when `scripts/needs-build.mjs` finds code newer
+  than `dist/index.cjs`, then `npm start`; `npm run dev` with `-Dev`/`--dev` or if the build fails) and a
+  ready-to-run build (`npm ci --omit=dev`, `npm start`)
 - `.github/workflows/install.yml` — after every push to `main`, builds the app on GitHub and
   force-pushes the ready-to-run result to the `install` branch as a single commit: `dist/`,
   `package*.json`, the Windows and Unix scripts and `scripts/install/` (README with the build filled in,
@@ -624,6 +626,11 @@ What each file does, and the function and constant names to look for. This was C
   for a checked copy (an older one stays if none can be had); offline nothing is checked.
   `--update` (`npm run update-yt-dlp`) runs `yt-dlp -U`, then checks. Plain JS, no packages — the
   install branch ships it too; `yt-dlp.d.mts` gives the tests its types
+- `scripts/needs-build.mjs` — whether a copy of the source code needs `npm run build` before the start
+  scripts run its build: no `dist/index.cjs` yet, or a file in `client/`, `server/`, `shared/` or one of
+  `BUILD_SOURCES.files` (package files, Vite/TypeScript config, `scripts/build.ts`) changed after it.
+  Exits 0 when a build is needed (or it can't tell), 1 when not. Plain JS, no packages;
+  `needs-build.d.mts` gives the tests its types (`tests/unit/needs-build.test.ts`)
 - `scripts/ffmpeg-check.mjs` — the `postinstall`'s second step: ffmpeg-static's ffmpeg against the
   SHA-256 pinned in `FFMPEG_SHA256` for its release and system; one that doesn't match is deleted
   (installing again gets a new copy). A new ffmpeg-static release needs its hashes added
@@ -726,7 +733,7 @@ The install details CLAUDE.md summarises.
   `.claude/rules/` file within 500 and with `paths:` globs that each match a file git tracks (one
   line when all is well)
 - `npm run dev` — dev server at http://localhost:5000 (nothing else needs to be running);
-  `scripts\windows\start.cmd` (`scripts/unix/start.sh` on macOS and Linux) does the same with install checks and opens the browser
+  `scripts\windows\start.cmd` (`scripts/unix/start.sh` on macOS and Linux) builds the app when its code changed and runs the build (quicker to load), with install checks, and opens the browser; `-Dev` (`--dev`) runs the dev server instead
 - `npm run check` — type-check
 - `npx vitest run tests/unit` — fast unit tests
 - `npx vitest run tests/api` — end-to-end API tests (needs internet)
@@ -1351,7 +1358,7 @@ When YouTube downloads stop working, `npm run update-yt-dlp` gets the newest yt-
 
 The app runs natively on Windows — no WSL or Git Bash needed. The npm scripts are cross-platform (`cross-env`), the server reads `.env` itself, and the Windows build of yt-dlp is a standalone `.exe`, so **Python is not required**.
 
-To just use the app, double-click `scripts\windows\start.cmd` (on macOS `scripts/unix/start.command`, on Linux `scripts/unix/start.sh`): it checks for Node.js, runs the install below when needed (the first time, or when `package-lock.json` has changed since), starts `npm run dev` and opens the browser. `stop.cmd`, `update-yt-dlp.cmd` and `autostart-on.cmd`/`autostart-off.cmd` sit next to it — see [Running the app](docs/run/README.md). The logic is in `scripts/windows/app.ps1`, written for Windows PowerShell 5.1 and kept plain ASCII (5.1 reads a script without a byte-order mark in the system code page); `.gitattributes` keeps the `.cmd` and `.ps1` files' Windows line endings.
+To just use the app, double-click `scripts\windows\start.cmd` (on macOS `scripts/unix/start.command`, on Linux `scripts/unix/start.sh`): it checks for Node.js, runs the install below when needed (the first time, or when `package-lock.json` has changed since), builds the app when its code changed since the last build, starts the build (`npm start`) and opens the browser (`start.cmd -Dev` runs `npm run dev` instead). `stop.cmd`, `update-yt-dlp.cmd` and `autostart-on.cmd`/`autostart-off.cmd` sit next to it — see [Running the app](docs/run/README.md). The logic is in `scripts/windows/app.ps1`, written for Windows PowerShell 5.1 and kept plain ASCII (5.1 reads a script without a byte-order mark in the system code page); `.gitattributes` keeps the `.cmd` and `.ps1` files' Windows line endings.
 
 ### Prerequisites — install once
 
