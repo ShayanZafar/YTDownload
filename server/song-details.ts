@@ -20,6 +20,7 @@ import type { SongDetailField, SongDetails, SongLookup } from "@shared/schema";
 import { lookUpSong } from "./catalogues";
 import { fetchCover } from "./cover";
 import { forgetTags, parseFile, readTags, type AudioFile } from "./library";
+import { spawnFfmpeg } from "./audio";
 import { runFfmpeg } from "./music";
 import { retryWhenBusy } from "./retry-when-busy";
 import { ffmetadataValue, flacPictureBlock } from "./tags";
@@ -49,6 +50,90 @@ const OGG = new Set([".ogg", ".oga", ".opus"]);
 /** Can the app write tags into this kind of file? */
 export const canWriteDetails = (fileName: string) =>
   Object.prototype.hasOwnProperty.call(MUXERS, extensionOf(fileName));
+
+// --- What a file really is -----------------------------------------------------------
+
+/**
+ * A file's container and audio codec, as ffmpeg sees them ("mp3" and "mp3";
+ * "mov,mp4,m4a,3gp,3g2,mj2" and "aac"), from what `ffmpeg -i` prints.
+ */
+export function parseProbe(stderr: string): { container?: string; codec?: string } {
+  return {
+    container: /^Input #0, (.+?), from /m.exec(stderr)?.[1],
+    codec: /^\s*Stream #0:\d+\S*: Audio: ([A-Za-z0-9_]+)/m.exec(stderr)?.[1],
+  };
+}
+
+const PROBE_TIMEOUT_MS = 15_000;
+
+/** What ffmpeg finds `file` really is (it reads only the start). */
+export function probeFile(file: string): Promise<{ container?: string; codec?: string }> {
+  return new Promise((resolve) => {
+    let stderr = "";
+    let child: ReturnType<typeof spawnFfmpeg>;
+    try {
+      child = spawnFfmpeg(["-hide_banner", "-nostdin", "-i", file]);
+    } catch {
+      return resolve({});
+    }
+    const timer = setTimeout(() => child.kill(), PROBE_TIMEOUT_MS);
+    child.stderr.on("data", (chunk: Buffer) => (stderr = (stderr + chunk).slice(0, 20_000)));
+    child.stdout.resume();
+    child.stdin.on("error", () => {});
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve({});
+    });
+    // ffmpeg exits with an error here (no output was asked for): what it printed is the answer.
+    child.on("close", () => {
+      clearTimeout(timer);
+      resolve(parseProbe(stderr));
+    });
+  });
+}
+
+/** The file name ending for what a file really holds, when the app can tag that. */
+function rightExtension(container: string, codec: string): string | undefined {
+  if (container === "mp3" && codec === "mp3") return ".mp3";
+  if (container.includes("mp4") && (codec === "aac" || codec === "alac")) return ".m4a";
+  if (container === "flac" && codec === "flac") return ".flac";
+  if (container === "ogg" && codec === "opus") return ".opus";
+  if (container === "ogg" && (codec === "vorbis" || codec === "flac")) return ".ogg";
+  return undefined;
+}
+
+const KINDS: Record<string, string> = {
+  ".mp3": "an MP3",
+  ".m4a": "an M4A (AAC or Apple Lossless)",
+  ".flac": "a FLAC",
+  ".opus": "an Opus",
+  ".ogg": "an Ogg",
+};
+
+/**
+ * The muxer to write a file with — or, for a file whose name says one kind
+ * and whose contents are another (an M4A or Ogg file named ".mp3", MP2 audio
+ * in an ".mp3"), what's wrong, to tell the person: copied into the kind its
+ * name says, ffmpeg would refuse ("Invalid argument").
+ */
+export function muxerFor(
+  ext: string,
+  probed: { container?: string; codec?: string },
+): { muxer: string } | { problem: string } {
+  const { container, codec } = probed;
+  if (!container || !codec)
+    return { problem: "ffmpeg couldn't tell what kind of audio file it is" };
+  const right = rightExtension(container, codec);
+  // An .ogg or .oga file may hold any of Ogg's codecs; an .opus file only Opus.
+  const fits = ext === ".ogg" || ext === ".oga" ? [".ogg", ".opus"] : [ext];
+  if (right && fits.includes(right)) return { muxer: MUXERS[ext] };
+  const what = `${codec.toUpperCase()} audio${right ? "" : ` in a file ffmpeg calls “${container.split(",")[0]}”`}`;
+  return {
+    problem: right
+      ? `it's really ${KINDS[right]} file (${what}) named ${ext}: rename it to end in ${right}, then try again`
+      : `it's really ${what}, though it's named ${ext}, and the app can't add tags to that`,
+  };
+}
 
 /** Which of the details a file's tags have. */
 export function detailsPresent({ common }: Pick<IAudioMetadata, "common">) {
@@ -91,8 +176,17 @@ function detailsFor(fields: SongDetailField[], found: SongDetails): SongDetails 
 export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
   const metadata = await readWithCovers(file).catch(() => undefined);
   const missing = metadata ? missingFrom(detailsPresent(metadata)) : [];
-  const writable = metadata !== undefined && canWriteDetails(file.relative);
-  const none = { missing, writable, found: null, match: null, source: null };
+  let writable = metadata !== undefined && canWriteDetails(file.relative);
+  let problem: string | null = null;
+  if (writable && missing.length > 0) {
+    // A file whose name says one kind and whose contents are another can't be written.
+    const muxed = muxerFor(extensionOf(file.relative), await probeFile(file.absolute));
+    if ("problem" in muxed) {
+      writable = false;
+      problem = muxed.problem;
+    }
+  }
+  const none = { missing, writable, problem, found: null, match: null, source: null };
   if (missing.length === 0 || !writable) return none;
 
   const tags = await readTags(file);
@@ -108,6 +202,7 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
   return {
     missing,
     writable,
+    problem,
     found,
     match: { title: song.title, artist: song.artist, album: song.album ?? null },
     source,
@@ -185,10 +280,13 @@ export function detailsArgs({
   metadata,
   cover,
   id3,
+  muxer = MUXERS[ext],
 }: {
   input: string;
   output: string;
   ext: string;
+  /** The muxer for what the file really is (muxerFor()); by default, its name's. */
+  muxer?: string;
   /** ffmpeg's metadata file with the new tags. */
   metadata: string;
   /** A new cover picture's file, for a file that holds one as a picture stream. */
@@ -209,7 +307,7 @@ export function detailsArgs({
     args.push("-id3v2_version", String(id3.version));
     if (id3.v1) args.push("-write_id3v1", "1");
   }
-  args.push("-f", MUXERS[ext], "-y", output);
+  args.push("-f", muxer, "-y", output);
   return args;
 }
 
@@ -238,6 +336,10 @@ export async function writeSongDetails(
   const ext = extensionOf(file.relative);
   if (!canWriteDetails(file.relative)) {
     throw new SongDetailsError(400, `The app can't write tags into ${ext || "these"} files.`);
+  }
+  const muxed = muxerFor(ext, await probeFile(file.absolute));
+  if ("problem" in muxed) {
+    throw new SongDetailsError(422, `The song was left as it was: ${muxed.problem}.`);
   }
   let before: IAudioMetadata;
   try {
@@ -287,7 +389,15 @@ export async function writeSongDetails(
         : undefined;
     try {
       await runFfmpeg(
-        detailsArgs({ input: file.absolute, output, ext, metadata, cover: coverFile, id3 }),
+        detailsArgs({
+          input: file.absolute,
+          output,
+          ext,
+          metadata,
+          cover: coverFile,
+          id3,
+          muxer: muxed.muxer,
+        }),
       );
     } catch (err) {
       throw new SongDetailsError(

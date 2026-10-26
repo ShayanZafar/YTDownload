@@ -28,13 +28,20 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import type { SaveSettings, TimeRange, TrimmedSong } from "@shared/schema";
+import { useQueryClient } from "@tanstack/react-query";
+import type {
+  MusicLibrary as FolderLibrary,
+  MusicTrack,
+  SaveSettings,
+  TimeRange,
+  TrimmedSong,
+} from "@shared/schema";
 import { DeleteSongDialog } from "@/components/delete-song-dialog";
 import { TrimSong } from "@/components/trim-song";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
 import { useDeviceMusic } from "@/hooks/use-device-music";
-import { useFolderMusic } from "@/hooks/use-folder-music";
+import { MUSIC_KEY, useFolderMusic } from "@/hooks/use-folder-music";
 import { usePlayer } from "@/hooks/use-player";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { FillInDetails } from "@/components/fill-in-details";
@@ -249,6 +256,17 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   const player = usePlayer();
   const { toast } = useToast();
   const folderMusic = useFolderMusic(folder);
+  const queryClient = useQueryClient();
+  // A song whose details were just written: shown (and filtered on) with them at once.
+  const showWritten = (written: MusicTrack) =>
+    queryClient.setQueryData<FolderLibrary>(
+      [...MUSIC_KEY, folder],
+      (library) =>
+        library && {
+          ...library,
+          tracks: library.tracks.map((track) => (track.id === written.id ? written : track)),
+        },
+    );
   const device = useDeviceMusic();
   const [chosenSource, setSource] = useState<"folder" | "device">("folder");
   const [filter, setFilter] = useState("");
@@ -684,6 +702,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
             )}
             playingKey={player.current?.key ?? null}
             atOnce={settings?.cpuCores ?? 1}
+            onSongWritten={showWritten}
             onWritten={() => void folderMusic.refetch()}
             onClose={() => setFillingIn(false)}
           />

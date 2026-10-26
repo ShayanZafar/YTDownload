@@ -156,6 +156,26 @@ describe("Fill in details (API)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("says why a file named .mp3 that's really another kind can't be changed, and leaves it", async () => {
+    await ffmpeg([
+      ...["-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:a", "aac", "-f", "ipod"],
+      path.join(folder, "Misnamed.mp3"),
+    ]);
+    const before = await fs.readFile(path.join(folder, "Misnamed.mp3"));
+    const { id } = (await songs())["Misnamed.mp3"];
+    const lookup = songLookupSchema.parse(
+      (await request(app).get(`/api/music/${id}/details`).expect(200)).body,
+    );
+    expect(lookup).toMatchObject({ writable: false, found: null });
+    expect(lookup.problem).toContain("rename it to end in .m4a");
+    expect(asked).toEqual([]);
+    const res = await request(app).post(`/api/music/${id}/details`).send({ genre: "Rock" });
+    expect(res.status).toBe(422);
+    expect(res.body.message).toContain("rename it to end in .m4a");
+    expect(await fs.readFile(path.join(folder, "Misnamed.mp3"))).toEqual(before);
+    await fs.rm(path.join(folder, "Misnamed.mp3"));
+  });
+
   it("takes only details that make sense, as JSON, by a song's id", async () => {
     const { id } = (await songs())["Rock Song.mp3"];
     await request(app).post(`/api/music/${id}/details`).send({ year: 12 }).expect(400);

@@ -132,8 +132,18 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await tick.uncheck();
   await expect(panel.getByRole("button", { name: "Add details to 0 songs" })).toBeDisabled();
   await tick.check();
+  // The list isn't read again meanwhile (its answers held back): the song written shows its
+  // new details at once all the same, from what the write answered.
+  const held: (() => Promise<void>)[] = [];
+  await page.route("**/api/music", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return new Promise<void>((resolve) => held.push(() => route.continue().then(resolve)));
+  });
   await panel.getByRole("button", { name: "Add details to 1 song" }).click();
   await expect(panel.getByText("Added details to 1 song.")).toBeVisible();
+  await expect(genre.locator("option", { hasText: "Electronic (1)" })).toHaveCount(1);
+  await page.unroute("**/api/music");
+  await Promise.all(held.map((go) => go()));
   await expect(each.getByRole("listitem")).toHaveText(["“Bare Tone” details added"]);
 
   // The file has them now: the list shows its new genre.
