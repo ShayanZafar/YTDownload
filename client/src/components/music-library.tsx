@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Disc3,
   FileAudio,
+  FileWarning,
   FolderOpen,
   FolderSearch,
   ListMusic,
@@ -43,6 +44,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useDeviceMusic } from "@/hooks/use-device-music";
 import { MUSIC_KEY, useFolderMusic } from "@/hooks/use-folder-music";
 import { usePlayer } from "@/hooks/use-player";
+import { SONGS_IN_FOLDER_KEY } from "@/hooks/use-songs-in-folder";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { FillInDetails } from "@/components/fill-in-details";
 import { formatDuration } from "@/lib/format";
@@ -62,6 +64,7 @@ import {
   sortTracks,
   type MusicSort,
   type PlayerTrack,
+  fixFolderSongName,
 } from "@/lib/music";
 import { folderName } from "@/lib/save-to-folder";
 import { canTrimFile, formatCutTime, undoTrim } from "@/lib/trim";
@@ -116,6 +119,8 @@ type SongRowProps = {
   onTrim: (track: PlayerTrack) => void;
   /** Delete from folder (asks first). */
   onDelete: (track: PlayerTrack) => void;
+  /** Fix name: a folder song that's another kind of audio than its name says. */
+  onFixName: (track: PlayerTrack) => void;
 };
 
 /** A song in the list: click it to play the list from there, or line it up. */
@@ -129,8 +134,20 @@ const SongRow = memo(function SongRow({
   onEnqueue,
   onTrim,
   onDelete,
+  onFixName,
 }: SongRowProps) {
   const byline = [track.artist, track.album].filter(Boolean).join(" · ");
+  const deleteButton = track.source === "folder" && (
+    <button
+      type="button"
+      onClick={() => onDelete(track)}
+      aria-label={`Delete from folder: “${track.title}”`}
+      title="Delete from folder"
+      className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive transition-colors"
+    >
+      <Trash2 className="h-4 w-4" />
+    </button>
+  );
   return (
     <li className={cn("flex items-center", isCurrent && "bg-primary/5")}>
       <button
@@ -142,7 +159,8 @@ const SongRow = memo(function SongRow({
           `${isPlaying ? "Pause" : "Play"} “${track.title}”`,
           track.artist && `by ${track.artist}`,
           track.duration != null && formatDuration(track.duration),
-          !ok && "this browser can't play it",
+          !ok &&
+            (track.notAudio ? `not a song: it's ${track.notAudio}` : "this browser can't play it"),
         ]
           .filter(Boolean)
           .join(", ")}
@@ -177,9 +195,15 @@ const SongRow = memo(function SongRow({
           >
             {track.title}
           </span>
-          <span className="block truncate text-xs text-muted-foreground">
-            {ok ? byline || " " : "Can't play in this browser"}
-          </span>
+          {track.notAudio ? (
+            <span className="block truncate text-xs text-destructive">
+              Not a song: it's {track.notAudio}, whatever its name says
+            </span>
+          ) : (
+            <span className="block truncate text-xs text-muted-foreground">
+              {ok ? byline || " " : "Can't play in this browser"}
+            </span>
+          )}
         </span>
         {track.duration != null && (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
@@ -217,6 +241,17 @@ const SongRow = memo(function SongRow({
               <Icon className="h-4 w-4" />
             </button>
           ))}
+          {track.source === "folder" && track.realType && (
+            <button
+              type="button"
+              onClick={() => onFixName(track)}
+              aria-label={`Fix name: “${track.title}” is really a ${track.realType} file`}
+              title={`It's really a ${track.realType} file: rename it to match`}
+              className="rounded-lg p-1.5 text-amber-600 hover:bg-amber-500/10 dark:text-amber-400 transition-colors"
+            >
+              <FileWarning className="h-4 w-4" />
+            </button>
+          )}
           {track.source === "folder" && canTrimFile(track.fileName) && (
             <button
               type="button"
@@ -228,18 +263,12 @@ const SongRow = memo(function SongRow({
               <Scissors className="h-4 w-4" />
             </button>
           )}
-          {track.source === "folder" && (
-            <button
-              type="button"
-              onClick={() => onDelete(track)}
-              aria-label={`Delete from folder: “${track.title}”`}
-              title="Delete from folder"
-              className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive transition-colors"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          )}
+          {deleteButton}
         </span>
+      )}
+      {/* A file that isn't a song can only be deleted. */}
+      {!ok && track.notAudio && (
+        <span className="flex shrink-0 items-center pr-2">{deleteButton}</span>
       )}
     </li>
   );
@@ -255,8 +284,8 @@ const SongRow = memo(function SongRow({
 export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryProps) {
   const player = usePlayer();
   const { toast } = useToast();
-  const folderMusic = useFolderMusic(folder);
   const queryClient = useQueryClient();
+  const folderMusic = useFolderMusic(folder);
   // A song whose details were just written: shown (and filtered on) with them at once.
   const showWritten = (written: MusicTrack) =>
     queryClient.setQueryData<FolderLibrary>(
@@ -295,6 +324,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
     const probe = typeof document !== "undefined" ? document.createElement("audio") : null;
     const known = new Map<string, boolean>();
     return (track: PlayerTrack) => {
+      if (track.notAudio) return false;
       if (track.source === "folder" || !probe || track.check === "") return true;
       let ok = known.get(track.check);
       if (ok === undefined) {
@@ -414,6 +444,34 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   const onDelete = useCallback((track: PlayerTrack) => {
     if (track.source === "folder") setDeleting(track);
   }, []);
+  // Fix name: the extension the song's content says it should have.
+  const { discard } = player;
+  const onFixName = useCallback(
+    (track: PlayerTrack) => {
+      if (track.source !== "folder") return;
+      // Out of the player first, so the file isn't being played while it's renamed.
+      discard(track.key);
+      fixFolderSongName(track.id)
+        .then((renamed) =>
+          toast({
+            title: "Name fixed",
+            description: `“${track.title}” is now ${renamed.path.split(/[\\/]/).pop()}.`,
+          }),
+        )
+        .catch((err: Error) =>
+          toast({
+            title: "Couldn't fix its name",
+            description: err.message,
+            variant: "destructive",
+          }),
+        )
+        .finally(() => {
+          void queryClient.invalidateQueries({ queryKey: MUSIC_KEY });
+          void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
+        });
+    },
+    [discard, toast, queryClient],
+  );
 
   const onPicked = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
@@ -736,6 +794,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                   onEnqueue={onEnqueue}
                   onTrim={onTrim}
                   onDelete={onDelete}
+                  onFixName={onFixName}
                 />
               );
             })}

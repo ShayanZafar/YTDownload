@@ -15,7 +15,7 @@
     "verify": "prettier --check . && eslint . && tsc && npm run licenses && npm run core-flows && npm run instructions && vitest run tests/unit tests/api/music.e2e.test.ts tests/api/history.e2e.test.ts",
     "e2e:live": "cross-env E2E_LIVE=1 playwright test --grep @live",
     "clean": "tsx scripts/clean.ts",
-    "postinstall": "node scripts/yt-dlp.mjs",
+    "postinstall": "node scripts/yt-dlp.mjs && node scripts/ffmpeg-check.mjs",
     "update-yt-dlp": "node scripts/yt-dlp.mjs --update"
   },
   "dependencies": {

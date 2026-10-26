@@ -51,6 +51,7 @@ import {
   convertedForBrowser,
   deleteMusicFile,
   findMusicFile,
+  fixSongName,
   listMusic,
   readCover,
   toMusicTrack,
@@ -76,9 +77,16 @@ const PLAYER_NOT_LOCAL =
 
 /**
  * The song a music request names (by id) in the "Save to" folder — or
- * undefined, having replied why not.
+ * undefined, having replied why not. A file that isn't audio by its content
+ * (file-kind.ts) is never played, converted or read: only deleted
+ * (`anyFile`). One that's another kind of audio than its name says comes
+ * with that kind (`realType`).
  */
-async function songFor(req: Request, res: Response): Promise<AudioFile | undefined> {
+async function songFor(
+  req: Request,
+  res: Response,
+  { anyFile = false } = {},
+): Promise<(AudioFile & { realType?: string }) | undefined> {
   const id = musicIdSchema.safeParse(req.params.id);
   if (!id.success) {
     res.status(400).json({ message: id.error.issues[0].message });
@@ -90,8 +98,18 @@ async function songFor(req: Request, res: Response): Promise<AudioFile | undefin
     return undefined;
   }
   const file = await findMusicFile(saveFolder, id.data);
-  if (!file) res.status(404).json({ message: SONG_GONE });
-  return file;
+  if (!file) {
+    res.status(404).json({ message: SONG_GONE });
+    return undefined;
+  }
+  const { notAudio, realType } = await readTags(file);
+  if (notAudio && !anyFile) {
+    res
+      .status(415)
+      .json({ message: `That isn't a song: it's ${notAudio}, whatever its name says.` });
+    return undefined;
+  }
+  return { ...file, realType };
 }
 
 /** Sends an audio file as it is — range requests work, so the player can seek. */
@@ -245,7 +263,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         sendAudioFile(
           res,
           file.absolute,
-          audioTypeOf(file.relative)?.mime ?? "application/octet-stream",
+          // Sent as what it really is, if its name says otherwise.
+          audioTypeOf(file.realType ?? file.relative)?.mime ?? "application/octet-stream",
         );
     } catch (err) {
       sendFolderError(res, err, "Couldn't play that song");
@@ -418,7 +437,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const input = api.music.remove.input.safeParse(req.body ?? {});
     if (!input.success) return res.status(400).json(validationError(input.error));
     try {
-      const file = await songFor(req, res);
+      const file = await songFor(req, res, { anyFile: true });
       if (!file) return;
       const permanently = input.data.permanently === true;
       await deleteMusicFile(file, { permanently });
@@ -431,6 +450,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(404).json({ message: SONG_GONE });
       }
       sendFolderError(res, err, "Couldn't delete that song");
+    }
+  });
+
+  // Fix name: a song whose content is another kind of audio than its name
+  // says gets the extension it should have.
+  app.post(api.music.fixName.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    try {
+      const file = await songFor(req, res);
+      if (!file) return;
+      if (!file.realType) return res.status(409).json({ message: "Its name is right already." });
+      const { saveFolder } = await settings.get();
+      res.json(await fixSongName(saveFolder!, file, file.realType));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: SONG_GONE });
+      }
+      sendFolderError(res, err, "Couldn't rename that song");
     }
   });
 

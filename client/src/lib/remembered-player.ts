@@ -59,6 +59,8 @@ const toRemembered = (track: PlayerTrack): RememberedTrack | null =>
         year: track.year,
         duration: track.duration,
         addedAt: new Date(track.addedAt).toISOString(),
+        realType: track.realType ?? null,
+        notAudio: track.notAudio ?? null,
       }
     : null;
 
