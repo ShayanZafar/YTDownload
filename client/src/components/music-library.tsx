@@ -946,6 +946,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
               void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
               void queryClient.invalidateQueries({ queryKey: HISTORY_IN_FOLDER_KEY });
             }}
+            onReplaced={showWritten}
             onClose={() => setHousekeeping(false)}
           />
         )}

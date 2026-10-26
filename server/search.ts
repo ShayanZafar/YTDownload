@@ -114,6 +114,12 @@ export function normalize(text: string): string {
 
 const hasWords = (normalized: string, words: string) => ` ${normalized} `.includes(` ${words} `);
 
+/** Is the title (normalized) a live/cover/remix-style version the search (normalized) didn't ask for? */
+const isVariant = (q: string, t: string) =>
+  VARIANT_GROUPS.some(
+    (group) => group.some((w) => hasWords(t, w)) && !group.some((w) => hasWords(q, w)),
+  );
+
 /**
  * Share of the search's words (ignoring filler like "official" or "lyrics")
  * found in the result's title or channel name — the artist is often only in
@@ -203,10 +209,7 @@ export function rankResults(
     seen.add(result.id);
 
     const matches = queryCoverage(query, entry) >= MATCH_THRESHOLD;
-    const t = normalize(result.title);
-    const variant = VARIANT_GROUPS.some(
-      (group) => group.some((w) => hasWords(t, w)) && !group.some((w) => hasWords(q, w)),
-    );
+    const variant = isVariant(q, normalize(result.title));
     const sameLength =
       targetDuration != null &&
       typeof entry.duration === "number" &&
@@ -225,6 +228,20 @@ export function rankResults(
 
   scored.sort((a, b) => Number(a.last) - Number(b.last) || b.score - a.score || a.index - b.index);
   return scored.slice(0, limit).map((s) => s.result);
+}
+
+/**
+ * Is this result the song a search was for, at its length? The search's words
+ * are in its title or channel, it isn't a live, cover or remix-style version
+ * the search didn't ask for, and it's within SAME_LENGTH_SECONDS of `seconds`.
+ */
+export function sameSongAs(query: string, result: SearchResult, seconds: number): boolean {
+  return (
+    result.duration !== null &&
+    Math.abs(result.duration - seconds) <= SAME_LENGTH_SECONDS &&
+    queryCoverage(query, { title: result.title, channel: result.channel }) >= MATCH_THRESHOLD &&
+    !isVariant(normalize(query), normalize(result.title))
+  );
 }
 
 /**

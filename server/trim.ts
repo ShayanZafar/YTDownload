@@ -193,7 +193,8 @@ const kbps = ({ bitrate }: SourceAudio, fallback: number, most = 320) =>
 const pcm = ({ bitsPerSample }: SourceAudio, endian: "le" | "be") =>
   `pcm_s${bitsPerSample === 24 || bitsPerSample === 32 ? bitsPerSample : 16}${endian}`;
 
-const ENCODINGS: Record<string, Encoding> = {
+/** How the app writes each kind of file it can re-encode (trimming, and better copies). */
+export const ENCODINGS: Record<string, Encoding> = {
   ".mp3": { format: "mp3", codec: (s) => ["libmp3lame", "-b:a", kbps(s, 320)], cover: true },
   ".m4a": { format: "ipod", codec: (s) => ["aac", "-b:a", kbps(s, 256, 512)], cover: true },
   ".aac": { format: "adts", codec: (s) => ["aac", "-b:a", kbps(s, 256, 512)] },
@@ -304,10 +305,11 @@ export async function pruneTrimBackups(dir = trimBackupDir(), now = Date.now()):
   );
 }
 
-// Songs being trimmed or put back now, so two changes can't overlap.
+// Songs being trimmed, put back or replaced now (better-copy.ts), so two changes can't overlap.
 const busy = new Set<string>();
 
-async function whileBusy<T>(file: string, work: () => Promise<T>): Promise<T> {
+/** Runs `work` on a song no other change is making now; a 409 if one is. */
+export async function whileBusy<T>(file: string, work: () => Promise<T>): Promise<T> {
   if (busy.has(file)) throw new FolderError(409, "That song is being changed already.");
   busy.add(file);
   try {

@@ -503,6 +503,44 @@ export const songCheckSchema = z.object({
 
 export type SongCheck = z.infer<typeof songCheckSchema>;
 
+/** A better copy of a low-quality folder song, found online (Housekeeping's better copies). */
+export const betterCopySchema = z.object({
+  /** The upload's canonical link, to replace the song with. */
+  url: z.string(),
+  title: z.string(),
+  channel: z.string(),
+  source: z.enum(audioSources),
+  /** Its length in seconds, as the search listed it. */
+  seconds: z.number().nullable(),
+  /** The bitrate of the audio it gives, in kbps: higher than the song's. */
+  kbps: z.number(),
+  /** "Opus", "AAC", "MP3"… */
+  codec: z.string().nullable(),
+});
+
+export type BetterCopy = z.infer<typeof betterCopySchema>;
+
+/** A look for a better copy of a song: its own bitrate, and the copy found — or why there's none. */
+export const betterCopyLookupSchema = z.object({
+  /** The song's own bitrate (null when it's lossless or unknown). */
+  kbps: z.number().nullable(),
+  copy: betterCopySchema.nullable(),
+  /** Why no copy is offered: "The best copy found is 128 kbps, no better than this one's 128 kbps." */
+  reason: z.string().nullable(),
+});
+
+export type BetterCopyLookup = z.infer<typeof betterCopyLookupSchema>;
+
+/** A song replaced by a better copy: as it is now, its check, and where the old one went. */
+export const replacedSongSchema = z.object({
+  track: musicTrackSchema,
+  check: songCheckSchema,
+  /** The bin the old copy went to: "Recycle Bin" or "Trash". */
+  bin: z.string(),
+});
+
+export type ReplacedSong = z.infer<typeof replacedSongSchema>;
+
 /** A file in the "Save to" folder that isn't a song (Housekeeping), by an id like a song's. */
 export const folderFileSchema = z.object({
   id: z.string(),
