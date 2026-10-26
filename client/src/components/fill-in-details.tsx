@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Loader2, Wand2, X } from "lucide-react";
+import { AlertCircle, Check, Loader2, Minus, Wand2, X } from "lucide-react";
 import type { SongLookup } from "@shared/schema";
 import type { PlayerTrack } from "@/lib/music";
 import {
@@ -35,6 +35,14 @@ type Stage =
   | { name: "writing"; done: number; total: number }
   | { name: "done"; added: number; failed: { title: string; message: string }[] };
 
+/** What happened to one song, shown the moment it's done. */
+type Outcome = {
+  key: string;
+  title: string;
+  result: "found" | "none" | "failed";
+  text: string;
+};
+
 const countSongs = (n: number) => `${n.toLocaleString()} ${n === 1 ? "song" : "songs"}`;
 
 const button =
@@ -69,6 +77,9 @@ export function FillInDetails({
   onClose: () => void;
 }) {
   const [stage, setStage] = useState<Stage>({ name: "intro" });
+  // Each song's outcome, newest first, as each is done.
+  const [outcomes, setOutcomes] = useState<Outcome[]>([]);
+  const report = (outcome: Outcome) => setOutcomes((all) => [outcome, ...all]);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
 
@@ -84,19 +95,42 @@ export function FillInDetails({
     let notFound = 0;
     let complete = 0;
     let done = 0;
+    setOutcomes([]);
     setStage({ name: "looking", done, total: toLookUp.length });
     await eachAtOnce(
       toLookUp,
       async (track) => {
+        const { key, title } = track;
         try {
           const lookup = await lookUpSongDetails(track.id, abort.signal);
-          if (lookup.missing.length === 0) complete++;
-          else if (!lookup.writable) unwritable.push(track.fileName);
-          else if (lookup.found)
+          if (lookup.missing.length === 0) {
+            complete++;
+            report({ key, title, result: "none", text: "has every detail already" });
+          } else if (!lookup.writable) {
+            unwritable.push(track.fileName);
+            report({ key, title, result: "none", text: "this kind of file can't hold tags" });
+          } else if (lookup.found) {
             found.push({ track, lookup: { ...lookup, found: lookup.found }, keep: true });
-          else notFound++;
+            report({
+              key,
+              title,
+              result: "found",
+              text: `found on ${catalogueName(lookup.source)}: ${detailLabels(lookup.found).join(" · ")}`,
+            });
+          } else {
+            notFound++;
+            report({ key, title, result: "none", text: "not found in iTunes or Deezer" });
+          }
         } catch (err) {
-          if (!abort.signal.aborted) failed.push({ title: track.title, message: messageOf(err) });
+          if (!abort.signal.aborted) {
+            failed.push({ title, message: messageOf(err) });
+            report({
+              key,
+              title,
+              result: "failed",
+              text: `couldn't be looked up: ${messageOf(err)}`,
+            });
+          }
         }
         done++;
         if (!abort.signal.aborted) setStage({ name: "looking", done, total: toLookUp.length });
@@ -124,15 +158,30 @@ export function FillInDetails({
     const failed: { title: string; message: string }[] = [];
     let added = 0;
     let done = 0;
+    setOutcomes([]);
     setStage({ name: "writing", done, total: kept.length });
     await eachAtOnce(
       kept,
       async ({ track, lookup }) => {
+        const { key, title } = track;
         try {
           const written = await writeSongDetails(track.id, lookup.found, abort.signal);
-          if (written.added.length > 0) added++;
+          if (written.added.length > 0) {
+            added++;
+            report({ key, title, result: "found", text: "details added" });
+          } else {
+            report({ key, title, result: "none", text: "had them all by now" });
+          }
         } catch (err) {
-          if (!abort.signal.aborted) failed.push({ title: track.title, message: messageOf(err) });
+          if (!abort.signal.aborted) {
+            failed.push({ title, message: messageOf(err) });
+            report({
+              key,
+              title,
+              result: "failed",
+              text: `couldn't be changed: ${messageOf(err)}`,
+            });
+          }
         }
         done++;
         if (!abort.signal.aborted) setStage({ name: "writing", done, total: kept.length });
@@ -205,6 +254,8 @@ export function FillInDetails({
             </>
           )}
 
+          {stage.name !== "intro" && <Outcomes outcomes={outcomes} />}
+
           {stage.name === "review" && (
             <Review
               stage={stage}
@@ -241,6 +292,38 @@ export function FillInDetails({
         )}
       </div>
     </section>
+  );
+}
+
+const OUTCOME_ICONS = {
+  found: <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />,
+  none: <Minus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />,
+  failed: <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />,
+};
+
+/** Every song done so far and what happened to it, the newest at the top. */
+function Outcomes({ outcomes }: { outcomes: Outcome[] }) {
+  if (outcomes.length === 0) return null;
+  return (
+    <details open className="text-xs">
+      <summary className="cursor-pointer text-muted-foreground">
+        Each song ({outcomes.length.toLocaleString()})
+      </summary>
+      <ul
+        role="log"
+        aria-label="Each song"
+        className="mt-1 max-h-48 space-y-0.5 overflow-y-auto rounded-lg border border-border bg-card px-3 py-2"
+      >
+        {outcomes.map(({ key, title, result, text }) => (
+          <li key={key} className="flex items-start gap-1.5">
+            {OUTCOME_ICONS[result]}
+            <span className={cn("min-w-0", result === "failed" && "text-destructive")}>
+              <span className="font-medium text-foreground">“{title}”</span> {text}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 
@@ -285,7 +368,7 @@ function Review({
   const kept = found.filter((item) => item.keep).length;
   const others = [
     complete > 0 && `${countSongs(complete)} had every detail already`,
-    notFound > 0 && `${countSongs(notFound)} weren't found`,
+    notFound > 0 && `${countSongs(notFound)} ${notFound === 1 ? "wasn't" : "weren't"} found`,
     unwritable.length > 0 &&
       `${countSongs(unwritable.length)} can't hold tags (${Array.from(
         new Set(unwritable.map((name) => /\.[^.\\/]+$/.exec(name)?.[0].toLowerCase() ?? "")),

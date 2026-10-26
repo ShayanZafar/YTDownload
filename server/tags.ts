@@ -2,7 +2,7 @@
  * Tags written into downloaded files, beyond what ffmpeg's -metadata can do.
  *
  * The ID3v2.3 tag at the start of a downloaded MP3: title, artist, album,
- * year, track number, the Spotify song (TXXX:spotify_id) and the cover.
+ * genre, year, track number, the Spotify song (TXXX:spotify_id) and the cover.
  *
  * ffmpeg writes MP3 tags itself, but with a cover it can only get the tag's
  * size right by going back to the start of the file afterwards — which a
@@ -16,6 +16,8 @@ export type SongTags = {
   title: string;
   artist?: string;
   album?: string;
+  /** "Rock" (from the music catalogues: download-details.ts). */
+  genre?: string;
   /** "1987", or a whole date "1987-11-12" (ID3v2.3 keeps only the year). */
   date?: string;
   /** The song's number on its album. */
@@ -29,6 +31,7 @@ export function id3v2Tag(tags: SongTags, cover?: Buffer): Buffer {
   const frames: Buffer[] = [textFrame("TIT2", tags.title)];
   if (tags.artist) frames.push(textFrame("TPE1", tags.artist));
   if (tags.album) frames.push(textFrame("TALB", tags.album));
+  if (tags.genre) frames.push(textFrame("TCON", tags.genre));
   const year = /^\d{4}/.exec(tags.date ?? "")?.[0];
   if (year) frames.push(textFrame("TYER", year));
   if (tags.track && tags.track > 0) frames.push(textFrame("TRCK", String(tags.track)));

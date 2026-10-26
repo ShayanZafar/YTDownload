@@ -8,6 +8,7 @@ import { audioLinkOf } from "@shared/soundcloud-link";
 import { prepareAudioOutput, startAudioPipeline, type PreparedOutput } from "./audio";
 import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
+import { lateDetails, lookUpDownload } from "./download-details";
 import { kindProblem, sniffFile } from "./file-kind";
 import {
   FolderError,
@@ -99,13 +100,23 @@ export async function saveIntoFolder(req: Request, res: Response) {
       });
     }
     const tags = { ...info, ...(await songTags), spotifyId };
+    // Its genre (and for a song without an album, its album) from the music
+    // catalogues, looked up meanwhile. It never fails or holds the download up.
+    const lookedUp = lookUpDownload(tags, info.duration);
     // Cancelled while we were looking up the video: don't start any work.
     if (clientGone) return;
 
     const cover =
       videoCover ??
       coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
-    output = await prepareAudioOutput(format, tags, info.acodec, await cover);
+    const ownCover = await cover;
+    output = await prepareAudioOutput(
+      format,
+      tags,
+      info.acodec,
+      ownCover,
+      lateDetails(lookedUp, ownCover !== undefined),
+    );
     if (clientGone) return;
     const fileName = `${safeFileName(name || info.title)}.${output.ext}`;
     const created = await createNewFile(folder, `${fileName}.part`);
