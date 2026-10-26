@@ -12,6 +12,9 @@ export default defineConfig({
     include: ["tests/unit/**/*.test.ts", "tests/api/**/*.test.ts"],
     globals: true,
     environment: "node",
+    // The app keeps the songs' tags it read in data/song-tags.json; the tests keep
+    // them nowhere, but for the test of that copy (tests/unit/song-tags.test.ts).
+    env: { SONG_TAGS_FILE: "" },
     // Deletes what earlier runs that were stopped part-way left in the temp folder.
     globalSetup: "./scripts/leftovers.ts",
     testTimeout: 90_000,

@@ -33,6 +33,7 @@ import { cleanTrackTitle } from "@shared/spotify-names";
 import { mapAtOnce } from "./cpu-cores";
 import { kindProblem, sniffFile } from "./file-kind";
 import { folderError, isHiddenFolder } from "./folders";
+import { oneAtATime, writeJsonFile } from "./json-file";
 
 /** Files looked at as songs: .mp3, .m4a, .opus, .flac… (see shared/audio-types.ts). */
 export const AUDIO_EXTENSIONS = new Set(Object.keys(AUDIO_TYPES));
@@ -179,17 +180,83 @@ export const parseFile: ParseFile = async (file, options) => {
 };
 
 // Tags already read, by file — kept until the file changes (its size or time).
-const tagCache = new Map<string, { size: number; mtimeMs: number; tags: Promise<FileTags> }>();
+// `kept` is set once they're read in full, for the copy on disk (below).
+type CachedTags = { size: number; mtimeMs: number; tags: Promise<FileTags>; kept?: FileTags };
+const tagCache = new Map<string, CachedTags>();
 const MAX_CACHED = 20_000;
+
+/**
+ * Where the tags read are kept between runs (data/song-tags.json, or wherever
+ * SONG_TAGS_FILE points; set to "", nowhere), so the first look through the
+ * folder after the app starts doesn't open every file again.
+ */
+export function songTagsFilePath(): string | undefined {
+  const file = process.env.SONG_TAGS_FILE ?? path.join(process.cwd(), "data", "song-tags.json");
+  return file ? path.resolve(file) : undefined;
+}
+
+/**
+ * The copy on disk's format. Change it whenever what's read from a file
+ * changes (tagsFrom(), kindProblem(), FileTags), so tags read the old way are
+ * read again rather than kept.
+ */
+export const SONG_TAGS_VERSION = 1;
+type SongTagsFile = {
+  version: number;
+  files: Record<string, { size: number; mtimeMs: number; tags: FileTags }>;
+};
+
+let loaded: Promise<void> | undefined;
+// Tags read since the copy on disk was last written.
+let unsaved = false;
+const saveOneAtATime = oneAtATime();
+
+/** The tags kept on disk, put in the cache — once, before the first file's are looked up. */
+function loadSavedTags(): Promise<void> {
+  loaded ??= (async () => {
+    const file = songTagsFilePath();
+    if (!file) return;
+    const saved = await fs
+      .readFile(file, "utf8")
+      .then((text) => JSON.parse(text) as SongTagsFile)
+      .catch(() => undefined); // none yet, or damaged: read the files again
+    if (saved?.version !== SONG_TAGS_VERSION || typeof saved.files !== "object") return;
+    for (const [absolute, { size, mtimeMs, tags }] of Object.entries(saved.files)) {
+      if (tagCache.has(absolute) || tagCache.size >= MAX_CACHED) continue;
+      tagCache.set(absolute, { size, mtimeMs, tags: Promise.resolve(tags), kept: tags });
+    }
+  })();
+  return loaded;
+}
+
+/**
+ * Writes the tags read in full to disk, if any were read since the last time —
+ * in the background, after a look through a folder. Files that couldn't be
+ * read (busy, say) aren't kept, so they're tried again next time.
+ */
+export function saveSongTags(): Promise<void> {
+  return saveOneAtATime(async () => {
+    const file = songTagsFilePath();
+    if (!file || !unsaved) return;
+    unsaved = false;
+    const files: SongTagsFile["files"] = {};
+    for (const [absolute, { size, mtimeMs, kept }] of tagCache) {
+      if (kept) files[absolute] = { size, mtimeMs, tags: kept };
+    }
+    await writeJsonFile(file, { version: SONG_TAGS_VERSION, files } satisfies SongTagsFile);
+  });
+}
 
 /** Forgets a file's tags, so they're read again (after the app writes new ones). */
 export function forgetTags(absolute: string) {
-  tagCache.delete(absolute);
+  if (tagCache.delete(absolute)) unsaved = true;
 }
 
-export function readTags(file: AudioFile): Promise<FileTags> {
+export async function readTags(file: AudioFile): Promise<FileTags> {
+  await loadSavedTags();
   const cached = tagCache.get(file.absolute);
   if (cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs) return cached.tags;
+  let complete = true;
   const read = parseFile(file.absolute, { duration: false, skipCovers: true, mkvUseIndex: true })
     .then(async (metadata) => {
       const found = tagsFrom(metadata);
@@ -203,16 +270,30 @@ export function readTags(file: AudioFile): Promise<FileTags> {
       return found;
     })
     // Unreadable or damaged: the file still counts by its name.
-    .catch((): FileTags => ({ spotifyIds: [] }));
+    .catch((): FileTags => {
+      complete = false;
+      return { spotifyIds: [] };
+    });
   // And what its content says it is (see file-kind.ts).
-  const kind = sniffFile(file.absolute).catch(() => undefined);
-  const tags = Promise.all([read, kind]).then(([found, sniffed]) => ({
-    ...found,
-    ...kindProblem(file.relative, sniffed),
-  }));
+  const kind = sniffFile(file.absolute).catch(() => {
+    complete = false;
+    return undefined;
+  });
+  const entry: CachedTags = {
+    size: file.size,
+    mtimeMs: file.mtimeMs,
+    tags: Promise.all([read, kind]).then(([found, sniffed]) => {
+      const tags = { ...found, ...kindProblem(file.relative, sniffed) };
+      if (complete && tagCache.get(file.absolute) === entry) {
+        entry.kept = tags;
+        unsaved = true;
+      }
+      return tags;
+    }),
+  };
   if (tagCache.size >= MAX_CACHED) tagCache.clear();
-  tagCache.set(file.absolute, { size: file.size, mtimeMs: file.mtimeMs, tags });
-  return tags;
+  tagCache.set(file.absolute, entry);
+  return entry.tags;
 }
 
 /** How much of an Ogg file's end is read to find its last page (a page is at most ~64 KB). */
@@ -325,6 +406,8 @@ export async function readFolderTags(
   const { files, complete } = await findAudioFiles(folder);
   // As many files at once as this computer has CPU cores.
   const tags = await mapAtOnce(files, readTags);
+  // Kept for the next start, without making this look wait for the write.
+  saveSongTags().catch((err) => console.warn(`Couldn't save the songs' tags: ${err}`));
   return { files: files.map((file, i) => ({ ...file, tags: tags[i] })), complete };
 }
 
