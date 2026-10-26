@@ -2,6 +2,9 @@ import { z } from "zod";
 import {
   audioSources,
   deletedSongSchema,
+  folderFilesSchema,
+  qualityBarSchema,
+  songCheckSchema,
   renamedSongSchema,
   sanitizedSongSchema,
   downloadSchema,
@@ -290,10 +293,16 @@ export const api = {
     update: {
       method: "PUT" as const,
       path: "/api/settings" as const,
-      input: z.object({
-        /** A folder on this computer, or null to go back to the browser's downloads. */
-        saveFolder: z.string().max(1000).nullable(),
-      }),
+      input: z
+        .object({
+          /** A folder on this computer, or null to go back to the browser's downloads. */
+          saveFolder: z.string().max(1000).nullable().optional(),
+          /** Housekeeping's bar for a song's sound. */
+          qualityBar: qualityBarSchema.optional(),
+        })
+        .refine((input) => input.saveFolder !== undefined || input.qualityBar !== undefined, {
+          message: "Give a folder or a quality bar.",
+        }),
       responses: { 200: saveSettingsSchema, 400: errorSchemas.validation },
     },
   },
@@ -384,7 +393,7 @@ export const api = {
     },
     /**
      * Fill in details: what a song's tags lack, and what the music catalogues
-     * (iTunes, then Deezer) have for it. Nothing is written.
+     * (iTunes, Deezer, MusicBrainz) have for it. Nothing is written.
      */
     lookUpDetails: {
       method: "GET" as const,
@@ -418,9 +427,32 @@ export const api = {
       responses: { 200: deletedSongSchema, 409: noBinSchema },
     },
     /**
+     * Housekeeping: reads a song all the way through (ffmpeg) and says what's
+     * wrong with it — not audio, cut short, damaged — with its bitrate.
+     * Nothing is changed.
+     */
+    check: {
+      method: "GET" as const,
+      path: "/api/music/:id/check" as const,
+      responses: { 200: songCheckSchema },
+    },
+    /** Housekeeping: the folder's files that aren't songs (pictures, programs, leftovers). */
+    otherFiles: {
+      method: "GET" as const,
+      path: "/api/folder-files" as const,
+      responses: { 200: folderFilesSchema },
+    },
+    /** Deletes a file that isn't a song, as `remove` does a song: to the bin, or for good. */
+    removeOtherFile: {
+      method: "DELETE" as const,
+      path: "/api/folder-files/:id" as const,
+      input: z.object({ permanently: z.boolean().optional() }),
+      responses: { 200: deletedSongSchema, 409: noBinSchema },
+    },
+    /**
      * Gives a song whose content is another kind of audio than its name says
-     * (a ".mp3" that's really an M4A) the extension it should have — or a
-     * numbered name, if that's taken. `409` if its name is right already.
+     * (a ".mp3" that's really an M4A) the extension it should have. `409` if
+     * its name is right already, or another file has that name.
      */
     fixName: {
       method: "POST" as const,
@@ -429,9 +461,9 @@ export const api = {
     },
     /**
      * Rename, and Sanitize Filename: renames a song's file, in its own folder,
-     * to `name` (made safe; its extension stays; a numbered name if that's
-     * taken), and/or gives it a new `title` and `artist` tag. `409` if nothing
-     * would change.
+     * to `name` (made safe; its extension stays; never a numbered name), and/or
+     * gives it a new `title` and `artist` tag. `409` if nothing would change,
+     * or (nothing changed) another file has that name.
      */
     rename: {
       method: "POST" as const,

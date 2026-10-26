@@ -11,8 +11,10 @@ import {
   findMusicFile,
   listMusic,
   musicTrackId,
+  NameTakenError,
   pruneConversionCache,
   readCover,
+  renameSong,
   toMusicTrack,
 } from "../../server/music";
 import { audioTypeOf, extensionOf, songNameOf } from "../../shared/audio-types";
@@ -166,6 +168,26 @@ describe("listMusic and findMusicFile", () => {
     );
     await fs.rm(path.join(folder, "Sine Wave", "a.mp3"));
     expect(await findMusicFile(folder, mp3.id)).toBeUndefined();
+  });
+});
+
+describe("renameSong", () => {
+  it("never renames a song to a name that's taken: no number of its own, both files left", async () => {
+    const folder = path.join(root, "rename");
+    await fs.mkdir(folder, { recursive: true });
+    await tone(path.join(folder, "Song (1).mp3"), 1, ["-c:a", "libmp3lame"]);
+    await fs.copyFile(path.join(folder, "Song (1).mp3"), path.join(folder, "Song.mp3"));
+    await listMusic(folder);
+    const copy = (await findMusicFile(folder, musicTrackId(folder, "Song (1).mp3")))!;
+    const refused = await renameSong(folder, copy, "Song.mp3").catch((err: unknown) => err);
+    expect(refused).toBeInstanceOf(NameTakenError);
+    expect((refused as NameTakenError).status).toBe(409);
+    expect((await fs.readdir(folder)).sort()).toEqual(["Song (1).mp3", "Song.mp3"]);
+    // A free name is taken as it is.
+    expect(await renameSong(folder, copy, "Song (copy).mp3")).toMatchObject({
+      path: "Song (copy).mp3",
+    });
+    expect((await fs.readdir(folder)).sort()).toEqual(["Song (copy).mp3", "Song.mp3"]);
   });
 });
 

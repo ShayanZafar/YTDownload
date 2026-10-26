@@ -361,7 +361,7 @@ describe("Music player (API)", () => {
     await fs.rm(path.join(folder, "Really M4A.m4a"));
   });
 
-  it("renames a song for Sanitize Filename: its extension kept, a taken name numbered, a case change as it is", async () => {
+  it("renames a song for Sanitize Filename: its extension kept, a taken name refused, a case change as it is", async () => {
     const source = path.join(folder, "Sine Wave", "Test Tone.mp3");
     const sub = path.join(folder, "Sanitize");
     await fs.mkdir(sub);
@@ -378,18 +378,27 @@ describe("Music player (API)", () => {
       (await rename(noisy, "Junoon - Heer").set("X-Forwarded-For", "192.168.1.20")).status,
     ).toBe(403);
     expect((await rename(noisy, "  ")).status).toBe(400);
-    const renamed = await rename(noisy, "Junoon - Heer");
-    expect(renamed.status).toBe(200);
-    // "Junoon - Heer.mp3" is taken: a number, never over the other song.
-    expect(renamed.body.track).toMatchObject({
-      path: path.join("Sanitize", "Junoon - Heer (1).mp3"),
-    });
-    expect(renamed.body.track.id).not.toBe(noisy);
+    // "Junoon - Heer.mp3" is taken: refused, never over the other song nor with a number,
+    // and its tags aren't changed either.
+    const taken = await request(app)
+      .post(`/api/music/${noisy}/rename`)
+      .send({ name: "Junoon - Heer", title: "Heer" });
+    expect(taken.status).toBe(409);
+    expect(taken.body.message).toBe(
+      "“Junoon - Heer.mp3” is in the folder already — if it's the same song, delete one of them.",
+    );
     expect((await fs.readdir(sub)).sort()).toEqual([
-      "Junoon - Heer (1).mp3",
+      "Junoon - Heer (Official Audio).mp3",
       "Junoon - Heer.mp3",
       "lithium.mp3",
     ]);
+    const untouched = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    expect(untouched.find((t) => t.id === noisy)!.title).not.toBe("Heer");
+    const renamed = await rename(noisy, "Junoon - Heer 2");
+    expect(renamed.body.track).toMatchObject({
+      path: path.join("Sanitize", "Junoon - Heer 2.mp3"),
+    });
+    expect(renamed.body.track.id).not.toBe(noisy);
 
     const caseOnly = await rename(idOf("lithium.mp3"), "Lithium.mp3");
     expect(caseOnly.body.track.path).toBe(path.join("Sanitize", "Lithium.mp3"));
@@ -401,10 +410,9 @@ describe("Music player (API)", () => {
       await fs.copyFile(source, path.join(sub, "Other.mp3"));
       const relisted = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
       const lower = relisted.find((t) => t.path === path.join("Sanitize", "other.mp3"))!.id;
-      const kept = await rename(lower, "Other");
-      expect(kept.body.track.path).toBe(path.join("Sanitize", "Other (1).mp3"));
+      expect((await rename(lower, "Other")).status).toBe(409);
       await fs.rm(path.join(sub, "Other.mp3"));
-      await fs.rm(path.join(sub, "Other (1).mp3"));
+      await fs.rm(path.join(sub, "other.mp3"));
     } else {
       await fs.rm(path.join(sub, "other.mp3"));
     }

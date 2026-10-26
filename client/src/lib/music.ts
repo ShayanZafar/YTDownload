@@ -117,12 +117,18 @@ export type DeleteOutcome =
  * when `permanently` says so (only after the person said so, as its drive
  * has no bin). Throws an `ApiError` if it couldn't be deleted.
  */
-export async function deleteFolderSong(
-  id: string,
-  { permanently = false } = {},
-): Promise<DeleteOutcome> {
-  const res = await fetch(buildUrl(api.music.remove.path, { id }), {
-    method: api.music.remove.method,
+export function deleteFolderSong(id: string, options: { permanently?: boolean } = {}) {
+  return deleteFromFolder(buildUrl(api.music.remove.path, { id }), options);
+}
+
+/** Housekeeping: deletes a file in the folder that isn't a song, the same way. */
+export function deleteOtherFolderFile(id: string, options: { permanently?: boolean } = {}) {
+  return deleteFromFolder(buildUrl(api.music.removeOtherFile.path, { id }), options);
+}
+
+async function deleteFromFolder(url: string, { permanently = false } = {}): Promise<DeleteOutcome> {
+  const res = await fetch(url, {
+    method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ permanently }),
   });

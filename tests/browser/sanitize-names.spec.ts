@@ -28,6 +28,8 @@ const NAMES = [
   "Queen - Bohemian Rhapsody",
   "Tone (1)",
   "Queen - Under Pressure",
+  // A copy: its tidy name is the song beside it.
+  "Queen - Under Pressure (1)",
   // In capitals, and the song first: the folder names Queen twice.
   "SOMEBODY TO LOVE - QUEEN",
 ];
@@ -62,15 +64,38 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
   const library = page.getByRole("region", { name: "Your music" });
   // The songs' own list (the panel's lists are listed too).
   const rows = library.locator("ol > li");
-  await expect(rows).toHaveCount(7);
+  await expect(rows).toHaveCount(8);
 
   await library.getByRole("button", { name: "Sanitize Filename" }).click();
   const panel = library.getByRole("region", { name: "Sanitize Filename" });
-  // The tidy one isn't offered.
+  // The tidy ones aren't offered.
   await expect(
-    panel.getByText("5 songs could have a tidier name.", { exact: false }),
+    panel.getByText("6 songs could have a tidier name.", { exact: false }),
   ).toBeVisible();
-  await expect(panel.getByRole("checkbox", { name: /Queen/ })).toHaveCount(0);
+  await expect(
+    panel.getByRole("checkbox", { name: "Rename “Queen - Under Pressure.mp3”" }),
+  ).toHaveCount(0);
+
+  // The copy would have the other song's name: never given, nor a "(2)" — it's shown
+  // beside the other, to delete one.
+  await expect(
+    panel.getByText("1 song would have the name of another song", { exact: false }),
+  ).toBeVisible();
+  const copy = panel.getByRole("listitem").filter({ hasText: "Queen - Under Pressure (1).mp3" });
+  await expect(copy.getByRole("checkbox")).toBeDisabled();
+  await expect(copy).toContainText("“Queen - Under Pressure.mp3” (0:02) has that name already");
+  await expect(
+    copy.getByRole("button", { name: "Delete “Queen - Under Pressure.mp3”" }),
+  ).toBeVisible();
+  await copy.getByRole("button", { name: "Delete “Queen - Under Pressure (1).mp3”" }).click();
+  const dialog = page.getByRole("dialog", { name: "Delete from the folder?" });
+  await dialog.getByRole("button", { name: /^Move to the (Trash|Recycle Bin)$/ }).click();
+  await expect(dialog).toBeHidden();
+  await expect(copy).toHaveCount(0);
+  await expect(rows).toHaveCount(7);
+  await expect(
+    panel.getByText("would have the name of another song", { exact: false }),
+  ).toHaveCount(0);
   await expect(
     panel.getByRole("textbox", { name: "New name for “Junoon - Heer (Official Audio).mp3”" }),
   ).toHaveValue("Junoon - Heer");
@@ -118,13 +143,13 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
 
   // Rename one song: its title and artist tags, and its file name with Sanitize's suggestion.
   await library.getByRole("button", { name: "Rename: “Tone (1)”" }).click();
-  const dialog = page.getByRole("dialog", { name: "Rename" });
-  await dialog.getByRole("button", { name: "Sanitize: “Tone”" }).click();
-  await expect(dialog.getByRole("textbox", { name: "File name" })).toHaveValue("Tone");
-  await dialog.getByRole("textbox", { name: "Title" }).fill("Test Tone");
-  await dialog.getByRole("textbox", { name: "Artist" }).fill("Sine Wave");
-  await dialog.getByRole("button", { name: "Save" }).click();
-  await expect(dialog).toBeHidden();
+  const renameDialog = page.getByRole("dialog", { name: "Rename" });
+  await renameDialog.getByRole("button", { name: "Sanitize: “Tone”" }).click();
+  await expect(renameDialog.getByRole("textbox", { name: "File name" })).toHaveValue("Tone");
+  await renameDialog.getByRole("textbox", { name: "Title" }).fill("Test Tone");
+  await renameDialog.getByRole("textbox", { name: "Artist" }).fill("Sine Wave");
+  await renameDialog.getByRole("button", { name: "Save" }).click();
+  await expect(renameDialog).toBeHidden();
   await expect(rows.filter({ hasText: "Test Tone" })).toContainText("Sine Wave");
   await expect(rows).toHaveCount(7);
   expect(await fs.readdir(folder)).toContain("Tone.mp3");

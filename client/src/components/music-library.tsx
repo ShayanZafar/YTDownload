@@ -28,6 +28,7 @@ import {
   Trash2,
   Wand2,
   Eraser,
+  ShieldCheck,
   PencilLine,
   X,
 } from "lucide-react";
@@ -47,9 +48,12 @@ import { useDeviceMusic } from "@/hooks/use-device-music";
 import { MUSIC_KEY, useFolderMusic } from "@/hooks/use-folder-music";
 import { usePlayer } from "@/hooks/use-player";
 import { SONGS_IN_FOLDER_KEY } from "@/hooks/use-songs-in-folder";
+import { HISTORY_IN_FOLDER_KEY } from "@/hooks/use-history-in-folder";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { FillInDetails } from "@/components/fill-in-details";
 import { SanitizeNames } from "@/components/sanitize-names";
+import { Housekeeping } from "@/components/housekeeping";
+import { useSaveSettings } from "@/hooks/use-save-settings";
 import { RenameSongDialog } from "@/components/rename-song-dialog";
 import { formatDuration } from "@/lib/format";
 import {
@@ -352,6 +356,8 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
   const [facets, setFacets] = useState<MusicFilters>({});
   const [fillingIn, setFillingIn] = useState(false);
   const [sanitizing, setSanitizing] = useState(false);
+  const [housekeeping, setHousekeeping] = useState(false);
+  const { setQualityBar } = useSaveSettings();
   const [sort, setSort] = useStoredChoice<MusicSort>("music-sort", musicSorts, "added");
   const [limit, setLimit] = useState(PAGE);
   // The song "Delete from folder" is asking about.
@@ -811,6 +817,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
                   onClick={() => {
                     setFillingIn((open) => !open);
                     setSanitizing(false);
+                    setHousekeeping(false);
                   }}
                   title="Look up the songs' missing genre, album, year, track number and cover"
                   className={smallButton}
@@ -827,12 +834,30 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
                   onClick={() => {
                     setSanitizing((open) => !open);
                     setFillingIn(false);
+                    setHousekeeping(false);
                   }}
                   title="Take “(Official Video)”, “HQ”, “(1998)” and the like out of the songs' file names"
                   className={smallButton}
                 >
                   <Eraser className="h-3.5 w-3.5" />
                   Sanitize Filename
+                </button>
+              )}
+              {source === "folder" && isLocal && folder && (
+                <button
+                  type="button"
+                  aria-pressed={housekeeping}
+                  disabled={shown.length === 0}
+                  onClick={() => {
+                    setHousekeeping((open) => !open);
+                    setFillingIn(false);
+                    setSanitizing(false);
+                  }}
+                  title="Find files that aren't audio, are cut short, damaged or low quality"
+                  className={smallButton}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Housekeeping
                 </button>
               )}
               <button
@@ -881,14 +906,48 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
             tracks={shown.filter(
               (t): t is Extract<PlayerTrack, { source: "folder" }> => t.source === "folder",
             )}
+            folderTracks={folderTracks.filter(
+              (t): t is Extract<PlayerTrack, { source: "folder" }> => t.source === "folder",
+            )}
             playingKey={player.current?.key ?? null}
             atOnce={settings?.cpuCores ?? 1}
             onSongRenamed={showRenamed}
+            onDelete={setDeleting}
             onRenamed={() => {
               void folderMusic.refetch();
               void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
             }}
             onClose={() => setSanitizing(false)}
+          />
+        )}
+
+        {housekeeping && source === "folder" && isLocal && folder && (
+          <Housekeeping
+            key={folder}
+            tracks={shown.filter(
+              (t): t is Extract<PlayerTrack, { source: "folder" }> => t.source === "folder",
+            )}
+            playingKey={player.current?.key ?? null}
+            atOnce={settings?.cpuCores ?? 1}
+            qualityBar={settings?.qualityBar ?? "128"}
+            onQualityBar={setQualityBar}
+            onDeleted={(ids) => {
+              // Gone from Your music and the Up next queue now; the folder is looked through again.
+              for (const id of ids) player.discard(`folder:${id}`);
+              const deleted = new Set(ids);
+              queryClient.setQueriesData<FolderLibrary>(
+                { queryKey: MUSIC_KEY },
+                (library) =>
+                  library && {
+                    ...library,
+                    tracks: library.tracks.filter((track) => !deleted.has(track.id)),
+                  },
+              );
+              void queryClient.invalidateQueries({ queryKey: MUSIC_KEY });
+              void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
+              void queryClient.invalidateQueries({ queryKey: HISTORY_IN_FOLDER_KEY });
+            }}
+            onClose={() => setHousekeeping(false)}
           />
         )}
 

@@ -47,6 +47,19 @@ class DownloadError extends Error {}
  * while the audio arrives, then "done" or "error". The page going away (Cancel,
  * or the tab closing) cancels the save.
  */
+// The .part files saves are writing now, which Housekeeping never lists.
+const saving = new Set<string>();
+
+/** Is a save writing this file now? */
+export const isBeingSaved = (file: string) => saving.has(path.resolve(file));
+
+/** Notes that a save is writing this file now, until the function it returns is called. */
+export function markBeingSaved(file: string): () => void {
+  const writing = path.resolve(file);
+  saving.add(writing);
+  return () => saving.delete(writing);
+}
+
 export async function saveIntoFolder(req: Request, res: Response) {
   let clientGone = false;
   let stop: (() => void) | undefined;
@@ -60,6 +73,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
   let output: PreparedOutput | undefined;
   // The unfinished file, while there is one to clean up.
   let part: { path: string; stream: WriteStream; closed: Promise<void> } | undefined;
+  let doneSaving: (() => void) | undefined;
   try {
     const input = api.video.save.input.safeParse(req.body);
     if (!input.success) {
@@ -121,6 +135,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
     // The name chosen on the page, or the title, sanitized (sanitizedFileName: made safe too).
     const fileName = `${name ? safeFileName(name) : sanitizedFileName(info.title)}.${output.ext}`;
     const created = await createNewFile(folder, `${fileName}.part`);
+    doneSaving = markBeingSaved(created.path);
     part = {
       ...created,
       closed: new Promise<void>((resolve) => created.stream.once("close", () => resolve())),
@@ -198,6 +213,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
     if (!clientGone) reportFailure(res, err);
   } finally {
     if (part) await discard(part);
+    doneSaving?.();
     void output?.cleanup();
   }
 }

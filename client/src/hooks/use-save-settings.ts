@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@shared/routes";
-import type { SaveSettings } from "@shared/schema";
+import type { QualityBar, SaveSettings } from "@shared/schema";
+import { saveQualityBar } from "@/lib/housekeeping";
 import { queryClient } from "@/lib/queryClient";
 import { fetchSaveSettings, updateSaveFolder } from "@/lib/save-to-folder";
 
@@ -24,12 +25,25 @@ export function useSaveSettings() {
     onSuccess: (settings) => queryClient.setQueryData<SaveSettings>(SETTINGS_KEY, settings),
   });
 
+  const { mutate: setQualityBar } = useMutation({
+    mutationFn: saveQualityBar,
+    // Shown at once; the answer confirms it.
+    onMutate: (qualityBar: QualityBar) =>
+      queryClient.setQueryData<SaveSettings>(
+        SETTINGS_KEY,
+        (settings) => settings && { ...settings, qualityBar },
+      ),
+    onSuccess: (settings) => queryClient.setQueryData<SaveSettings>(SETTINGS_KEY, settings),
+  });
+
   return {
     /** Undefined until the setting has loaded. */
     settings: data,
     folder: data?.canSaveToFolder ? data.saveFolder : null,
     /** Saves into this folder from now on (null: the browser's downloads). Rejects if it can't be used. */
     setFolder: mutateAsync,
+    /** Saves Housekeeping's quality bar. */
+    setQualityBar,
     /** Reloads the setting, e.g. after a save found the folder gone. */
     refresh: () => queryClient.invalidateQueries({ queryKey: SETTINGS_KEY }),
   };

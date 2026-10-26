@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Eraser, Loader2, X } from "lucide-react";
+import { AlertCircle, Check, Copy, Eraser, Loader2, Trash2, X } from "lucide-react";
 import type { MusicTrack } from "@shared/schema";
 import { artistsOf, renameFolderSong, sanitizedNameOf, type PlayerTrack } from "@/lib/music";
+import { formatDuration } from "@/lib/format";
 import { eachAtOnce } from "@/lib/song-details";
 import { cn } from "@/lib/utils";
 
@@ -31,24 +32,53 @@ const extOf = (track: FolderTrack) => /\.[^.]+$/.exec(fileOf(track))?.[0] ?? "";
 const newExtOf = (track: FolderTrack) => track.realType ?? extOf(track);
 const nameOf = (track: FolderTrack) => fileOf(track).slice(0, -extOf(track).length || undefined);
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
+/** Where a song's file is, as compared: "/" between folders, any case. */
+const placeOf = (fileName: string) => fileName.replace(/\\/g, "/").toLowerCase();
+const folderOf = (track: FolderTrack) => placeOf(track.fileName).replace(/[^/]*$/, "");
+/** The song (and file name) that already has the name a rename would give, if any. */
+type Clash = { other: FolderTrack; fileName: string };
+
+/**
+ * The renames whose new name another song has — one in the folder, or one an
+ * earlier rename in the list gives — by the renamed song's key. No number is
+ * ever added: such a song is likely a copy, for the person to delete.
+ */
+function clashesOf(renames: readonly Rename[], folder: readonly FolderTrack[]): Map<string, Clash> {
+  const byPlace = new Map(folder.map((track) => [placeOf(track.fileName), track]));
+  const clashes = new Map<string, Clash>();
+  for (const { track, name, keep } of renames) {
+    if (!keep || !name.trim()) continue;
+    const fileName = `${name.trim()}${newExtOf(track)}`;
+    const place = folderOf(track) + fileName.toLowerCase();
+    const other = byPlace.get(place);
+    if (other && other.key !== track.key) clashes.set(track.key, { other, fileName });
+    else byPlace.set(place, track); // the next one to that name clashes with this one
+  }
+  return clashes;
+}
 
 /**
  * "Sanitize Filename": suggests a tidy name for each listed song whose file
  * name carries what videos and copies add — "(Official Video)", "HQ",
  * "(1998)", a copy's "(1)", "&#39" — and renames only the ones ticked, each
- * name editable first. The extension stays, a name that's taken gets a
- * number, and the song that's playing is left alone.
+ * name editable first. The extension stays, and the song that's playing is
+ * left alone. A name another song has already is never given (nor a number
+ * added): the two are shown side by side, to delete one if they're the same.
  */
 export function SanitizeNames({
   tracks,
+  folderTracks,
   playingKey,
   atOnce,
   onSongRenamed,
   onRenamed,
+  onDelete,
   onClose,
 }: {
   /** The songs listed (the filters applied), all from the Save to folder. */
   tracks: readonly FolderTrack[];
+  /** All the folder's songs, to see which names are taken. */
+  folderTracks: readonly FolderTrack[];
   /** The song playing now, which isn't renamed while it plays. */
   playingKey: string | null;
   /** How many songs at once: the app's computer's CPU cores. */
@@ -57,6 +87,8 @@ export function SanitizeNames({
   onSongRenamed: (from: string, track: MusicTrack) => void;
   /** Some files were renamed: the list should be read again. */
   onRenamed: () => void;
+  /** Delete this song (asking first): one of two with the same name. */
+  onDelete: (track: FolderTrack) => void;
   onClose: () => void;
 }) {
   const [stage, setStage] = useState<Stage>(() => {
@@ -78,8 +110,16 @@ export function SanitizeNames({
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
 
+  // A song deleted since (one of two with the same name) leaves the list.
+  const present = new Set(folderTracks.map((track) => track.key));
+  const renames =
+    stage.name === "review" ? stage.renames.filter(({ track }) => present.has(track.key)) : [];
+  const clashes = clashesOf(renames, folderTracks);
+
   const rename = async (renames: Rename[]) => {
-    const kept = renames.filter((item) => item.keep && item.name.trim());
+    const kept = renames.filter(
+      (item) => item.keep && item.name.trim() && !clashes.has(item.track.key),
+    );
     const abort = new AbortController();
     controller.current = abort;
     let renamed = 0;
@@ -137,10 +177,13 @@ export function SanitizeNames({
         <div className="min-w-0 flex-1 space-y-3">
           {stage.name === "review" && (
             <Review
-              renames={stage.renames}
+              renames={renames}
+              clashes={clashes}
+              playingKey={playingKey}
+              onDelete={onDelete}
               skipsPlaying={tracks.some((track) => track.key === playingKey)}
               onChange={(renames) => setStage({ name: "review", renames })}
-              onRename={() => void rename(stage.renames)}
+              onRename={() => void rename(renames)}
               onClose={onClose}
             />
           )}
@@ -215,20 +258,30 @@ export function SanitizeNames({
 
 function Review({
   renames,
+  clashes,
+  playingKey,
+  onDelete,
   skipsPlaying,
   onChange,
   onRename,
   onClose,
 }: {
   renames: Rename[];
+  clashes: Map<string, Clash>;
+  playingKey: string | null;
+  onDelete: (track: FolderTrack) => void;
   skipsPlaying: boolean;
   onChange: (renames: Rename[]) => void;
   onRename: () => void;
   onClose: () => void;
 }) {
-  const kept = renames.filter((item) => item.keep && item.name.trim()).length;
+  const kept = renames.filter(
+    (item) => item.keep && item.name.trim() && !clashes.has(item.track.key),
+  ).length;
   const update = (index: number, change: Partial<Rename>) =>
     onChange(renames.map((item, i) => (i === index ? { ...item, ...change } : item)));
+  const lengthOf = (track: FolderTrack) =>
+    track.duration === null ? "" : ` (${formatDuration(track.duration)})`;
 
   return (
     <>
@@ -236,43 +289,76 @@ function Review({
         {renames.length > 0
           ? `${countSongs(renames.length)} could have a tidier name. Untick any to leave as they are, or change a name first.`
           : "Every song listed has a tidy name already."}
+        {clashes.size > 0 &&
+          ` ${countSongs(clashes.size)} would have the name of another song: if it's the same song twice, delete one, or change the name.`}
       </p>
       <p className="text-xs text-muted-foreground">
         Takes out what videos and copies add to a name: “(Official Video)”, “HQ”, “Lyrics Video”, a
         year in brackets, a copy's “(1)”. The extension stays (unless it's wrong: an M4A named .mp3
-        becomes .m4a), and a name that's taken gets a number. Playlists saved as .m3u8 files list
-        songs by name, so they won't find a renamed song.
+        becomes .m4a). A name another song has is never given, nor a number added. Playlists saved
+        as .m3u8 files list songs by name, so they won't find a renamed song.
         {skipsPlaying && " The song that's playing is left out."}
       </p>
       {renames.length > 0 && (
         <ul className="max-h-80 divide-y divide-border/60 overflow-y-auto rounded-lg border border-border bg-card">
-          {renames.map(({ track, name, keep }, index) => (
-            <li key={track.key} className="flex items-start gap-3 px-3 py-2">
-              <input
-                type="checkbox"
-                checked={keep}
-                onChange={() => update(index, { keep: !keep })}
-                aria-label={`Rename “${fileOf(track)}”`}
-                className="mt-1.5 h-4 w-4 shrink-0 accent-primary"
-              />
-              <span className={cn("min-w-0 flex-1 space-y-1", !keep && "opacity-60")}>
-                <span className="block truncate text-xs text-muted-foreground line-through">
-                  {fileOf(track)}
+          {renames.map(({ track, name, keep }, index) => {
+            const clash = clashes.get(track.key);
+            return (
+              <li key={track.key} className="flex items-start gap-3 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={keep && !clash}
+                  disabled={!!clash}
+                  onChange={() => update(index, { keep: !keep })}
+                  aria-label={`Rename “${fileOf(track)}”`}
+                  className="mt-1.5 h-4 w-4 shrink-0 accent-primary"
+                />
+                <span className={cn("min-w-0 flex-1 space-y-1", !keep && "opacity-60")}>
+                  <span className="block truncate text-xs text-muted-foreground line-through">
+                    {fileOf(track)}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <input
+                      type="text"
+                      value={name}
+                      disabled={!keep}
+                      onChange={(event) => update(index, { name: event.target.value })}
+                      aria-label={`New name for “${fileOf(track)}”`}
+                      className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+                    />
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {newExtOf(track)}
+                    </span>
+                  </span>
+                  {clash && (
+                    <span className="block space-y-1 text-xs text-amber-700 dark:text-amber-400">
+                      <span className="flex items-start gap-1">
+                        <Copy className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                        <span>
+                          “{fileOf(clash.other)}”{lengthOf(clash.other)} has that name already: this
+                          one{lengthOf(track)} may be the same song.
+                        </span>
+                      </span>
+                      <span className="flex flex-wrap gap-1.5">
+                        {[track, clash.other].map((song) => (
+                          <button
+                            key={song.key}
+                            type="button"
+                            className={secondary}
+                            disabled={song.key === playingKey}
+                            onClick={() => onDelete(song)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete “{fileOf(song)}”
+                          </button>
+                        ))}
+                      </span>
+                    </span>
+                  )}
                 </span>
-                <span className="flex items-center gap-1">
-                  <input
-                    type="text"
-                    value={name}
-                    disabled={!keep}
-                    onChange={(event) => update(index, { name: event.target.value })}
-                    aria-label={`New name for “${fileOf(track)}”`}
-                    className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                  />
-                  <span className="shrink-0 text-xs text-muted-foreground">{newExtOf(track)}</span>
-                </span>
-              </span>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
       <div className="flex flex-wrap gap-2">

@@ -1,15 +1,15 @@
 ---
 paths:
-  - "server/{music,lyrics,trash,trim,catalogues,song-details,details-log}.ts"
+  - "server/{music,lyrics,trash,trim,catalogues,song-details,details-log,not-found,housekeeping}.ts"
   - "shared/{audio-types,name-noise}.ts"
   - "client/src/App.tsx"
   - "client/src/hooks/{use-player,use-player-shortcuts}.tsx"
   - "client/src/hooks/{use-folder-music,use-device-music,use-lyrics}.ts"
-  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog,trim-song,fill-in-details,sanitize-names,rename-song-dialog}.tsx"
-  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player,trim,song-details}.ts"
-  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash,trim,trim-routes,song-details,song-details-routes,details-log}.test.ts"
+  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog,trim-song,fill-in-details,sanitize-names,rename-song-dialog,housekeeping}.tsx"
+  - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player,trim,song-details,housekeeping}.ts"
+  - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash,trim,trim-routes,song-details,song-details-routes,details-log,housekeeping,housekeeping-routes}.test.ts"
   - "tests/api/music.e2e.test.ts"
-  - "tests/browser/{player,playlist,trim,song-details,sanitize-names}.spec.ts"
+  - "tests/browser/{player,playlist,trim,song-details,sanitize-names,housekeeping}.spec.ts"
 ---
 
 # The music player
@@ -35,3 +35,6 @@ paths:
   the audio copied with `-c copy`, and only after `rewriteProblem()` finds the copy has every tag
   the file had. Writing goes over the file in place (it keeps its creation date) with its times put
   back, so it stays put in "Recently added". The song playing is never changed.
+- Renames never add "(1)"/"(2)" (owner, Oct 26, 2026): a taken name is refused, for the person to
+  delete one copy. Housekeeping only lists; nothing goes until the person ticks and confirms, to
+  the bin, and a `.part` a save is writing is never listed. Its quality bar defaults to 128 kbps.
