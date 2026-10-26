@@ -69,8 +69,9 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
       // The preview should show the title and a thumbnail.
       await expect(page.locator("img[alt]").first()).toBeVisible();
 
-      // The title can be renamed in place; the file is then saved under that name.
-      await page.getByRole("button", { name: /^rename file: me at the zoo/i }).click();
+      // Named "Artist - Title" (the channel's artist), it can be renamed in place; the file is
+      // then saved under that name.
+      await page.getByRole("button", { name: /^rename file: jawed - me at the zoo/i }).click();
       const nameBox = page.getByRole("textbox", { name: /file name/i });
       await expect(nameBox).toHaveValue(/me at the zoo/i);
       await nameBox.fill("Zoo clip: the first video");
@@ -480,13 +481,13 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
       await expect(page.getByText(/download cancelled/i).first()).toBeVisible();
       await expect.poll(() => fs.readdir(target), { timeout: 10_000 }).toEqual([]);
 
-      // A full download lands in the folder as a real MP3.
+      // A full download lands in the folder as a real MP3, named "Artist - Title".
       await downloadLink.click();
       await expect(page.getByText(/saved to “test music”/i).first()).toBeVisible({
         timeout: 90_000,
       });
       const files = await fs.readdir(target);
-      expect(files).toEqual([expect.stringMatching(/^Me at the zoo.*\.mp3$/i)]);
+      expect(files).toEqual([expect.stringMatching(/^jawed - Me at the zoo.*\.mp3$/i)]);
       const verdict = await verifyMp3File(path.join(target, files[0]));
       expect(verdict.isValid, `Saved file is not a valid MP3: ${verdict.reason}`).toBe(true);
       expect(browserDownloads).toBe(0);

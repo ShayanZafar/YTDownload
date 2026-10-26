@@ -3,7 +3,7 @@ import { promises as fs, type WriteStream } from "fs";
 import path from "path";
 import { api } from "@shared/routes";
 import { safeFileName } from "@shared/filename";
-import { sanitizedFileName, withoutNameNoise } from "@shared/name-noise";
+import { fileNameOf, songOfVideo } from "@shared/song-name";
 import type { SaveEvent } from "@shared/schema";
 import { audioLinkOf } from "@shared/soundcloud-link";
 import { prepareAudioOutput, startAudioPipeline, type PreparedOutput } from "./audio";
@@ -115,8 +115,16 @@ export async function saveIntoFolder(req: Request, res: Response) {
         cause: err,
       });
     }
-    // Its title without what videos add ("(Official Video)", "HQ"…), unless Spotify names it.
-    const tags = { ...info, title: withoutNameNoise(info.title), ...(await songTags), spotifyId };
+    // Its artist and title as a player shows them — the artist the video's title names, not
+    // the channel that uploaded it, without "(Official Video)", "HQ"… — unless Spotify names it.
+    const song = songOfVideo(info.title, info.artist);
+    const tags = {
+      ...info,
+      title: song.title,
+      artist: song.artist ?? undefined,
+      ...(await songTags),
+      spotifyId,
+    };
     // Its genre (and for a song without an album, its album) from the music
     // catalogues, looked up meanwhile. It never fails or holds the download up.
     const lookedUp = lookUpDownload(tags, info.duration);
@@ -132,8 +140,8 @@ export async function saveIntoFolder(req: Request, res: Response) {
     void later.then((found) => logDetails(downloadEntry(name || info.title, found)));
     output = await prepareAudioOutput(format, tags, info.acodec, ownCover, later);
     if (clientGone) return;
-    // The name chosen on the page, or the title, sanitized (sanitizedFileName: made safe too).
-    const fileName = `${name ? safeFileName(name) : sanitizedFileName(info.title)}.${output.ext}`;
+    // The name chosen on the page, or "Artist - Title" (fileNameOf: made safe too).
+    const fileName = `${name ? safeFileName(name) : fileNameOf(song)}.${output.ext}`;
     const created = await createNewFile(folder, `${fileName}.part`);
     doneSaving = markBeingSaved(created.path);
     part = {

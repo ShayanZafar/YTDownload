@@ -9,6 +9,12 @@ import os from "os";
 import { FFMPEG_PATH } from "../../server/audio";
 import { parseFile } from "../../server/library";
 import { musicLibrarySchema, type MusicTrack } from "../../shared/schema";
+import {
+  folderArtistsFor,
+  folderTrack,
+  sanitizeChangeOf,
+  tidyOf,
+} from "../../client/src/lib/music";
 
 // The music player's routes, against real files in a temporary "Save to"
 // folder (no internet needed): listing the songs, playing one as it is (with
@@ -444,6 +450,98 @@ describe("Music player (API)", () => {
     expect(
       (await request(app).post(`/api/music/${both.body.track.id}/rename`).send({})).status,
     ).toBe(400);
+    await fs.rm(sub, { recursive: true });
+  });
+
+  it("tidies songs' names, titles and artists for Sanitize Filename, as the folder spells them", async () => {
+    // From the owner's folder: title and artist the wrong way round, capitals, no tags at all,
+    // and an M4A named .mp3 (its tags can only be written once it's named .m4a).
+    const sub = path.join(folder, "Tidy");
+    await fs.mkdir(sub);
+    const song = (name: string, tags: string[]) =>
+      tone(path.join(sub, name), 1, ["-c:a", "libmp3lame", "-id3v2_version", "3", ...tags]);
+    await song("Hit The Floor - Linkin Park (Meteora).mp3", [
+      ...["-metadata", "title=Linkin Park (Meteora)", "-metadata", "artist=Hit The Floor"],
+    ]);
+    await song("Linkin Park - Faint.mp3", [
+      "-metadata",
+      "title=FAINT",
+      "-metadata",
+      "artist=LINKIN PARK",
+    ]);
+    await song("Linkin Park - Numb.mp3", [
+      "-metadata",
+      "title=Numb",
+      "-metadata",
+      "artist=Linkin Park",
+    ]);
+    await song("Papercut - Linkin Park.mp3", []);
+    await tone(path.join(sub, "Faithless - Insomnia.mp3"), 1, ["-c:a", "aac", "-f", "mp4"]);
+
+    // Sanitize Filename: what tidyOf() says would change, sent as the page sends it.
+    const listed = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    const songs = listed.map(folderTrack);
+    const artists = folderArtistsFor(songs);
+    const tidy = songs.filter((track) => track.fileName.startsWith(`Tidy${path.sep}`));
+    expect(tidy).toHaveLength(5);
+    for (const track of tidy) {
+      const change = tidyOf(track, artists);
+      if ((!change && !track.realType) || track.source !== "folder") continue;
+      await request(app)
+        .post(`/api/music/${track.id}/rename`)
+        .send(sanitizeChangeOf(track, change ?? {}))
+        .expect(200);
+    }
+
+    const tagsOf = async (name: string) => {
+      const { common } = await parseFile(path.join(sub, name));
+      return [common.title, common.artist];
+    };
+    expect((await fs.readdir(sub)).sort()).toEqual([
+      "Faithless - Insomnia.m4a",
+      "Linkin Park - Faint.mp3",
+      "Linkin Park - Hit The Floor.mp3",
+      "Linkin Park - Numb.mp3",
+      "Linkin Park - Papercut.mp3",
+    ]);
+    expect(await tagsOf("Linkin Park - Hit The Floor.mp3")).toEqual([
+      "Hit The Floor",
+      "Linkin Park",
+    ]);
+    expect(await tagsOf("Linkin Park - Faint.mp3")).toEqual(["Faint", "Linkin Park"]);
+    expect(await tagsOf("Linkin Park - Papercut.mp3")).toEqual(["Papercut", "Linkin Park"]);
+    expect(await tagsOf("Linkin Park - Numb.mp3")).toEqual(["Numb", "Linkin Park"]);
+    expect(await tagsOf("Faithless - Insomnia.m4a")).toEqual(["Insomnia", "Faithless"]);
+    // Tidy now: nothing more to change.
+    const after = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    const again = after.map(folderTrack);
+    const tidied = again.filter((track) => track.fileName.startsWith(`Tidy${path.sep}`));
+    expect(tidied.map((track) => tidyOf(track, folderArtistsFor(again)))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+
+    // Rename on an M4A named .mp3, its tags as they were: it's renamed all the same.
+    await tone(path.join(sub, "Daft Punk - One More Time.mp3"), 1, [
+      ...["-c:a", "aac", "-f", "mp4", "-metadata", "title=One More Time"],
+      ...["-metadata", "artist=Daft Punk"],
+    ]);
+    const misnamed = musicLibrarySchema
+      .parse((await request(app).get("/api/music")).body)
+      .tracks.find((track) => track.path === path.join("Tidy", "Daft Punk - One More Time.mp3"))!;
+    const renamed = await request(app)
+      .post(`/api/music/${misnamed.id}/rename`)
+      .send({ name: "Daft Punk - One More Time", title: "One More Time", artist: "Daft Punk" })
+      .expect(200);
+    expect(renamed.body.track).toMatchObject({
+      path: path.join("Tidy", "Daft Punk - One More Time.m4a"),
+      title: "One More Time",
+      artist: "Daft Punk",
+    });
+    expect(renamed.body.track.id).not.toBe(misnamed.id);
     await fs.rm(sub, { recursive: true });
   });
 

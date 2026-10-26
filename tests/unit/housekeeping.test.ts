@@ -16,7 +16,7 @@ import {
 } from "../../server/housekeeping";
 import { findAudioFiles, type AudioFile } from "../../server/library";
 import { markBeingSaved } from "../../server/save";
-import { songProblem } from "../../client/src/lib/housekeeping";
+import { copiesOf, songProblem, type CopyCandidate } from "../../client/src/lib/housekeeping";
 import type { SongCheck } from "../../shared/schema";
 
 // Housekeeping: songs ffmpeg makes — whole, cut short, damaged, low bitrate,
@@ -183,6 +183,173 @@ describe("songProblem: the quality bar", () => {
     expect(songProblem(check({ notAudio: "a picture" }), "off")?.text).toBe(
       "It's a picture, not audio.",
     );
+  });
+});
+
+describe("copiesOf: extra copies", () => {
+  // A song as Housekeeping has it once it's checked: [file, title, artist, length, kbps].
+  const song = (
+    fileName: string,
+    title: string,
+    artist: string | null,
+    seconds: number | null,
+    kbps: number | null,
+    more: Partial<CopyCandidate> = {},
+  ): CopyCandidate => ({
+    key: fileName,
+    fileName,
+    title,
+    artist,
+    album: null,
+    genres: [],
+    year: null,
+    duration: seconds,
+    addedAt: 0,
+    check: {
+      notAudio: null,
+      cutShort: null,
+      damaged: null,
+      seconds,
+      kbps,
+      lossless: kbps === null,
+      codec: kbps === null ? "FLAC" : "MPEG 1 Layer 3",
+    },
+    ...more,
+  });
+  const files = (sets: ReturnType<typeof copiesOf>) =>
+    sets.map(({ keep, extra }) => [keep.fileName, ...extra.map((each) => each.fileName)]);
+
+  it("finds a song in the folder twice, the same length, and keeps the better-sounding copy", () => {
+    // From the owner's folder: two downloads of each, a few seconds apart.
+    const sets = copiesOf([
+      song(
+        "Mike Shinoda - About You feat. blackbear.mp3",
+        "About You (feat. blackbear)",
+        "Mike Shinoda",
+        209.8,
+        197,
+      ),
+      song(
+        "Mike Shinoda - About You (feat. blackbear).mp3",
+        "About You (feat. blackbear)",
+        "Mike Shinoda",
+        206.2,
+        326,
+      ),
+      song("deadmau5 Kaskade - I Remember.mp3", "I Remember", "Kaskade", 597.9, 128),
+      song("deadmau5 & Kaskade - I Remember.mp3", "I Remember", "Kaskade", 593.8, 193),
+      song("Mötley Crüe - Kickstart my Heart.mp3", "Kickstart my Heart", "Mötley Crüe", 283.3, 194),
+      song(
+        "Mötley Crüe - Kickstart My Heart - Official.mp3",
+        "KICKSTART MY HEART",
+        "MÖTLEY CRÜE",
+        287.1,
+        256,
+      ),
+    ]);
+    expect(files(sets)).toEqual([
+      [
+        "Mike Shinoda - About You (feat. blackbear).mp3",
+        "Mike Shinoda - About You feat. blackbear.mp3",
+      ],
+      ["deadmau5 & Kaskade - I Remember.mp3", "deadmau5 Kaskade - I Remember.mp3"],
+      ["Mötley Crüe - Kickstart My Heart - Official.mp3", "Mötley Crüe - Kickstart my Heart.mp3"],
+    ]);
+  });
+
+  it("doesn't call another version, a song of another length or one whose length isn't known a copy", () => {
+    expect(
+      copiesOf([
+        // Live, a demo, instrumental, another LPU recording: other versions.
+        song(
+          "Linkin Park - Waiting for the End (Live from Berlin, 2010).mp3",
+          "Waiting for the End (Live from Berlin, 2010)",
+          "Linkin Park",
+          234.4,
+          192,
+        ),
+        song(
+          "Linkin Park - Waiting for the End.mp3",
+          "Waiting for the End (Instrumental)",
+          "Linkin Park",
+          231.8,
+          192,
+        ),
+        song("Linkin Park - Qwerty (LPU 6.0).mp3", "Qwerty (LPU 6.0)", "Linkin Park", 201.8, 192),
+        song("Linkin Park - Qwerty.mp3", "Qwerty (Studio Version)", "Linkin Park", 200.6, 192),
+        // The same name, 32 s and 52 s apart.
+        song("2 Unlimited - Twilight Zone (1).mp3", "Twilight Zone", "2 Unlimited", 248, 192),
+        song("2 Unlimited - Twilight Zone.mp3", "Twilight Zone", "2 Unlimited", 280.5, 192),
+        song("ZZ Top - Legs (Remastered).mp3", "Legs (Remastered)", "ZZ Top", 221.9, 192),
+        song("ZZ Top - Legs.mp3", "Legs", "ZZ Top", 274.2, 192),
+        song("Linkin Park - Numb.mp3", "Numb", "Linkin Park", null, 192),
+        song("Linkin Park - Numb (1).mp3", "Numb", "Linkin Park", null, 192),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps a lossless copy, then one without a copy's “(1)”, then the one with more details, then the first", () => {
+    expect(
+      files(
+        copiesOf([
+          song("Linkin Park - Numb.mp3", "Numb", "Linkin Park", 187, 320),
+          song("Linkin Park - Numb.flac", "Numb", "Linkin Park", 186, null),
+        ]),
+      ),
+    ).toEqual([["Linkin Park - Numb.flac", "Linkin Park - Numb.mp3"]]);
+    expect(
+      files(
+        copiesOf([
+          song("Linkin Park - Numb (1).mp3", "Numb", "Linkin Park", 187, 192, { addedAt: 1 }),
+          song("Linkin Park - Numb.mp3", "Numb", "Linkin Park", 187, 192, { addedAt: 2 }),
+        ]),
+      ),
+    ).toEqual([["Linkin Park - Numb.mp3", "Linkin Park - Numb (1).mp3"]]);
+    expect(
+      files(
+        copiesOf([
+          song(
+            "Fat Joe Feat. Lil Jon ft. Eminem ft. Mase ft. Remy Martin - Lean Back (Remix).mp3",
+            "Lean Back (feat. Lil Jon, Eminem, Mase & Remy Martin) (Remix)",
+            "Fat Joe",
+            294.1,
+            194,
+          ),
+          song(
+            "Fat Joe - Lean Back (feat. Lil Jon, Eminem, Mase & Remy Martin) (Remix).mp3",
+            "Lean Back (feat. Lil Jon, Eminem, Mase & Remy Martin) (Remix)",
+            "Fat Joe",
+            290.5,
+            194,
+            { album: "All Or Nothing", year: 2004 },
+          ),
+        ]),
+      ),
+    ).toEqual([
+      [
+        "Fat Joe - Lean Back (feat. Lil Jon, Eminem, Mase & Remy Martin) (Remix).mp3",
+        "Fat Joe Feat. Lil Jon ft. Eminem ft. Mase ft. Remy Martin - Lean Back (Remix).mp3",
+      ],
+    ]);
+    expect(
+      files(
+        copiesOf([
+          song("Linkin Park - Faint.mp3", "Faint", "Linkin Park", 162, 192, { addedAt: 2 }),
+          song("Linkin Park - Faint 2.mp3", "Faint", "Linkin Park", 162, 192, { addedAt: 1 }),
+        ]),
+      ),
+    ).toEqual([["Linkin Park - Faint 2.mp3", "Linkin Park - Faint.mp3"]]);
+  });
+
+  it("knows a copy without tags by its file name", () => {
+    expect(
+      files(
+        copiesOf([
+          song("Linkin Park - Numb.mp3", "Numb", "Linkin Park", 187, 192),
+          song("Music/Linkin Park - Numb (1).mp3", "Linkin Park - Numb (1)", null, 188, 128),
+        ]),
+      ),
+    ).toEqual([["Linkin Park - Numb.mp3", "Music/Linkin Park - Numb (1).mp3"]]);
   });
 });
 

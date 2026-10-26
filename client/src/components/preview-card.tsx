@@ -1,6 +1,8 @@
 import { Cloud, Download, Loader2, Music } from "lucide-react";
 import type { DownloadFormat } from "@shared/routes";
+import { sanitizedFileName } from "@shared/name-noise";
 import type { AudioSource } from "@shared/schema";
+import { fileNameOf, songOfVideo } from "@shared/song-name";
 import { RenameableTitle } from "@/components/renameable-title";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -40,6 +42,16 @@ type PreviewCardProps = {
   onDownload: (event: React.MouseEvent) => void;
   onClear: () => void;
 };
+
+/**
+ * The name the server saves it as unless it's renamed: a Spotify song's
+ * "Artist - Title", or the artist and title the video's title and channel say
+ * ("Artist - Title": shared/song-name.ts).
+ */
+export const defaultNameOf = (video: Pick<Selected, "title" | "channel" | "fileTitle">) =>
+  video.fileTitle
+    ? sanitizedFileName(video.fileTitle)
+    : fileNameOf(songOfVideo(video.title, video.channel));
 
 /**
  * The chosen video, ready to download: its thumbnail, its title (click it to
@@ -83,7 +95,7 @@ export function PreviewCard({
         <div className="w-full md:w-auto">
           <RenameableTitle
             key={video.url}
-            title={video.fileTitle ?? video.title}
+            defaultName={defaultNameOf(video)}
             fileName={fileName}
             extension={isOriginal ? ".opus" : ".mp3"}
             extensionHint={

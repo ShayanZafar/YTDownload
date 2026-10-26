@@ -7,6 +7,8 @@ import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { FFMPEG_PATH } from "../../server/audio";
+import { copiesOf } from "../../client/src/lib/housekeeping";
+import { folderTrack } from "../../client/src/lib/music";
 import {
   folderFilesSchema,
   musicLibrarySchema,
@@ -16,7 +18,7 @@ import {
 
 // Housekeeping through the real routes, against real files in a temporary
 // "Save to" folder: check each song, list the other files, delete one to a
-// stand-in bin, and keep the quality bar in the settings.
+// stand-in bin, keep the quality bar in the settings, and find extra copies.
 
 let app: express.Express;
 let dir: string;
@@ -100,6 +102,56 @@ describe("Housekeeping (API)", () => {
     expect((await request(app).delete(`/api/folder-files/${files[0].id}`).send({})).status).toBe(
       404,
     );
+  });
+
+  it("finds the extra copies of a song among the songs it checked, keeping the best", async () => {
+    // From the owner's folder: About You twice, a few seconds apart, and a live recording.
+    const sub = path.join(folder, "Copies");
+    await fs.mkdir(sub);
+    const song = (name: string, seconds: number, kbps: string, title: string) =>
+      ffmpeg([
+        ...["-f", "lavfi", "-i", `sine=frequency=440:duration=${seconds}`],
+        ...["-c:a", "libmp3lame", "-b:a", kbps, "-metadata", `title=${title}`],
+        ...["-metadata", "artist=Mike Shinoda", path.join(sub, name)],
+      ]);
+    await song(
+      "Mike Shinoda - About You feat. blackbear.mp3",
+      12,
+      "128k",
+      "About You feat. blackbear",
+    );
+    await song(
+      "Mike Shinoda - About You (feat. blackbear).mp3",
+      10,
+      "256k",
+      "About You (feat. blackbear)",
+    );
+    await song("Mike Shinoda - About You (Live).mp3", 11, "256k", "About You (Live)");
+
+    // As the Housekeeping panel does: each song checked, then copiesOf() over them.
+    const { tracks } = musicLibrarySchema.parse((await request(app).get("/api/music")).body);
+    const checked = await Promise.all(
+      tracks
+        .filter((track) => track.path.startsWith(`Copies${path.sep}`))
+        .map(async (track) => ({
+          ...folderTrack(track),
+          check: songCheckSchema.parse(
+            (await request(app).get(`/api/music/${track.id}/check`).expect(200)).body,
+          ),
+        })),
+    );
+    expect(checked).toHaveLength(3);
+    const sets = copiesOf(checked);
+    expect(
+      sets.map(({ keep, extra }) => [keep, ...extra].map((each) => path.basename(each.fileName))),
+    ).toEqual([
+      [
+        "Mike Shinoda - About You (feat. blackbear).mp3",
+        "Mike Shinoda - About You feat. blackbear.mp3",
+      ],
+    ]);
+    expect(sets[0].extra[0].check.kbps).toBe(128);
+    await fs.rm(sub, { recursive: true });
   });
 
   it("keeps the quality bar with the settings, 128 kbps until it's changed", async () => {

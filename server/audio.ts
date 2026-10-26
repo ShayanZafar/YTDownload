@@ -326,15 +326,19 @@ export function runYtDlpJson(args: string[], timeoutMs = SEARCH_TIMEOUT_MS): Pro
   });
 }
 
-/** What the page shows for a pasted link before downloading: the title and a thumbnail. */
-export type VideoInfo = { title: string; thumbnail: string };
+/**
+ * What the page shows for a pasted link before downloading: the title, a
+ * thumbnail, and the channel (the name it's saved as comes from the title and
+ * the channel: shared/song-name.ts).
+ */
+export type VideoInfo = { title: string; thumbnail: string; channel?: string };
 
 /**
- * A YouTube video's title and thumbnail. Only those are kept: yt-dlp's whole
- * answer lists every format and runs to hundreds of KB.
+ * A YouTube video's title, thumbnail and channel. Only those are kept: yt-dlp's
+ * whole answer lists every format and runs to hundreds of KB.
  */
 export async function fetchVideoInfo(videoUrl: string): Promise<VideoInfo> {
-  let info: ThumbnailLike & { title?: string };
+  let info: ThumbnailLike & { title?: string; uploader?: string; channel?: string };
   try {
     info = (await youtubedl(videoUrl, {
       dumpSingleJson: true,
@@ -344,7 +348,13 @@ export async function fetchVideoInfo(videoUrl: string): Promise<VideoInfo> {
   } catch (err) {
     throw new Error(ytDlpFailure(err), { cause: err });
   }
-  return { title: info.title ?? "Untitled", thumbnail: pickThumbnail(info) };
+  // The same channel name the download goes by (fetchAudioInfo).
+  const channel = info.uploader ?? info.channel;
+  return {
+    title: info.title ?? "Untitled",
+    thumbnail: pickThumbnail(info),
+    ...(channel ? { channel } : {}),
+  };
 }
 
 export function spawnFfmpeg(args: string[]) {

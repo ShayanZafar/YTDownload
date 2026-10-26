@@ -7,8 +7,8 @@ import ffmpegPath from "ffmpeg-static";
 import { stayOffline } from "./stand-ins";
 
 // Housekeeping: a Save to folder with songs ffmpeg makes — one fine, one at a
-// low bitrate, one cut short — a program named like a song, and two files that
-// aren't songs; the real app checks them and deletes the ones ticked.
+// low bitrate, one cut short, one there twice — a program named like a song, and
+// two files that aren't songs; the real app checks them and deletes the ones ticked.
 
 function ffmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -35,6 +35,9 @@ test.beforeAll(async () => {
   await tone(path.join(folder, "Good.mp3"), 3, 192);
   await tone(path.join(folder, "Low.mp3"), 3, 64);
   await tone(path.join(folder, "Cut.mp3"), 20, 128);
+  // The same song twice, from the owner's folder: the better-sounding copy is kept.
+  await tone(path.join(folder, "Mike Shinoda - About You (feat. blackbear).mp3"), 3, 192);
+  await tone(path.join(folder, "Mike Shinoda - About You feat. blackbear.mp3"), 4, 128);
   const whole = await fs.readFile(path.join(folder, "Cut.mp3"));
   await fs.writeFile(path.join(folder, "Cut.mp3"), whole.subarray(0, whole.length / 4));
   await fs.writeFile(
@@ -49,7 +52,7 @@ test.afterAll(async () => {
   await fs.rm(folder, { recursive: true, force: true });
 });
 
-test("Housekeeping finds songs that aren't audio, are cut short or low quality, and deletes the ones ticked", async ({
+test("Housekeeping finds songs that aren't audio, are cut short, low quality or extra copies, and deletes the ones ticked", async ({
   page,
   request,
 }) => {
@@ -58,12 +61,12 @@ test("Housekeeping finds songs that aren't audio, are cut short or low quality, 
   await page.goto("/");
   const library = page.getByRole("region", { name: "Your music" });
   const rows = library.locator("ol > li");
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(6);
 
   await library.getByRole("button", { name: "Housekeeping" }).click();
   const panel = library.getByRole("region", { name: "Housekeeping" });
-  await panel.getByRole("button", { name: "Check 4 songs" }).click();
-  await expect(panel.getByText("5 files to look at.", { exact: false })).toBeVisible();
+  await panel.getByRole("button", { name: "Check 6 songs" }).click();
+  await expect(panel.getByText("6 files to look at.", { exact: false })).toBeVisible();
 
   const group = (name: string) => panel.getByRole("region", { name });
   await expect(group("Not audio")).toContainText("Fake.mp3");
@@ -71,28 +74,40 @@ test("Housekeeping finds songs that aren't audio, are cut short or low quality, 
   await expect(group("Cut short")).toContainText("Cut.mp3");
   await expect(group("Cut short")).toContainText(/Plays 0:0\d of the 0:20 it says it is/);
   await expect(group("Low quality")).toContainText("64 kbps: below 128 kbps.");
+  await expect(group("Extra copies")).toContainText("Mike Shinoda - About You feat. blackbear.mp3");
+  await expect(group("Extra copies")).toContainText(
+    "The same song as “Mike Shinoda - About You (feat. blackbear).mp3”, the same length: that one is kept (192 kbps; this one 128 kbps).",
+  );
+  await expect(
+    panel.getByRole("checkbox", { name: "Delete “Mike Shinoda - About You feat. blackbear.mp3”" }),
+  ).toBeChecked();
   await expect(group("Other files")).toContainText("A download that didn't finish");
   // A half-finished download is ticked; another file isn't, until the person says so.
   await expect(panel.getByRole("checkbox", { name: "Delete “Song.mp3.part”" })).toBeChecked();
   await expect(panel.getByRole("checkbox", { name: "Delete “notes.txt”" })).not.toBeChecked();
-  await expect(panel.getByRole("button", { name: "Delete 4 files" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Delete 5 files" })).toBeVisible();
 
   // The bar is a setting: off, the low-bitrate song isn't listed (and the app keeps it).
   const bar = panel.getByRole("combobox", { name: "Low quality" });
   await bar.selectOption({ label: "Don't check" });
   await expect(group("Low quality")).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: "Delete 3 files" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Delete 4 files" })).toBeVisible();
   await expect
     .poll(async () => (await (await request.get("/api/settings")).json()).qualityBar)
     .toBe("off");
   await bar.selectOption({ label: "Below 128 kbps" });
   await panel.getByRole("checkbox", { name: "Delete “Low.mp3”" }).uncheck();
 
-  await panel.getByRole("button", { name: "Delete 3 files" }).click();
+  await panel.getByRole("button", { name: "Delete 4 files" }).click();
   await panel.getByRole("button", { name: /^Move to the (Trash|Recycle Bin)$/ }).click();
-  await expect(panel.getByText(/Moved 3 files to the (Trash|Recycle Bin)\./)).toBeVisible();
-  expect((await fs.readdir(folder)).sort()).toEqual(["Good.mp3", "Low.mp3", "notes.txt"]);
-  await expect(rows).toHaveCount(2);
+  await expect(panel.getByText(/Moved 4 files to the (Trash|Recycle Bin)\./)).toBeVisible();
+  expect((await fs.readdir(folder)).sort()).toEqual([
+    "Good.mp3",
+    "Low.mp3",
+    "Mike Shinoda - About You (feat. blackbear).mp3",
+    "notes.txt",
+  ]);
+  await expect(rows).toHaveCount(3);
   await panel.getByRole("button", { name: "Close", exact: true }).click();
   await expect(panel).toBeHidden();
 });

@@ -56,6 +56,21 @@ describe("withoutNameNoise", () => {
       ["Saba - Soap Box (prod. Saba & Phoelix)", "Saba - Soap Box"],
       ["Linkin Park LPU 10.0 Halo High Quality", "Linkin Park LPU 10.0 Halo"],
       ["Aaj Ki Raat Lyrical Video", "Aaj Ki Raat"],
+      // Run on to the name, from the owner's folder: "HD", "LyricsHDHQ", "HQ+Lyrics".
+      ["ExodusHD", "Exodus"],
+      ["Bob Marley - Zion TrainHD", "Bob Marley - Zion Train"],
+      ["Stir It UpHD", "Stir It Up"],
+      ["One Love (People Get Ready)HD", "One Love (People Get Ready)"],
+      ["Out of TimeLyricsHDHQ", "Out of Time"],
+      ["Legs Remastered HQ+Lyrics", "Legs"],
+      // "Lyrics HQ", "Full", "Best Quality" versions, and a year's remaster after a dash.
+      ["Me Against the World (LyricsHQ version)", "Me Against the World"],
+      ["Shed So Many Tears - LyricsHQ Version", "Shed So Many Tears"],
+      ["Moonlight Sonata (FULL)", "Moonlight Sonata"],
+      ["La Di Da Di (Full Version)", "La Di Da Di"],
+      ["Hotel California (Best Quality)", "Hotel California"],
+      ["Wish You Were Here - 2011 Remaster", "Wish You Were Here"],
+      ["Liberian Girl - 2012 Remastered Version", "Liberian Girl"],
     ];
     for (const [name, clean] of cases) expect(withoutNameNoise(name)).toBe(clean);
   });
@@ -70,6 +85,8 @@ describe("withoutNameNoise", () => {
       "Full Song",
       "Explicit Content",
       "Make It Official",
+      "Sunset (Full Moon Mix)",
+      "Full Moon",
     ]) {
       expect(withoutNameNoise(name)).toBe(name);
     }

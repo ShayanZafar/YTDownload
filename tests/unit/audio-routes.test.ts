@@ -658,7 +658,8 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
       });
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toContain("audio/mpeg");
-    expect(res.headers["content-disposition"]).toContain("Tone.mp3");
+    // "Tone" by the channel "Test": named "Artist - Title".
+    expect(res.headers["content-disposition"]).toContain("Test - Tone.mp3");
     const file = path.join(dir, "downloaded.mp3");
     await fs.writeFile(file, res.body as Buffer);
     expect((await verifyMp3File(file)).isValid).toBe(true);
@@ -686,18 +687,38 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await fs.rm(path.join(folder, "Saved tone.mp3"));
   });
 
-  it("a save not renamed on the page is named and tagged without what the video adds", async () => {
+  it("a save not renamed on the page is named “Artist - Title” and tagged with the artist the video names", async () => {
     await useFolder();
+    // A channel that uploads other people's songs: the artist is the one the title names.
     fake.audioInfo.mockResolvedValue({
-      title: "Test - Tone (Official Video) HQ",
-      artist: "Test",
+      title: "Paul van Dyk - For An Angel (Official Video) HQ",
+      artist: "Trance Classics",
       formatId: "251",
       acodec: "opus",
     });
-    const lines = await saveLines({ url: VIDEO });
-    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Test - Tone.mp3" });
-    const file = path.join(folder, "Test - Tone.mp3");
-    expect((await readTags(file)).common.title).toBe("Test - Tone");
+    let lines = await saveLines({ url: VIDEO });
+    expect(lines.at(-1)).toMatchObject({
+      type: "done",
+      fileName: "Paul van Dyk - For An Angel.mp3",
+    });
+    let file = path.join(folder, "Paul van Dyk - For An Angel.mp3");
+    expect((await readTags(file)).common).toMatchObject({
+      title: "For An Angel",
+      artist: "Paul van Dyk",
+    });
+    await fs.rm(file);
+
+    // YouTube Music's own upload: the title is the song, the channel its artist.
+    fake.audioInfo.mockResolvedValue({
+      title: "Numb",
+      artist: "Linkin Park - Topic",
+      formatId: "251",
+      acodec: "opus",
+    });
+    lines = await saveLines({ url: VIDEO });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Linkin Park - Numb.mp3" });
+    file = path.join(folder, "Linkin Park - Numb.mp3");
+    expect((await readTags(file)).common).toMatchObject({ title: "Numb", artist: "Linkin Park" });
     await fs.rm(file);
   });
 

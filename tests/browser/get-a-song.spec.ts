@@ -52,12 +52,14 @@ const historyRows = (page: Page, text: RegExp) =>
     .getByRole("listitem")
     .filter({ hasText: text });
 
-/** The app's answer to opening a pasted link: the video's title and thumbnail. */
-async function answerVideoInfo(page: Page, title: string, asked: string[] = []) {
+/** The app's answer to opening a pasted link: the video's title, thumbnail and channel. */
+async function answerVideoInfo(page: Page, title: string, asked: string[] = [], channel?: string) {
   await page.route("**/api/video/info", async (route) => {
     const { url } = route.request().postDataJSON() as { url: string };
     asked.push(url);
-    await route.fulfill({ json: { title, thumbnail: THUMBNAIL, url } });
+    await route.fulfill({
+      json: { title, thumbnail: THUMBNAIL, url, ...(channel && { channel }) },
+    });
   });
   return asked;
 }
@@ -155,6 +157,48 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
 
     // Once the app has it in the history, it shows in Recent Extractions by itself.
     await expect(historyRows(page, /me at the zoo/i)).toHaveCount(1, { timeout: 20_000 });
+  });
+
+  test("a video's song is named “Artist - Title”: the artist its title names, not the channel that uploaded it", async ({
+    page,
+    front,
+  }) => {
+    const pasted = `https://youtu.be/${VIDEO_ID}`;
+    // From the owner's folder: a channel that uploads other people's songs.
+    await answerVideoInfo(
+      page,
+      "Paul van Dyk - For An Angel (Official Video) HD",
+      [],
+      "Trance Classics",
+    );
+    const downloads: Record<string, string>[] = [];
+    answerDownloads(front, await makeSong(), "Paul van Dyk - For An Angel", (query) =>
+      downloads.push(query),
+    );
+
+    await page.goto(front.url);
+    await page.locator('input[type="url"]').fill(pasted);
+    await page.getByRole("button", { name: /extract/i }).click();
+
+    // Shown as it will be saved; the channel is shown as who uploaded it.
+    const title = page.getByRole("button", { name: "Rename file: Paul van Dyk - For An Angel" });
+    await expect(title).toBeVisible();
+    await expect(page.getByText("Trance Classics")).toBeVisible();
+    // Renamed and back: to the name it came with.
+    await title.click();
+    const nameBox = page.getByRole("textbox", { name: /file name/i });
+    await expect(nameBox).toHaveValue("Paul van Dyk - For An Angel");
+    await nameBox.fill("For An Angel");
+    await nameBox.press("Enter");
+    await expect(page.getByText("Renamed from “Paul van Dyk - For An Angel”")).toBeVisible();
+    await page.getByRole("button", { name: "Use that name" }).click();
+    await expect(title).toBeVisible();
+
+    // Not renamed, the page leaves the name to the app (which names it the same way).
+    const downloadStarted = page.waitForEvent("download");
+    await downloadLink(page).click();
+    await downloadStarted;
+    expect(downloads).toEqual([{ url: pasted }]);
   });
 
   test("a pasted Spotify song link is searched for, and the same-length match downloads under the song's name", async ({
@@ -396,7 +440,8 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     const downloads: Record<string, string>[] = [];
     const history: { url: string; title: string; source: "soundcloud" }[] = [];
     await answerHistory(page, () => history);
-    answerDownloads(front, await makeSong(), "One More Time", (query) => {
+    // Saved as the app names it: "Artist - Title".
+    answerDownloads(front, await makeSong(), "Daft Punk - One More Time", (query) => {
       downloads.push(query);
       history.push({ url: query.url, title: "One More Time", source: "soundcloud" });
     });
@@ -416,13 +461,17 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     const track = results.getByRole("button", { name: /^one more time, by daft punk/i });
     await track.click();
     await expect(track).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByRole("button", { name: /^rename file: one more time/i })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /^rename file: daft punk - one more time/i }),
+    ).toBeVisible();
     await expect(page.getByText(/soundcloud's own stream/i)).toBeVisible();
 
     const downloadStarted = page.waitForEvent("download");
     await downloadLink(page).click();
     const download = await downloadStarted;
-    expect(download.suggestedFilename()).toBe(savedName("One More Time.mp3", browserName));
+    expect(download.suggestedFilename()).toBe(
+      savedName("Daft Punk - One More Time.mp3", browserName),
+    );
     const saved = path.join(await deletedAfterTest("yt-audio-e2e-download-"), "track.mp3");
     await download.saveAs(saved);
     expect((await verifyMp3File(saved)).isValid).toBe(true);

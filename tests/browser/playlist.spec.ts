@@ -106,7 +106,7 @@ test.describe("a YouTube playlist", () => {
 
     await panel.getByRole("button", { name: /^never gonna give you up, by rick astley/i }).click();
     await expect(
-      page.getByRole("button", { name: /^rename file: never gonna give you up/i }),
+      page.getByRole("button", { name: /^rename file: rick astley - never gonna give you up/i }),
     ).toBeVisible();
     await expect(panel.getByRole("button", { name: /^never gonna give you up/i })).toHaveAttribute(
       "aria-pressed",

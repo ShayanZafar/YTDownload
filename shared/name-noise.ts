@@ -21,9 +21,9 @@ export function decodeEntities(text: string): string {
 
 // In brackets: "(Official Video)", "[HD]", "(Lyric Video)", "(Remastered 2011)",
 // "(Full Song)", "(con subtítulos)", "[HQExplicit]", "(High Quality)", "(prod. Saba & Phoelix)",
-// a year "(1998)" and a copy's "(1)".
+// "(LyricsHQ version)", "(Full Version)", "(Best Quality)", a year "(1998)" and a copy's "(1)".
 const BRACKETED_NOISE_RE =
-  /\s*[([](?:official\b[^)\]]*|(?:prod\.?|produced by)\s[^)\]]*|[^)\]]*\b(?:video|audio|visuali[sz]er|lyrics?|lyric video|hd|hq\w*|high quality|4k|explicit|full song|subt[ií]tulos|subtitulad[oa]|letra|remaster(?:ed)?(?: \d{4})?)\b[^)\]]*|(?:19|20)\d{2}|\d)[)\]]/gi;
+  /\s*[([](?:official\b[^)\]]*|(?:prod\.?|produced by)\s[^)\]]*|full(?: version)?|best quality|[^)\]]*\b(?:video|audio|visuali[sz]er|lyrics?(?:hd|hq)*|lyric video|hd|hq\w*|high quality|4k|explicit|full song|subt[ií]tulos|subtitulad[oa]|letra|remaster(?:ed)?(?: \d{4})?)\b[^)\]]*|(?:19|20)\d{2}|\d)[)\]]/gi;
 
 // At the end, without brackets: "HQ", "Official HD Video", "Audio HQ", "Lyrics Video",
 // "w Lyrics", "HQ 320 Kbps", "High Quality Audio" (even run on: "ChandaHigh Quality Audio")…
@@ -35,7 +35,7 @@ const RUN_ON_NOISE_RE = /\s*high quality audio$/i;
 const FILM_NOISE_RE = /(?<=\S)\s*[-–—|]?\s*\b(?:full (?:video )?song|hd video song)\b.*$/i;
 
 const TRAILING_NOISE_RE =
-  /(?:\s+|\s*[-–—|]+\s*|\s+\.+\s*)(?:audio (?:hq|hd)|(?:w\/?|with) lyrics|(?:hq )?\d{2,3} ?kbps|official(?: (?:hd|hq|4k))?(?: music| lyrics?)? (?:video|audio)|(?:hd|hq) (?:video|audio)|lyrics? video|lyrical(?: video)?|music video|full song|lyrics|high quality|hq|hd|4k|1080p|720p|remaster(?:ed)?(?: \d{4})?)$/i;
+  /(?:\s+|\s*[-–—|]+\s*|\s+\.+\s*)(?:audio (?:hq|hd)|lyrics?(?:hd|hq)+(?: version)?|full version|(?:w\/?|with) lyrics|(?:hq )?\d{2,3} ?kbps|official(?: (?:hd|hq|4k))?(?: music| lyrics?)? (?:video|audio)|(?:hd|hq) (?:video|audio)|lyrics? video|lyrical(?: video)?|music video|full song|lyrics|high quality|hq|hd|4k|1080p|720p|(?:(?:19|20)\d{2} )?remaster(?:ed)?(?: version)?(?: \d{4})?)$/i;
 
 // At the start: the site a download came from ("yt1s.com - ", "y2mate.com - "), or "HD ".
 const SITE_NOISE_RE =
@@ -54,6 +54,9 @@ export function withoutNameNoise(text: string): string {
     // And a dash or a lone dot left at the end ("Song -", "Song ."), not "Inc.".
     clean = clean
       .replace(TRAILING_NOISE_RE, "")
+      // Run on: "ExodusHD", "Out of TimeLyricsHDHQ", "LegsHQ+Lyrics".
+      .replace(/(?<=[\p{Ll})\]])(?:Lyrics)?(?:HD|HQ)+$/u, "")
+      .replace(/\s*\+\s*lyrics$/i, "")
       // "Kickstart My Heart - Official", not "Make It Official".
       .replace(/\s*[-–—|]+\s*official$/i, "")
       .replace(/\s*[-–—|]+$|\s+\.+$/, "");
@@ -119,8 +122,8 @@ export function sanitizedFileName(name: string): string {
   return clean ? safeFileName(clean, name) : name;
 }
 
-/** An artist's name to compare: lower case, letters and digits only. */
-const artistKey = (name: string) =>
+/** An artist's name to compare: lower case, letters and digits only (KnownArtists keys). */
+export const artistKey = (name: string) =>
   name
     .toLowerCase()
     .normalize("NFKD")

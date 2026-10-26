@@ -144,6 +144,8 @@ export const api = {
           title: z.string(),
           thumbnail: z.string(),
           url: z.string(),
+          /** Who uploaded it: with the title, it says the song's artist (shared/song-name.ts). */
+          channel: z.string().optional(),
         }),
         400: errorSchemas.validation,
         500: errorSchemas.internal,
