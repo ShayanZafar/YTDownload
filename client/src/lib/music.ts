@@ -396,6 +396,53 @@ export function filterByFacets(
   );
 }
 
+/** A filter's choice as its combobox lists it: "Rock (12)", "No genre (3)". */
+export type FacetChoice = { value: string; text: string; count: number };
+
+/** A filter's choices, from facetCounts(): each value with its count, then the songs with none. */
+export function facetChoicesOf(
+  facet: MusicFacet,
+  { values, none }: ReturnType<typeof facetCounts>,
+): FacetChoice[] {
+  const choices = values.map(({ value, count }) => ({ value, text: `${value} (${count})`, count }));
+  if (none > 0) {
+    choices.push({ value: NO_VALUE, text: `${facetLabels[facet].none} (${none})`, count: none });
+  }
+  return choices;
+}
+
+/** Letters and digits only, lower case, without accents: "Hip-Hop/Rap" → "hiphoprap". */
+const squashed = (text: string) =>
+  text
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * The choices whose name has what's typed — in any case, without accents,
+ * dashes or spaces ("hiphop" finds "Hip-Hop/Rap") — those with a word that
+ * starts with it first, then the rest, each in its own order. Nothing typed:
+ * all of them.
+ */
+export function matchChoices<T extends { text: string }>(
+  choices: readonly T[],
+  typed: string,
+): T[] {
+  const wanted = squashed(typed);
+  if (!wanted) return [...choices];
+  const first: T[] = [];
+  const then: T[] = [];
+  for (const choice of choices) {
+    if (!squashed(choice.text).includes(wanted)) continue;
+    const words = choice.text.split(/[\s\-/&,.()]+/).map(squashed);
+    const starts =
+      squashed(choice.text).startsWith(wanted) || words.some((w) => w.startsWith(wanted));
+    (starts ? first : then).push(choice);
+  }
+  return [...first, ...then];
+}
+
 // --- A playlist's songs in the folder -----------------------------------------------
 
 /**

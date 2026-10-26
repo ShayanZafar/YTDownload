@@ -8,6 +8,7 @@ import os from "os";
 import path from "path";
 import { FFMPEG_PATH } from "../../server/audio";
 import { resetCatalogues } from "../../server/catalogues";
+import { facetChoicesOf, facetCounts, folderTrack, matchChoices } from "../../client/src/lib/music";
 import {
   musicLibrarySchema,
   songDetailsWrittenSchema,
@@ -145,6 +146,10 @@ describe("Fill in details (API)", () => {
       genres: ["Electronic"],
       year: 1999,
     });
+    // The genre filter offers it, found by typing a few letters of it.
+    const listed = Object.values(await songs()).map(folderTrack);
+    const genres = facetChoicesOf("genre", facetCounts(listed, "genre"));
+    expect(matchChoices(genres, "elec").map((choice) => choice.text)).toEqual(["Electronic (1)"]);
   });
 
   it("finds nothing for a song the catalogues don't have, writes nothing, and marks it Not found", async () => {

@@ -36,8 +36,10 @@ import {
 import { genresOf } from "../../shared/audio-types";
 import {
   NO_VALUE,
+  facetChoicesOf,
   facetCounts,
   filterByFacets,
+  matchChoices,
   filterTracks,
   folderTrack,
 } from "../../client/src/lib/music";
@@ -969,6 +971,36 @@ describe("the other filters", () => {
     expect(titles({ album: "First", artist: "Trio" })).toEqual(["C"]);
     expect(titles({ year: NO_VALUE })).toEqual(["D"]);
     expect(filterTracks(songs, "2004").map((t) => t.title)).toEqual(["B"]);
+  });
+
+  it("narrow to what's typed: any case, accents or dashes, names starting with it first", () => {
+    const choices = facetChoicesOf("artist", facetCounts(songs, "artist"));
+    expect(choices.map((c) => c.text)).toEqual([
+      "Band (2)",
+      "Singer (1)",
+      "Trio (1)",
+      "No artist (1)",
+    ]);
+    const texts = (typed: string) => matchChoices(choices, typed).map((c) => c.text);
+    expect(texts("")).toHaveLength(4);
+    expect(texts("SIN")).toEqual(["Singer (1)"]);
+    expect(texts("no a")).toEqual(["No artist (1)"]);
+    expect(texts("zzz")).toEqual([]);
+    const genres = [
+      { value: "Synth-Pop", text: "Synth-Pop (4)", count: 4 },
+      { value: "Hip-Hop/Rap", text: "Hip-Hop/Rap (3)", count: 3 },
+      { value: "Pop", text: "Pop (2)", count: 2 },
+      { value: "Électronique", text: "Électronique (1)", count: 1 },
+    ];
+    // "Pop" and the word "Pop" in "Synth-Pop" before "Hip-Hop", which only has it inside a word.
+    expect(matchChoices(genres, "pop").map((c) => c.value)).toEqual(["Synth-Pop", "Pop"]);
+    expect(matchChoices(genres, "op").map((c) => c.value)).toEqual([
+      "Synth-Pop",
+      "Hip-Hop/Rap",
+      "Pop",
+    ]);
+    expect(matchChoices(genres, "hiphop").map((c) => c.value)).toEqual(["Hip-Hop/Rap"]);
+    expect(matchChoices(genres, "electro").map((c) => c.value)).toEqual(["Électronique"]);
   });
 });
 

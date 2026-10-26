@@ -95,15 +95,39 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   const rows = library.getByRole("listitem");
   await expect(rows).toHaveCount(3);
 
-  // By genre: each genre with its count, and the songs with none.
+  // By genre: each genre with its count, and the songs with none — found by typing.
   const genre = library.getByRole("combobox", { name: "Show songs of genre" });
-  await genre.selectOption({ label: "Rock (1)" });
+  const genres = library.getByRole("listbox", { name: "Show songs of genre" });
+  await genre.click();
+  await expect(genres.getByRole("option")).toHaveText([
+    "All genres",
+    "Jazz (1)",
+    "Rock (1)",
+    "No genre (1)",
+  ]);
+  await genre.fill("ro");
+  await expect(genres.getByRole("option")).toHaveText(["Rock (1)"]);
+  await genres.getByRole("option", { name: "Rock (1)" }).click();
+  await expect(genres).toBeHidden();
+  await expect(genre).toHaveValue("Rock");
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("Rock One");
-  await genre.selectOption({ label: "No genre (1)" });
+  // From the keyboard: Enter takes the first that has what's typed; Escape leaves it as it was.
+  await genre.fill("no g");
+  await genre.press("Enter");
+  await expect(genre).toHaveValue("No genre");
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("Bare Tone");
-  await genre.selectOption({ label: "All genres" });
+  await genre.fill("jazz");
+  await genre.press("Escape");
+  await expect(genre).toHaveValue("No genre");
+  await expect(rows).toHaveCount(1);
+  await genre.press("ArrowDown");
+  await genre.press("ArrowUp");
+  await genre.press("ArrowUp");
+  await genre.press("ArrowUp");
+  await genre.press("Enter");
+  await expect(genre).toHaveValue("");
   await expect(rows).toHaveCount(3);
 
   // Fill in details: the songs are looked up, and nothing is written until it's asked for.
@@ -158,22 +182,26 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   });
   await panel.getByRole("button", { name: "Add details to 1 song" }).click();
   await expect(panel.getByText("Added details to 1 song.")).toBeVisible();
-  await expect(genre.locator("option", { hasText: "Electronic (1)" })).toHaveCount(1);
+  await genre.click();
+  await expect(genres.getByRole("option", { name: "Electronic (1)" })).toHaveCount(1);
+  await genre.press("Escape");
   await page.unroute("**/api/music");
   await Promise.all(held.map((go) => go()));
   await expect(each.getByRole("listitem")).toHaveText(["“Bare Tone” details added"]);
 
   // The file has them now: the list shows its new genre.
-  await expect(genre.locator("option", { hasText: "Electronic (1)" })).toHaveCount(1);
-  await expect(genre.locator("option", { hasText: "No genre" })).toHaveCount(0);
+  await genre.click();
+  await expect(genres.getByRole("option", { name: "Electronic (1)" })).toHaveCount(1);
+  await expect(genres.getByRole("option", { name: /No genre/ })).toHaveCount(0);
+  await genre.press("Escape");
   await panel.getByRole("button", { name: "Close", exact: true }).click();
   await expect(panel).toBeHidden();
   await expect(rows.filter({ hasText: "Bare Tone" })).toContainText("Pure Tones");
 
   // Filled in, its album can be filtered on too, with the genre.
-  await library.getByRole("combobox", { name: "Show songs of album" }).selectOption({
-    label: "Pure Tones (1)",
-  });
+  const album = library.getByRole("combobox", { name: "Show songs of album" });
+  await album.fill("pure");
+  await library.getByRole("option", { name: "Pure Tones (1)" }).click();
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("Bare Tone");
   await library.getByRole("button", { name: "Show all" }).click();
@@ -208,7 +236,8 @@ test("songs no catalogue has are shown as Not found, and left out of Fill in det
   const rows = library.locator("ol > li");
   await expect(rows).toHaveCount(3);
   const details = library.getByRole("combobox", { name: "Show songs of details" });
-  await details.selectOption({ label: "Not found (1)" });
+  await details.click();
+  await library.getByRole("option", { name: "Not found (1)" }).click();
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("Rock One");
 
@@ -220,7 +249,8 @@ test("songs no catalogue has are shown as Not found, and left out of Fill in det
   await panel.getByRole("button", { name: "Close", exact: true }).click();
 
   // With the others, it's left out.
-  await details.selectOption({ label: "Any details" });
+  await details.click();
+  await library.getByRole("option", { name: "Any details" }).click();
   await expect(rows).toHaveCount(3);
   await library.getByRole("button", { name: "Fill in details" }).click();
   await expect(panel).toContainText("1 song marked Not found (no catalogue had them) is left out");
