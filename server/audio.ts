@@ -23,6 +23,7 @@ import ffmpegStatic from "ffmpeg-static";
 import youtubedl from "youtube-dl-exec";
 import type { DownloadFormat } from "@shared/routes";
 import { soundCloudArtworkUrl } from "@shared/soundcloud-link";
+import type { LateDetails } from "./download-details";
 import { retryWhenBusy } from "./retry-when-busy";
 import { ffmetadataValue, flacPictureBlock, id3v2Tag, type SongTags } from "./tags";
 import { pickThumbnail, type ThumbnailLike } from "./youtube-url";
@@ -65,7 +66,7 @@ export const YT_DLP_PATH = ytDlpModule.constants.YOUTUBE_DL_PATH;
 export const FFMPEG_PATH = ffmpegStatic; // null only on platforms ffmpeg-static doesn't cover
 
 /**
- * A download's tags: title, artist, album, date, track number, and the
+ * A download's tags: title, artist, album, genre, date, track number, and the
  * Spotify song it is (`spotifyId`), written into the file so the playlist
  * panel recognises it in the "Save to" folder, even after a rename.
  */
@@ -101,11 +102,11 @@ export function ytDlpAudioArgs(videoUrl: string, format: string = AUDIO_FORMAT):
 }
 
 // Read audio on stdin, drop whatever tags the source container carried, and
-// write our own: title, artist, album, date, track number, and the Spotify
+// write our own: title, artist, album, genre, date, track number, and the Spotify
 // song if it's one (a SPOTIFY_ID comment in Ogg and Matroska). An Opus file's
 // cover comes from ffmpeg's metadata file, read as a second input.
 function ffmpegInputAndTags(
-  { title, artist, album, date, track, spotifyId }: AudioMetadata,
+  { title, artist, album, genre, date, track, spotifyId }: AudioMetadata,
   tagsFile?: string,
 ): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0"];
@@ -113,6 +114,7 @@ function ffmpegInputAndTags(
   args.push("-vn", "-map_metadata", tagsFile ? "1" : "-1", "-metadata", `title=${title}`);
   if (artist) args.push("-metadata", `artist=${artist}`);
   if (album) args.push("-metadata", `album=${album}`);
+  if (genre) args.push("-metadata", `genre=${genre}`);
   if (date) args.push("-metadata", `date=${date}`);
   if (track) args.push("-metadata", `track=${track}`);
   if (spotifyId) args.push("-metadata", `spotify_id=${spotifyId}`);
@@ -222,19 +224,44 @@ export function audioOutput(
   };
 }
 
-/** A download's output, and a way to delete the cover files made for it once ffmpeg is done. */
-export type PreparedOutput = AudioOutput & { cleanup: () => Promise<void> };
+/**
+ * A download's output, and a way to delete the cover files made for it once
+ * ffmpeg is done. An MP3's tag may still be on its way (`prefix` a promise):
+ * it goes out with the first audio.
+ */
+export type PreparedOutput = Omit<AudioOutput, "prefix"> & {
+  prefix?: Buffer | Promise<Buffer>;
+  cleanup: () => Promise<void>;
+};
 
 /**
  * `audioOutput()` with a cover: for the containers that need it, the cover is
  * written into a temp folder for ffmpeg to read (deleted by `cleanup()`).
+ *
+ * `later` is what the music catalogues add (download-details.ts), which never
+ * fails. An MP3's tag waits for it while ffmpeg starts on the audio; the other
+ * files carry their tags in ffmpeg's arguments, so they wait for it first.
  */
 export async function prepareAudioOutput(
   format: DownloadFormat,
   meta: AudioMetadata,
   sourceAcodec?: string,
   cover?: Buffer,
+  later?: Promise<LateDetails>,
 ): Promise<PreparedOutput> {
+  if (later && format === "mp3") {
+    const output = audioOutput(format, meta, sourceAcodec);
+    const prefix = later.then(
+      (found) => id3v2Tag({ ...meta, ...found.tags }, cover ?? found.cover),
+      () => id3v2Tag(meta, cover),
+    );
+    return { ...output, prefix, cleanup: async () => {} };
+  }
+  if (later) {
+    const found = await later.catch(() => ({ tags: {}, cover: undefined }));
+    meta = { ...meta, ...found.tags };
+    cover ??= found.cover;
+  }
   const ext = format === "mp3" ? "mp3" : originalContainer(sourceAcodec).ext;
   if (!cover || (ext !== "opus" && ext !== "mka")) {
     const files = cover ? { jpeg: cover } : undefined;
@@ -338,6 +365,8 @@ export type AudioInfo = AudioMetadata & {
   acodec?: string;
   /** A SoundCloud track's artwork, 500×500 (for its cover); a YouTube video has none here. */
   artwork?: string;
+  /** Its length in seconds (to tell the song from other recordings in the music catalogues). */
+  duration?: number;
 };
 
 /**
@@ -368,6 +397,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     release_date?: string;
     ext?: string;
     thumbnail?: string;
+    duration?: number;
   };
   try {
     info = (await youtubedl(videoUrl, {
@@ -390,6 +420,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     // SoundCloud's artwork, at the size its cover is made from (YouTube's
     // covers come from the video id instead: cover.ts).
     ...(artwork ? { artwork } : {}),
+    ...(typeof info.duration === "number" && info.duration > 0 ? { duration: info.duration } : {}),
   };
 }
 
@@ -431,7 +462,7 @@ export function startAudioPipeline(
   videoUrl: string,
   formatId: string | undefined,
   ffmpegArgs: string[],
-  prefix?: Buffer,
+  prefix?: Buffer | Promise<Buffer>,
   { spawnSource = spawnYtDlpAudio }: { spawnSource?: typeof spawnYtDlpAudio } = {},
 ): AudioPipeline {
   // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.
@@ -498,14 +529,20 @@ export function startAudioPipeline(
 /**
  * The audio with `prefix` (an MP3's tag) in front of it, sent together with
  * the first chunk of audio: the routes treat the first data as the sign that
- * the download has really started, so nothing may come before it.
+ * the download has really started, so nothing may come before it. A prefix
+ * still on its way holds the first chunk until it's there (it never fails:
+ * prepareAudioOutput()).
  */
-export function withPrefix(audio: Readable, prefix: Buffer): Readable {
+export function withPrefix(audio: Readable, prefix: Buffer | Promise<Buffer>): Readable {
   let first = true;
   const out = new Transform({
     transform(chunk: Buffer, _encoding, done) {
-      done(null, first ? Buffer.concat([prefix, chunk]) : chunk);
+      if (!first) return done(null, chunk);
       first = false;
+      Promise.resolve(prefix).then(
+        (tag) => done(null, Buffer.concat([tag, chunk])),
+        () => done(null, chunk),
+      );
     },
   });
   return audio.pipe(out);
