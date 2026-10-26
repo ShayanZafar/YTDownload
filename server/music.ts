@@ -23,7 +23,6 @@ import path from "path";
 import { songNameOf } from "@shared/audio-types";
 import type { Download, HistoryInFolder, MusicLibrary, MusicTrack } from "@shared/schema";
 import type { ArtistSong } from "./artist-genre";
-import { spawnFfmpeg } from "./audio";
 import { mapAtOnce } from "./cpu-cores";
 import { isNotFound, loadNotFound } from "./not-found";
 import {
@@ -37,6 +36,7 @@ import {
   type FileTags,
 } from "./library";
 import { FolderError, nameTaken } from "./folders";
+import { runFfmpeg } from "./ffmpeg";
 import { retryWhenBusy } from "./retry-when-busy";
 import { moveToTrash } from "./trash";
 
@@ -275,8 +275,6 @@ export function conversionCacheDir(): string {
 
 /** The most the cache keeps; the conversions played longest ago go first. */
 export const MAX_CACHE_BYTES = 2 * 1024 ** 3;
-/** The longest a conversion may take (a whole audiobook takes a few minutes). */
-const CONVERSION_TIMEOUT_MS = 30 * 60_000;
 const DAY_MS = 24 * 60 * 60_000;
 
 /**
@@ -303,35 +301,6 @@ function untilAborted<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> 
     const onAbort = () => reject(abortError());
     signal.addEventListener("abort", onAbort, { once: true });
     void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
-
-/** Runs ffmpeg; rejects with its last error line if it fails. `onStart` gets the process. */
-export function runFfmpeg(
-  args: string[],
-  onStart: (child: ChildProcess) => void = () => {},
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawnFfmpeg(args);
-    onStart(child);
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr = (stderr + chunk.toString()).slice(-4000);
-    });
-    child.stdout?.resume();
-    child.stdin?.on("error", () => {});
-    child.stdin?.end();
-    const timer = setTimeout(() => child.kill(), CONVERSION_TIMEOUT_MS);
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      if (code === 0) return resolve();
-      const lastLine = stderr.trim().split(/\r?\n/).pop();
-      reject(new Error(lastLine || `ffmpeg stopped (${signal ?? `exit code ${code}`})`));
-    });
   });
 }
 

@@ -12,10 +12,9 @@
  * quickly is simply left out: the download never waits on it for long or
  * fails because of it.
  */
-import { spawn } from "child_process";
 import { isSoundCloudArtworkUrl } from "@shared/soundcloud-link";
-import { FFMPEG_PATH } from "./audio";
 import { isCatalogueCoverUrl } from "./catalogues";
+import { ffmpeg } from "./ffmpeg";
 import { jpegSize } from "./tags";
 
 /** The cover's largest side, in pixels. */
@@ -107,26 +106,13 @@ async function fetchImage(url: string): Promise<Buffer | undefined> {
 }
 
 /** Runs ffmpeg on a picture to make it a square JPEG cover. */
-export function squareJpeg(picture: Buffer, kind: CoverSource["kind"]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    if (!FFMPEG_PATH) return reject(new Error("No ffmpeg"));
-    const ffmpeg = spawn(FFMPEG_PATH, coverArgs(kind), { windowsHide: true });
-    const chunks: Buffer[] = [];
-    const timer = setTimeout(() => ffmpeg.kill(), CONVERT_TIMEOUT_MS);
-    ffmpeg.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-    ffmpeg.stdin.on("error", () => {}); // ffmpeg may stop reading early
-    ffmpeg.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    ffmpeg.on("close", (code) => {
-      clearTimeout(timer);
-      const jpeg = Buffer.concat(chunks);
-      if (code === 0 && jpegSize(jpeg)) resolve(jpeg);
-      else reject(new Error(`ffmpeg couldn't make the cover (exit code ${code})`));
-    });
-    ffmpeg.stdin.end(picture);
+export async function squareJpeg(picture: Buffer, kind: CoverSource["kind"]): Promise<Buffer> {
+  const { code, stdout: jpeg } = await ffmpeg(coverArgs(kind), {
+    input: picture,
+    timeoutMs: CONVERT_TIMEOUT_MS,
   });
+  if (code === 0 && jpegSize(jpeg)) return jpeg;
+  throw new Error(`ffmpeg couldn't make the cover (exit code ${code})`);
 }
 
 /** The longest a download waits for its cover (beyond the YouTube lookup it runs alongside). */

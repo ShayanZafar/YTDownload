@@ -18,7 +18,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { FolderFile, SongCheck } from "@shared/schema";
-import { spawnFfmpeg } from "./audio";
+import { ffmpeg } from "./ffmpeg";
 import { sniffFile } from "./file-kind";
 import { findAudioFiles, parseFile, readTags, type AudioFile } from "./library";
 import { musicTrackId } from "./music";
@@ -57,17 +57,12 @@ export function decodeResultOf(progress: string, stderr: string, code: number | 
 }
 
 /** Decodes the file through ffmpeg (nothing is written). */
-export function decodeThrough(file: string): Promise<DecodeResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawnFfmpeg(ffmpegCheckArgs(file));
-    let progress = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => (progress += chunk));
-    // Only the last few kilobytes of errors are needed to count them.
-    child.stderr?.on("data", (chunk) => (stderr = (stderr + chunk).slice(-64_000)));
-    child.on("error", reject);
-    child.on("close", (code) => resolve(decodeResultOf(progress, stderr, code)));
+export async function decodeThrough(file: string): Promise<DecodeResult> {
+  // Only the last few kilobytes of errors are needed to count them.
+  const { stdout, stderr, code } = await ffmpeg(ffmpegCheckArgs(file), {
+    stderr: { keep: "last", chars: 64_000 },
   });
+  return decodeResultOf(stdout.toString(), stderr, code);
 }
 
 /** A file that plays this much less than its header says is cut short. */

@@ -23,8 +23,7 @@ import { lookUpSongNoted, sourceName } from "./catalogues";
 import { setNotFound } from "./not-found";
 import { fetchCover } from "./cover";
 import { forgetTags, parseFile, readTags, type AudioFile } from "./library";
-import { spawnFfmpeg } from "./audio";
-import { runFfmpeg } from "./music";
+import { ffmpeg, runFfmpeg } from "./ffmpeg";
 import { retryWhenBusy } from "./retry-when-busy";
 import { withFramesFrom } from "./id3-frames";
 import { ffmetadataValue, flacPictureBlock } from "./tags";
@@ -71,29 +70,18 @@ export function parseProbe(stderr: string): { container?: string; codec?: string
 const PROBE_TIMEOUT_MS = 15_000;
 
 /** What ffmpeg finds `file` really is (it reads only the start). */
-export function probeFile(file: string): Promise<{ container?: string; codec?: string }> {
-  return new Promise((resolve) => {
-    let stderr = "";
-    let child: ReturnType<typeof spawnFfmpeg>;
-    try {
-      child = spawnFfmpeg(["-hide_banner", "-nostdin", "-i", file]);
-    } catch {
-      return resolve({});
-    }
-    const timer = setTimeout(() => child.kill(), PROBE_TIMEOUT_MS);
-    child.stderr.on("data", (chunk: Buffer) => (stderr = (stderr + chunk).slice(0, 20_000)));
-    child.stdout.resume();
-    child.stdin.on("error", () => {});
-    child.on("error", () => {
-      clearTimeout(timer);
-      resolve({});
-    });
+export async function probeFile(file: string): Promise<{ container?: string; codec?: string }> {
+  try {
     // ffmpeg exits with an error here (no output was asked for): what it printed is the answer.
-    child.on("close", () => {
-      clearTimeout(timer);
-      resolve(parseProbe(stderr));
+    const { stderr } = await ffmpeg(["-hide_banner", "-nostdin", "-i", file], {
+      timeoutMs: PROBE_TIMEOUT_MS,
+      stderr: { keep: "first", chars: 20_000 },
+      onStdout: () => {},
     });
-  });
+    return parseProbe(stderr);
+  } catch {
+    return {};
+  }
 }
 
 /** The file name ending for what a file really holds, when the app can tag that. */

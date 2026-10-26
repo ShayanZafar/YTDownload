@@ -30,6 +30,7 @@ import {
   lookUpDetails,
   muxerFor,
   parseProbe,
+  probeFile,
   rewriteProblem,
   writeSongDetails,
 } from "../../server/song-details";
@@ -1103,6 +1104,15 @@ beforeAll(async () => {
 afterAll(async () => {
   delete process.env.DETAILS_NOT_FOUND_FILE;
   await fs.rm(dir, { recursive: true, force: true });
+});
+
+describe("probeFile", () => {
+  it("says what a file really holds, whatever its name, and nothing for a missing one", async () => {
+    await tone(path.join(dir, "really-m4a.mp3"), ["-c:a", "aac", "-f", "ipod"]);
+    expect(await probeFile(path.join(dir, "really-m4a.mp3"))).toMatchObject({ codec: "aac" });
+    expect((await probeFile(path.join(dir, "really-m4a.mp3"))).container).toMatch(/mp4|m4a/);
+    expect(await probeFile(path.join(dir, "no-such-song.mp3"))).toEqual({});
+  });
 });
 
 describe("writeSongDetails", () => {
