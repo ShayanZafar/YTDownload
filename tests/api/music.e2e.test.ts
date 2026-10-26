@@ -52,6 +52,7 @@ beforeAll(async () => {
   process.env.HISTORY_FILE = path.join(dir, "history.json");
   process.env.SETTINGS_FILE = path.join(dir, "settings.json");
   process.env.PLAYER_CACHE_DIR = path.join(dir, "cache");
+  process.env.DETAILS_NOT_FOUND_FILE = path.join(dir, "details-not-found.json");
   // Deleted songs go here, not into this computer's Recycle Bin / Trash.
   process.env.TRASH_DIR = path.join(dir, "bin");
 
@@ -83,6 +84,7 @@ afterAll(async () => {
   delete process.env.HISTORY_FILE;
   delete process.env.SETTINGS_FILE;
   delete process.env.PLAYER_CACHE_DIR;
+  delete process.env.DETAILS_NOT_FOUND_FILE;
   delete process.env.TRASH_DIR;
   await fs.rm(dir, { recursive: true, force: true });
 });

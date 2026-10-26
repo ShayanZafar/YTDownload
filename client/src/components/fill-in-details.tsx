@@ -77,7 +77,7 @@ export function FillInDetails({
   atOnce: number;
   /** One song's details are written: here it is as it is now, to show at once. */
   onSongWritten: (track: MusicTrack) => void;
-  /** Some files were changed: the list should be read again. */
+  /** Some files were changed, or marked Not found: the list should be read again. */
   onWritten: () => void;
   onClose: () => void;
 }) {
@@ -88,8 +88,13 @@ export function FillInDetails({
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
 
-  const toLookUp = tracks.filter((track) => track.key !== playingKey);
-  const skipsPlaying = toLookUp.length < tracks.length;
+  const playable = tracks.filter((track) => track.key !== playingKey);
+  const skipsPlaying = playable.length < tracks.length;
+  // Songs marked Not found are left out — unless they're all that's listed (the
+  // Details filter set to Not found): then they're looked up again.
+  const retrying = playable.length > 0 && playable.every((track) => track.detailsNotFound);
+  const toLookUp = retrying ? playable : playable.filter((track) => !track.detailsNotFound);
+  const leftOut = playable.length - toLookUp.length;
 
   const lookUp = async () => {
     const abort = new AbortController();
@@ -131,7 +136,12 @@ export function FillInDetails({
               key,
               title,
               result: "none",
-              text: ["not found in iTunes or Deezer", lookup.notes.join("; ")]
+              text: [
+                lookup.notFound
+                  ? "not found in iTunes, Deezer or MusicBrainz (marked Not found)"
+                  : "not found",
+                lookup.notes.join("; "),
+              ]
                 .filter(Boolean)
                 .join(": "),
             });
@@ -153,6 +163,8 @@ export function FillInDetails({
       atOnce,
       abort.signal,
     );
+    // Songs found or not found are marked so (or no longer): the list shows it.
+    onWritten();
     const order = new Map(toLookUp.map((track, i) => [track.key, i]));
     found.sort((a, b) => order.get(a.track.key)! - order.get(b.track.key)!);
     setStage({
@@ -223,10 +235,13 @@ export function FillInDetails({
             <>
               <p className="text-muted-foreground">
                 Looks up the songs listed that are missing a genre, album, year, track number or
-                cover in Apple's iTunes catalogue (Deezer's when iTunes is busy), by their title,
-                artist and length. You'll see what was found before anything is written, and tags
-                the songs already have stay as they are.
+                cover in Apple's iTunes catalogue, then Deezer's, then MusicBrainz's, by their
+                title, artist and length. You'll see what was found before anything is written, and
+                tags the songs already have stay as they are.
                 {skipsPlaying && " The song that's playing is left out."}
+                {leftOut > 0 &&
+                  ` ${countSongs(leftOut)} marked Not found (no catalogue had them) ${leftOut === 1 ? "is" : "are"} left out: choose Not found under Details to look them up again.`}
+                {retrying && " These songs are marked Not found: they're looked up again."}
               </p>
               <div className="flex flex-wrap gap-2">
                 <button

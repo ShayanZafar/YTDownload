@@ -109,6 +109,7 @@ describe("toMusicTrack", () => {
       size: 1000,
       realType: null,
       notAudio: null,
+      detailsNotFound: false,
     });
     expect(toMusicTrack("C:\\Music", file, { spotifyIds: [] })).toMatchObject({
       title: "Bohemian Rhapsody",

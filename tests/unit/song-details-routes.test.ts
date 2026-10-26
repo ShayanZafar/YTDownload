@@ -47,6 +47,7 @@ beforeAll(async () => {
   process.env.SETTINGS_FILE = path.join(dir, "settings.json");
   process.env.PLAYER_CACHE_DIR = path.join(dir, "cache");
   process.env.DETAILS_LOG_FILE = path.join(dir, "details.log");
+  process.env.DETAILS_NOT_FOUND_FILE = path.join(dir, "details-not-found.json");
   folder = path.join(dir, "Music");
   await fs.mkdir(folder);
   await tone(path.join(folder, "Test Tone.mp3"), [
@@ -98,6 +99,7 @@ afterAll(async () => {
   delete process.env.SETTINGS_FILE;
   delete process.env.PLAYER_CACHE_DIR;
   delete process.env.DETAILS_LOG_FILE;
+  delete process.env.DETAILS_NOT_FOUND_FILE;
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -126,8 +128,12 @@ describe("Fill in details (API)", () => {
       found: { album: "Pure Tones", genre: "Electronic", year: 1999, track: 3 },
       match: { title: "Test Tone", artist: "Sine Wave", album: "Pure Tones" },
     });
-    // Only the title and artist went to iTunes.
-    expect(asked.map((url) => url.searchParams.get("term"))).toEqual(["Sine Wave Test Tone"]);
+    // Only the title and artist went to iTunes; it has no cover, so the others were asked
+    // for one too, and having none, iTunes' answer is used.
+    expect(asked[0].searchParams.get("term")).toBe("Sine Wave Test Tone");
+    expect(new Set(asked.map((url) => url.hostname))).toEqual(
+      new Set(["itunes.apple.com", "api.deezer.com", "musicbrainz.org"]),
+    );
 
     const written = songDetailsWrittenSchema.parse(
       (await request(app).post(`/api/music/${id}/details`).send(lookup.found).expect(200)).body,
@@ -141,10 +147,16 @@ describe("Fill in details (API)", () => {
     });
   });
 
-  it("finds nothing for a song the catalogues don't have, and writes nothing for it", async () => {
-    const { id } = (await songs())["Rock Song.mp3"];
-    const res = await request(app).get(`/api/music/${id}/details`).expect(200);
-    expect(res.body).toMatchObject({ writable: true, found: null });
+  it("finds nothing for a song the catalogues don't have, writes nothing, and marks it Not found", async () => {
+    const before = (await songs())["Rock Song.mp3"];
+    expect(before.detailsNotFound).toBe(false);
+    const res = await request(app).get(`/api/music/${before.id}/details`).expect(200);
+    expect(res.body).toMatchObject({ writable: true, found: null, notFound: true });
+    // Kept on disk, and in the list.
+    expect((await songs())["Rock Song.mp3"].detailsNotFound).toBe(true);
+    expect(JSON.parse(await fs.readFile(path.join(dir, "details-not-found.json"), "utf8"))).toEqual(
+      { "Rock Song.mp3": before.size },
+    );
   });
 
   it("takes the title and artist from an untagged “Artist - Song” name no catalogue has", async () => {
@@ -216,7 +228,7 @@ describe("Fill in details (API)", () => {
     );
     // Not found: what it lacks, and each search with why its answers weren't it.
     expect(lines.at(-1)).toMatch(
-      /look-up {2}Rock Song\.mp3 {2}not found: lacks artist, album, year, track, cover; iTunes, “Rock Song”: nothing came back; Deezer, “Rock Song”: nothing came back$/,
+      /look-up {2}Rock Song\.mp3 {2}not found: lacks artist, album, year, track, cover; marked Not found: no catalogue has it; iTunes, “Rock Song”: nothing came back; Deezer, “Rock Song”: nothing came back; MusicBrainz, “Rock Song”: nothing came back$/,
     );
     expect(lines.some((line) => line.includes("Misnamed.mp3  can't be written"))).toBe(true);
   });

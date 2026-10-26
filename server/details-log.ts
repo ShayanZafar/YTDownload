@@ -53,8 +53,16 @@ export function lookupEntry(song: string, lookup: SongLookup): DetailsLogEntry {
   if (lookup.missing.length === 0) return { kind, song, outcome: "has every detail already" };
   if (!lookup.writable) return { kind, song, outcome: "this kind of file can't hold tags" };
   const lacks = `lacks ${lookup.missing.join(", ")}`;
-  if (!lookup.found) return { kind, song, outcome: "not found", details: [lacks, ...lookup.notes] };
-  const source = lookup.source === "deezer" ? "Deezer" : "iTunes";
+  if (!lookup.found) {
+    const marked = lookup.notFound ? ["marked Not found: no catalogue has it"] : [];
+    return { kind, song, outcome: "not found", details: [lacks, ...marked, ...lookup.notes] };
+  }
+  const source =
+    lookup.source === "deezer"
+      ? "Deezer"
+      : lookup.source === "musicbrainz"
+        ? "MusicBrainz"
+        : "iTunes";
   const matched =
     lookup.source === "name"
       ? "no catalogue has it: from its file name"

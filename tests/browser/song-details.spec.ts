@@ -119,7 +119,7 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await expect(panel.getByText("Found details for 1 song.")).toBeVisible();
   expect(lookedUp.sort()).toEqual(["Bare Tone", "Jazz One", "Rock One"]);
   await expect(each.getByRole("listitem").filter({ hasText: "“Rock One”" })).toContainText(
-    "not found in iTunes or Deezer: iTunes, “Rock One”: nothing came back",
+    "not found: iTunes, “Rock One”: nothing came back",
   );
   // Every song's outcome is also kept in the details log, which the panel links to.
   await expect(panel.getByRole("link", { name: /The details log/ })).toHaveAttribute(
@@ -167,4 +167,53 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await expect(rows.first()).toContainText("Bare Tone");
   await library.getByRole("button", { name: "Show all" }).click();
   await expect(rows).toHaveCount(3);
+});
+
+test("songs no catalogue has are shown as Not found, and left out of Fill in details", async ({
+  page,
+  request,
+}) => {
+  await stayOffline(page);
+  // The server's list, with Rock One marked Not found (as a look-up no catalogue answered marks it).
+  await page.route("**/api/music", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const track of body.tracks) track.detailsNotFound = track.title === "Rock One";
+    await route.fulfill({ response: res, json: body });
+  });
+  const lookedUp: string[] = [];
+  await page.route("**/api/music/*/details", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    lookedUp.push(route.request().url());
+    await route.fulfill({
+      json: { missing: ["year"], writable: true, found: null, match: null, source: null },
+    });
+  });
+
+  await request.put("/api/settings", { data: { saveFolder: folder } });
+  await page.goto("/");
+  const library = page.getByRole("region", { name: "Your music" });
+  const rows = library.locator("ol > li");
+  await expect(rows).toHaveCount(3);
+  const details = library.getByRole("combobox", { name: "Show songs of details" });
+  await details.selectOption({ label: "Not found (1)" });
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("Rock One");
+
+  // Shown on its own, it can be looked up again.
+  await library.getByRole("button", { name: "Fill in details" }).click();
+  const panel = library.getByRole("region", { name: "Fill in details" });
+  await expect(panel).toContainText("These songs are marked Not found: they're looked up again.");
+  await expect(panel.getByRole("button", { name: "Look up 1 song" })).toBeVisible();
+  await panel.getByRole("button", { name: "Close", exact: true }).click();
+
+  // With the others, it's left out.
+  await details.selectOption({ label: "Any details" });
+  await expect(rows).toHaveCount(3);
+  await library.getByRole("button", { name: "Fill in details" }).click();
+  await expect(panel).toContainText("1 song marked Not found (no catalogue had them) is left out");
+  await panel.getByRole("button", { name: "Look up 2 songs" }).click();
+  await expect(panel.getByText(/wasn't found|weren't found/)).toBeVisible();
+  expect(lookedUp).toHaveLength(2);
 });

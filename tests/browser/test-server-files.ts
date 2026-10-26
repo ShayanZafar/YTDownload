@@ -5,7 +5,7 @@ import path from "path";
 /**
  * The browser tests' own copy of the app (the webServer in playwright.config.ts) keeps its
  * history, settings, source-health report, music player cache (songs a browser can't play,
- * as FLAC), bin (songs deleted from the folder, in place of the system's), trimmed songs' originals and the details log here, in the temp folder. They're named after this Playwright run's process id, so
+ * as FLAC), bin (songs deleted from the folder, in place of the system's), trimmed songs' originals, the details log and the Not found marks here, in the temp folder. They're named after this Playwright run's process id, so
  * runs going at the same time never share them, and each run deletes only its own.
  */
 // The run's process id; its test workers (other processes) get it from the
@@ -20,6 +20,7 @@ export const testServerFiles = {
   TRASH_DIR: path.join(os.tmpdir(), `yt-audio-e2e-trash-${run}`),
   TRIM_BACKUP_DIR: path.join(os.tmpdir(), `yt-audio-e2e-backups-${run}`),
   DETAILS_LOG_FILE: path.join(os.tmpdir(), `yt-audio-e2e-details-${run}.log`),
+  DETAILS_NOT_FOUND_FILE: path.join(os.tmpdir(), `yt-audio-e2e-notfound-${run}.json`),
 };
 
 /**

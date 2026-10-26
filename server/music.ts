@@ -23,6 +23,7 @@ import path from "path";
 import { songNameOf } from "@shared/audio-types";
 import type { Download, HistoryInFolder, MusicLibrary, MusicTrack } from "@shared/schema";
 import { spawnFfmpeg } from "./audio";
+import { isNotFound, loadNotFound } from "./not-found";
 import {
   findAudioFiles,
   findDownloads,
@@ -58,6 +59,7 @@ export function toMusicTrack(folder: string, file: AudioFile, tags: FileTags): M
     size: file.size,
     realType: tags.realType ?? null,
     notAudio: tags.notAudio ?? null,
+    detailsNotFound: isNotFound(file),
   };
 }
 
@@ -72,7 +74,7 @@ function remember(folder: string, files: AudioFile[]): Map<string, AudioFile> {
 
 /** The songs in `folder` and its subfolders, in the order they were found. */
 export async function listMusic(folder: string): Promise<MusicLibrary> {
-  const { files, complete } = await readFolderTags(folder);
+  const [{ files, complete }] = await Promise.all([readFolderTags(folder), loadNotFound()]);
   remember(folder, files);
   return { folder, complete, tracks: files.map((file) => toMusicTrack(folder, file, file.tags)) };
 }
