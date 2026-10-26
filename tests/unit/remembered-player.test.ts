@@ -28,6 +28,8 @@ const folderSong = (n: number, extra: { duration?: number | null } = {}) =>
     duration: extra.duration === undefined ? 200 : extra.duration,
     addedAt: "2026-10-01T10:00:00.000Z",
     size: 1000,
+    realType: null,
+    notAudio: null,
   });
 
 const deviceSong = (name: string) => deviceTrack(new File(["x"], name, { lastModified: 1 }));

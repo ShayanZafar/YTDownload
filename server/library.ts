@@ -31,6 +31,7 @@ import {
 } from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
 import { mapAtOnce } from "./cpu-cores";
+import { kindProblem, sniffFile } from "./file-kind";
 import { folderError, isHiddenFolder } from "./folders";
 
 /** Files looked at as songs: .mp3, .m4a, .opus, .flac… (see shared/audio-types.ts). */
@@ -64,6 +65,10 @@ export type SongFile = {
   year?: number;
   /** Length in seconds, when the file says without being read all the way through. */
   duration?: number;
+  /** Its content is another kind of audio than its name says: the extension it should have. */
+  realType?: string;
+  /** It isn't audio at all, by its content: what it is ("a Windows program"). */
+  notAudio?: string;
 };
 
 export type FileTags = Omit<SongFile, "path">;
@@ -170,7 +175,7 @@ export function forgetTags(absolute: string) {
 export function readTags(file: AudioFile): Promise<FileTags> {
   const cached = tagCache.get(file.absolute);
   if (cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs) return cached.tags;
-  const tags = parseFile(file.absolute, { duration: false, skipCovers: true, mkvUseIndex: true })
+  const read = parseFile(file.absolute, { duration: false, skipCovers: true, mkvUseIndex: true })
     .then(async (metadata) => {
       const found = tagsFrom(metadata);
       const { container, codec, sampleRate } = metadata.format;
@@ -184,6 +189,12 @@ export function readTags(file: AudioFile): Promise<FileTags> {
     })
     // Unreadable or damaged: the file still counts by its name.
     .catch((): FileTags => ({ spotifyIds: [] }));
+  // And what its content says it is (see file-kind.ts).
+  const kind = sniffFile(file.absolute).catch(() => undefined);
+  const tags = Promise.all([read, kind]).then(([found, sniffed]) => ({
+    ...found,
+    ...kindProblem(file.relative, sniffed),
+  }));
   if (tagCache.size >= MAX_CACHED) tagCache.clear();
   tagCache.set(file.absolute, { size: file.size, mtimeMs: file.mtimeMs, tags });
   return tags;
@@ -307,7 +318,13 @@ export async function readSongFiles(
   folder: string,
 ): Promise<{ files: SongFile[]; complete: boolean }> {
   const { files, complete } = await readFolderTags(folder);
-  return { files: files.map((file) => ({ path: file.relative, ...file.tags })), complete };
+  return {
+    // A file that isn't audio (whatever its name) isn't a song in the folder.
+    files: files
+      .filter((file) => !file.tags.notAudio)
+      .map((file) => ({ path: file.relative, ...file.tags })),
+    complete,
+  };
 }
 
 // --- Matching songs to files ------------------------------------------------------

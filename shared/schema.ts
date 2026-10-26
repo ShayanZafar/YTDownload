@@ -292,6 +292,10 @@ export const musicTrackSchema = z.object({
   /** When it arrived in the folder (ISO 8601), for "Recently added". */
   addedAt: z.string(),
   size: z.number(),
+  /** Its content is another kind of audio than its name says: the extension it should have (".m4a"). */
+  realType: z.string().nullable().default(null),
+  /** It isn't audio at all, by its content: what it is ("a Windows program"). It isn't played. */
+  notAudio: z.string().nullable().default(null),
 });
 
 export type MusicTrack = z.infer<typeof musicTrackSchema>;
@@ -428,6 +432,14 @@ export const deletedSongSchema = z.object({
 });
 
 export type DeletedSong = z.infer<typeof deletedSongSchema>;
+
+/** A song given the extension its content says it should have: its new id and place in the folder. */
+export const renamedSongSchema = z.object({
+  id: z.string(),
+  path: z.string(),
+});
+
+export type RenamedSong = z.infer<typeof renamedSongSchema>;
 
 /**
  * A `409` for a delete that would have had to be for good — the song's drive
