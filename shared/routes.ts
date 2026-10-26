@@ -384,7 +384,7 @@ export const api = {
     },
     /**
      * Fill in details: what a song's tags lack, and what the music catalogues
-     * (iTunes, then Deezer) have for it. Nothing is written.
+     * (iTunes, Deezer, MusicBrainz) have for it. Nothing is written.
      */
     lookUpDetails: {
       method: "GET" as const,
@@ -419,8 +419,8 @@ export const api = {
     },
     /**
      * Gives a song whose content is another kind of audio than its name says
-     * (a ".mp3" that's really an M4A) the extension it should have — or a
-     * numbered name, if that's taken. `409` if its name is right already.
+     * (a ".mp3" that's really an M4A) the extension it should have. `409` if
+     * its name is right already, or another file has that name.
      */
     fixName: {
       method: "POST" as const,
@@ -429,9 +429,9 @@ export const api = {
     },
     /**
      * Rename, and Sanitize Filename: renames a song's file, in its own folder,
-     * to `name` (made safe; its extension stays; a numbered name if that's
-     * taken), and/or gives it a new `title` and `artist` tag. `409` if nothing
-     * would change.
+     * to `name` (made safe; its extension stays; never a numbered name), and/or
+     * gives it a new `title` and `artist` tag. `409` if nothing would change,
+     * or (nothing changed) another file has that name.
      */
     rename: {
       method: "POST" as const,

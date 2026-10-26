@@ -154,7 +154,8 @@ export function RenameSongDialog({ track, onRenamed, onClose }: RenameSongDialog
           </label>
           <p className="text-xs text-muted-foreground">
             The title and artist are written into the file's tags; its other tags and its audio stay
-            as they are. A file name that's taken gets a number.
+            as they are. A file name another song has is refused: delete one if they're the same
+            song.
             {isCurrent && " It's playing, so it leaves the player first."}
           </p>
           {error && (
