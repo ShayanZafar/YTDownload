@@ -64,7 +64,16 @@ vi.mock("../../server/audio", async (importOriginal) => {
 // A download's cover comes from YouTube's thumbnails, Spotify or SoundCloud
 // (server/cover.ts): none here, so nothing leaves this computer.
 const coverFor = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../server/cover", () => ({ coverFor }));
+const fetchCover = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../../server/cover", () => ({ coverFor, fetchCover }));
+
+// The music catalogues (iTunes, Deezer: server/catalogues.ts), asked for a
+// download's genre while it downloads: a stand-in that has nothing, unless a test says so.
+const lookUpSong = vi.hoisted(() => vi.fn(async () => null as unknown));
+vi.mock("../../server/catalogues", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../server/catalogues")>()),
+  lookUpSong,
+}));
 
 const VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const PLAYLIST = "https://www.youtube.com/playlist?list=PLBCF2DAC6FFB574DE";
@@ -280,6 +289,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   coverFor.mockClear();
+  lookUpSong.mockReset();
+  lookUpSong.mockResolvedValue(null);
   fake.videoInfo.mockReset();
   fake.audioInfo.mockReset();
   fake.runJson.mockReset();
@@ -701,6 +712,72 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await fs.rm(path.join(folder, "Sorted"), { recursive: true });
     const gone = await request(app).get("/api/downloads/in-folder");
     expect(gone.body.found[id]).toBeUndefined();
+  });
+
+  it("a save gets the genre and album the catalogues have for it, keeping its own title", async () => {
+    await useFolder();
+    fake.audioInfo.mockResolvedValue({
+      title: "Tone",
+      artist: "Test",
+      formatId: "251",
+      acodec: "opus",
+      duration: 3,
+    });
+    lookUpSong.mockResolvedValue({
+      source: "itunes",
+      song: {
+        title: "Tone (Remastered)",
+        artist: "Test",
+        album: "Pure Tones",
+        genre: "Electronic",
+        year: 1999,
+        track: 4,
+      },
+    });
+    const lines = await saveLines({ url: VIDEO, name: "Looked up" });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Looked up.mp3" });
+    expect(lookUpSong).toHaveBeenCalledWith({ title: "Tone", artist: "Test", duration: 3 });
+    const file = path.join(folder, "Looked up.mp3");
+    expect((await verifyMp3File(file)).isValid).toBe(true);
+    const { common, native } = await readTags(file);
+    expect(common).toMatchObject({
+      title: "Tone",
+      artist: "Test",
+      album: "Pure Tones",
+      track: { no: 4 },
+    });
+    const frames = Object.fromEntries(native["ID3v2.3"].map(({ id, value }) => [id, value]));
+    expect(frames).toMatchObject({ TCON: "Electronic", TYER: "1999" });
+    await fs.rm(file);
+  });
+
+  it("a save and a download go ahead with their own tags when the catalogues fail", async () => {
+    await useFolder();
+    lookUpSong.mockRejectedValue(new Error("Couldn't reach the music catalogues"));
+    const lines = await saveLines({ url: VIDEO, name: "Not looked up" });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Not looked up.mp3" });
+    const file = path.join(folder, "Not looked up.mp3");
+    expect((await verifyMp3File(file)).isValid).toBe(true);
+    const { common, native } = await readTags(file);
+    expect(common).toMatchObject({ title: "Tone", artist: "Test" });
+    expect(native["ID3v2.3"].map(({ id }) => id)).not.toContain("TCON");
+    await fs.rm(file);
+
+    const res = await request(app)
+      .get("/api/video/download")
+      .query({ url: VIDEO })
+      .buffer(true)
+      .parse((r, done) => {
+        const chunks: Buffer[] = [];
+        r.on("data", (c: Buffer) => chunks.push(c));
+        r.on("end", () => done(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    const downloaded = path.join(folder, "Downloaded.mp3");
+    await fs.writeFile(downloaded, res.body as Buffer);
+    expect((await verifyMp3File(downloaded)).isValid).toBe(true);
+    expect((await readTags(downloaded)).common.title).toBe("Tone");
+    await fs.rm(downloaded);
   });
 
   it("a save cancelled part-way stops both processes and leaves no .part file", async () => {

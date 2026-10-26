@@ -6,7 +6,7 @@ paths:
   - "scripts/yt-dlp.mjs"
   - "docs/sources.md"
   - "tests/unit/{youtube-limits,source-health,search,soundcloud,cpu-cores,audio-routes}.test.ts"
-  - "tests/unit/{spotify,spotify-routes,youtube-playlist,yt-dlp-script,lyrics,song-details,download-all}.test.ts"
+  - "tests/unit/{spotify,spotify-routes,youtube-playlist,yt-dlp-script,lyrics,song-details,download-all,download-details}.test.ts"
   - "tests/api/**"
 ---
 
