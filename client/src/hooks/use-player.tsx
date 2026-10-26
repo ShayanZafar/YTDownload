@@ -469,7 +469,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       element.currentTime = asked;
       setTime(element.currentTime);
       clearTimeout(seekCheck.current);
-      seekCheck.current = setTimeout(() => {
+      const check = () => {
         if (seekAsked.current !== asked || element.paused) return;
         const landed = seekLanded.current;
         const stuck = element.seeking
@@ -478,13 +478,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           : // Short of the place asked for, and standing still.
             landed !== null && element.currentTime - landed < 0.5;
         if (!stuck) {
-          if (!element.seeking) seekAsked.current = null;
+          // A seek still fetching (a slow drive or network) is looked at again; one
+          // that got somewhere and plays on is done.
+          if (element.seeking) seekCheck.current = setTimeout(check, STUCK_SEEK_MS);
+          else seekAsked.current = null;
           return;
         }
         seekAsked.current = null;
         element.pause();
         cutShort(asked);
-      }, STUCK_SEEK_MS);
+      };
+      seekCheck.current = setTimeout(check, STUCK_SEEK_MS);
     };
 
     return {
