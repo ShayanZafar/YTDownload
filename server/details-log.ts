@@ -66,19 +66,30 @@ export function lookupEntry(song: string, lookup: SongLookup): DetailsLogEntry {
   const matched =
     lookup.source === "name"
       ? "no catalogue has it: from its file name"
-      : lookup.match
-        ? `matched “${lookup.match.title}” by ${lookup.match.artist} on ${source}${lookup.match.note ? ` (${lookup.match.note})` : ""}`
-        : `on ${source}`;
-  return { kind, song, outcome: "found", details: [lacks, matched, ...detailWords(lookup.found)] };
+      : lookup.source === "artist"
+        ? "no catalogue has it"
+        : lookup.match
+          ? `matched “${lookup.match.title}” by ${lookup.match.artist} on ${source}${lookup.match.note ? ` (${lookup.match.note})` : ""}`
+          : `on ${source}`;
+  const guessed = lookup.guess ? [`genre guessed from the artist (${lookup.guess})`] : [];
+  return {
+    kind,
+    song,
+    outcome: "found",
+    details: [lacks, matched, ...detailWords(lookup.found), ...guessed],
+  };
 }
 
 /** A download's line: what the catalogues added to its tags, or why nothing. */
 export function downloadEntry(
   song: string,
-  found: { tags: Record<string, unknown>; cover?: Buffer; why?: string },
+  found: { tags: Record<string, unknown>; cover?: Buffer; why?: string; guess?: string },
 ): DetailsLogEntry {
   const words = [
-    ...Object.entries(found.tags).map(([field, value]) => `${field} ${String(value)}`),
+    ...Object.entries(found.tags).map(
+      ([field, value]) =>
+        `${field} ${String(value)}${field === "genre" && found.guess ? ` (a guess: ${found.guess})` : ""}`,
+    ),
     ...(found.cover ? ["cover"] : []),
   ];
   if (words.length > 0) return { kind: "download", song, outcome: "added", details: words };

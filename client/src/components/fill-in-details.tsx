@@ -471,6 +471,11 @@ function Review({
                         {match.note[0].toUpperCase() + match.note.slice(1)}.
                       </span>
                     )}
+                    {lookup.guess && (
+                      <span className="block text-xs text-amber-700 dark:text-amber-400">
+                        The genre is a guess from the artist: {lookup.guess}.
+                      </span>
+                    )}
                   </span>
                 </label>
               </li>

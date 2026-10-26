@@ -377,6 +377,8 @@ export type AudioInfo = AudioMetadata & {
   artwork?: string;
   /** Its length in seconds (to tell the song from other recordings in the music catalogues). */
   duration?: number;
+  /** The stream's bitrate in kbps (to weigh it against a song's own: better-copy.ts). */
+  abr?: number;
 };
 
 /**
@@ -408,6 +410,8 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     ext?: string;
     thumbnail?: string;
     duration?: number;
+    abr?: number;
+    tbr?: number;
   };
   try {
     info = (await youtubedl(videoUrl, {
@@ -431,7 +435,14 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     // covers come from the video id instead: cover.ts).
     ...(artwork ? { artwork } : {}),
     ...(typeof info.duration === "number" && info.duration > 0 ? { duration: info.duration } : {}),
+    ...kbpsOfStream(info),
   };
+}
+
+/** The picked stream's bitrate in kbps, as yt-dlp gives it (`abr`, else `tbr` for audio alone). */
+export function kbpsOfStream({ abr, tbr }: { abr?: unknown; tbr?: unknown }): { abr?: number } {
+  const kbps = typeof abr === "number" && abr > 0 ? abr : typeof tbr === "number" ? tbr : 0;
+  return kbps > 0 && Number.isFinite(kbps) ? { abr: Math.round(kbps) } : {};
 }
 
 /** The album and release date yt-dlp found for a video (YouTube Music uploads have them). */

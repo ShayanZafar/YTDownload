@@ -1,10 +1,15 @@
 import { api, buildUrl } from "@shared/routes";
 import {
   SAME_LENGTH_SECONDS,
+  betterCopyLookupSchema,
   folderFilesSchema,
+  replacedSongSchema,
   saveSettingsSchema,
   songCheckSchema,
+  type BetterCopy,
+  type BetterCopyLookup,
   type FolderFile,
+  type ReplacedSong,
   type QualityBar,
   type SaveSettings,
   type SongCheck,
@@ -16,6 +21,34 @@ import { requestJson } from "@/lib/save-to-folder";
 /** Housekeeping's check of one folder song: read all the way through, on the app's computer. */
 export function checkFolderSong(id: string, signal?: AbortSignal): Promise<SongCheck> {
   return requestJson(songCheckSchema, buildUrl(api.music.check.path, { id }), { signal });
+}
+
+/** A better copy of a low-quality folder song: the same song online at a higher bitrate, or why none. */
+export function findBetterCopy(id: string, signal?: AbortSignal): Promise<BetterCopyLookup> {
+  return requestJson(betterCopyLookupSchema, buildUrl(api.music.findBetterCopy.path, { id }), {
+    signal,
+  });
+}
+
+/** Replaces a folder song with the better copy at `url`, in its own file type: the old one goes to the bin. */
+export function replaceWithBetterCopy(
+  id: string,
+  url: string,
+  signal?: AbortSignal,
+): Promise<ReplacedSong> {
+  return requestJson(replacedSongSchema, buildUrl(api.music.replaceWithBetterCopy.path, { id }), {
+    method: api.music.replaceWithBetterCopy.method,
+    json: { url },
+    signal,
+  });
+}
+
+/** A better copy, as Housekeeping offers it: "YouTube's 130 kbps Opus copy, “Numb” (Linkin Park)". */
+export function betterCopyText(copy: BetterCopy): string {
+  const source = copy.source === "soundcloud" ? "SoundCloud" : "YouTube";
+  const codec = copy.codec ? ` ${copy.codec}` : "";
+  const channel = copy.channel ? ` (${copy.channel})` : "";
+  return `${source}'s ${copy.kbps} kbps${codec} copy, “${copy.title}”${channel}`;
 }
 
 /** The folder's files that aren't songs: pictures, programs, leftovers from downloads. */

@@ -5,6 +5,8 @@ import {
   folderFilesSchema,
   qualityBarSchema,
   songCheckSchema,
+  betterCopyLookupSchema,
+  replacedSongSchema,
   renamedSongSchema,
   sanitizedSongSchema,
   downloadSchema,
@@ -480,6 +482,28 @@ export const api = {
       method: "GET" as const,
       path: "/api/music/:id/check" as const,
       responses: { 200: songCheckSchema },
+    },
+    /**
+     * Housekeeping's better copies: the same song, at the same length, from
+     * YouTube (else SoundCloud), when the audio it gives has a higher bitrate
+     * than the song's — or why there's none. Nothing is changed.
+     */
+    findBetterCopy: {
+      method: "GET" as const,
+      path: "/api/music/:id/better-copy" as const,
+      responses: { 200: betterCopyLookupSchema },
+    },
+    /**
+     * Replaces the song with the copy at `url` (as `findBetterCopy` gave it),
+     * in the song's own file type, with its tags and cover; the old song goes
+     * to the bin. `409` if its drive has none (nothing changed), `422` if the
+     * copy didn't check out.
+     */
+    replaceWithBetterCopy: {
+      method: "POST" as const,
+      path: "/api/music/:id/better-copy" as const,
+      input: z.object({ url: z.string().min(1).max(2000) }),
+      responses: { 200: replacedSongSchema },
     },
     /** Housekeeping: the folder's files that aren't songs (pictures, programs, leftovers). */
     otherFiles: {
