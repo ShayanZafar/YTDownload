@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Copy, Eraser, Loader2, Pause, Play, Trash2, X } from "lucide-react";
 import type { MusicTrack } from "@shared/schema";
-import { artistsOf, renameFolderSong, sanitizedNameOf, type PlayerTrack } from "@/lib/music";
+import {
+  folderArtistsFor,
+  renameFolderSong,
+  sanitizeChangeOf,
+  tidyOf,
+  type PlayerTrack,
+} from "@/lib/music";
 import { formatDuration } from "@/lib/format";
 import { usePlayer } from "@/hooks/use-player";
 import { eachAtOnce } from "@/lib/song-details";
@@ -9,8 +15,11 @@ import { cn } from "@/lib/utils";
 
 type FolderTrack = Extract<PlayerTrack, { source: "folder" }>;
 
-/** A song whose name would change, what to, and whether it's ticked to be renamed. */
-type Rename = { track: FolderTrack; name: string; keep: boolean };
+/**
+ * A song whose name, title or artist would change, what to (`title` and
+ * `artist` only when they change), and whether it's ticked to be changed.
+ */
+type Rename = { track: FolderTrack; name: string; title?: string; artist?: string; keep: boolean };
 
 type Stage =
   | { name: "review"; renames: Rename[] }
@@ -61,11 +70,13 @@ function clashesOf(renames: readonly Rename[], folder: readonly FolderTrack[]): 
 /**
  * "Sanitize Filename": suggests a tidy name for each listed song whose file
  * name carries what videos and copies add — "(Official Video)", "HQ",
- * "(1998)", a copy's "(1)", "&#39" — and renames only the ones ticked, each
- * name editable first. The extension stays, and the song that's playing is
- * left alone. A name another song has already is never given (nor a number
- * added): the two are shown side by side, each to listen to, to delete one if
- * they're the same.
+ * "(1998)", a copy's "(1)", "&#39" — or doesn't say its artist ("Artist -
+ * Title"), and a tidy title and artist for one whose tags are untidy the same
+ * way or name the channel that uploaded it (tidyOf()); then changes only the
+ * ones ticked, each editable first. The extension stays, and the song that's
+ * playing is left alone. A name another song has already is never given (nor
+ * a number added): the two are shown side by side, each to listen to, to
+ * delete one if they're the same.
  */
 export function SanitizeNames({
   tracks,
@@ -94,17 +105,18 @@ export function SanitizeNames({
   // The song playing as it opens isn't offered: it's left alone while it plays.
   const [playingKey] = useState(() => player.current?.key ?? null);
   const [stage, setStage] = useState<Stage>(() => {
-    // "Song - Artist" is put round when the folder's other songs name that artist.
-    const artists = artistsOf(tracks);
+    // What the whole folder says about its artists: "Song - Artist" put round, a
+    // channel's uploads given their artist, each artist spelt as the folder spells it.
+    const folder = folderArtistsFor(folderTracks);
     return {
       name: "review",
       renames: tracks.flatMap((track) => {
-        // A tidier name, or (for an M4A named .mp3, say) the same name with the right extension.
-        const name =
-          track.key === playingKey
-            ? undefined
-            : (sanitizedNameOf(track, artists) ?? (track.realType ? nameOf(track) : undefined));
-        return name ? [{ track, name, keep: true }] : [];
+        if (track.key === playingKey) return [];
+        // A tidier name, title or artist, or (for an M4A named .mp3, say) the same
+        // name with the right extension.
+        const tidy = tidyOf(track, folder);
+        if (!tidy && !track.realType) return [];
+        return [{ track, ...tidy, name: tidy?.name ?? nameOf(track), keep: true }];
       }),
     };
   });
@@ -135,21 +147,26 @@ export function SanitizeNames({
     setStage({ name: "renaming", done, total: kept.length });
     await eachAtOnce(
       kept,
-      async ({ track, name }) => {
+      async ({ track, name, title, artist }) => {
         const from = fileOf(track);
+        // Only what changes: its name (or extension), its title, its artist.
+        const change = sanitizeChangeOf(track, { name, title, artist });
         try {
-          const { track: now } = await renameFolderSong(
-            track.id,
-            { name: name.trim() },
-            abort.signal,
-          );
+          const { track: now } = await renameFolderSong(track.id, change, abort.signal);
           renamed++;
           if (!abort.signal.aborted) onSongRenamed(track.id, now);
           const to = now.path.split(/[\\/]/).pop();
-          setOutcomes((all) => [
-            { key: track.key, text: `“${from}” is now “${to}”`, failed: false },
-            ...all,
-          ]);
+          const tags = [
+            change.title && `title “${change.title}”`,
+            change.artist && `artist “${change.artist}”`,
+          ]
+            .filter(Boolean)
+            .join(", ");
+          const text =
+            to === from
+              ? `“${from}” has its ${tags}`
+              : `“${from}” is now “${to}”${tags ? `, with its ${tags}` : ""}`;
+          setOutcomes((all) => [{ key: track.key, text, failed: false }, ...all]);
         } catch (err) {
           if (!abort.signal.aborted) {
             failed++;
@@ -303,22 +320,26 @@ function Review({
     <>
       <p className="font-medium text-foreground" role="status">
         {renames.length > 0
-          ? `${countSongs(renames.length)} could have a tidier name. Untick any to leave as they are, or change a name first.`
-          : "Every song listed has a tidy name already."}
+          ? `${countSongs(renames.length)} could have a tidier name, title or artist. Untick any to leave as they are, or change one first.`
+          : "Every song listed has a tidy name, title and artist already."}
         {clashes.size > 0 &&
           ` ${countSongs(clashes.size)} would have the name of another song: if it's the same song twice, delete one, or change the name.`}
       </p>
       <p className="text-xs text-muted-foreground">
         Takes out what videos and copies add to a name: “(Official Video)”, “HQ”, “Lyrics Video”, a
-        year in brackets, a copy's “(1)”. The extension stays (unless it's wrong: an M4A named .mp3
-        becomes .m4a). A name another song has is never given, nor a number added. Playlists saved
-        as .m3u8 files list songs by name, so they won't find a renamed song.
+        year in brackets, a copy's “(1)”; a song whose name doesn't say its artist is named “Artist
+        - Title”. Titles and artists are tidied the same way, with the artist a title names rather
+        than the channel that uploaded it, and “ft.” as “(feat. …)”. The extension stays (unless
+        it's wrong: an M4A named .mp3 becomes .m4a). A name another song has is never given, nor a
+        number added. Playlists saved as .m3u8 files list songs by name, so they won't find a
+        renamed song.
         {skipsPlaying && " The song that's playing is left out."}
       </p>
       {renames.length > 0 && (
         <ul className="max-h-80 divide-y divide-border/60 overflow-y-auto rounded-lg border border-border bg-card">
-          {renames.map(({ track, name, keep }, index) => {
+          {renames.map(({ track, name, title, artist, keep }, index) => {
             const clash = clashes.get(track.key);
+            const renaming = name !== nameOf(track) || !!track.realType;
             return (
               <li key={track.key} className="flex items-start gap-3 px-3 py-2">
                 <input
@@ -330,7 +351,12 @@ function Review({
                   className="mt-1.5 h-4 w-4 shrink-0 accent-primary"
                 />
                 <span className={cn("min-w-0 flex-1 space-y-1", !keep && "opacity-60")}>
-                  <span className="block truncate text-xs text-muted-foreground line-through">
+                  <span
+                    className={cn(
+                      "block truncate text-xs text-muted-foreground",
+                      renaming && "line-through",
+                    )}
+                  >
                     {fileOf(track)}
                   </span>
                   <span className="flex items-center gap-1">
@@ -346,6 +372,34 @@ function Review({
                       {newExtOf(track)}
                     </span>
                   </span>
+                  {(title !== undefined || artist !== undefined) && (
+                    <span className="flex flex-wrap items-center gap-1 text-xs">
+                      {artist !== undefined && (
+                        <input
+                          type="text"
+                          value={artist}
+                          disabled={!keep}
+                          onChange={(event) => update(index, { artist: event.target.value })}
+                          aria-label={`Artist for “${fileOf(track)}”`}
+                          className="min-w-0 flex-1 basis-32 rounded border border-border bg-background px-2 py-1 text-foreground"
+                        />
+                      )}
+                      {title !== undefined && (
+                        <input
+                          type="text"
+                          value={title}
+                          disabled={!keep}
+                          onChange={(event) => update(index, { title: event.target.value })}
+                          aria-label={`Title for “${fileOf(track)}”`}
+                          className="min-w-0 flex-[2] basis-40 rounded border border-border bg-background px-2 py-1 text-foreground"
+                        />
+                      )}
+                      <span className="basis-full text-muted-foreground">
+                        Its tags now: “{track.title}”
+                        {track.artist ? ` by ${track.artist}` : ", no artist"}
+                      </span>
+                    </span>
+                  )}
                   {clash && (
                     <span className="block space-y-1 text-xs text-amber-700 dark:text-amber-400">
                       <span className="flex items-start gap-1">

@@ -17,12 +17,7 @@ import {
   type RenamedSong,
   type SanitizedSong,
 } from "@shared/schema";
-import {
-  artistFirst,
-  knownArtists,
-  sanitizedFileName,
-  type KnownArtists,
-} from "@shared/name-noise";
+import { folderArtistsOf, tidiedFile, type FolderArtists } from "@shared/song-name";
 import { searchableText } from "@/lib/history-filter";
 import { errorFrom, requestJson, unexpectedAnswer } from "@/lib/save-to-folder";
 
@@ -167,28 +162,65 @@ export function songFileName(track: { fileName: string }): string {
   return file.slice(0, file.length - ext.length);
 }
 
-/** The artists a folder's songs name (knownArtists()), for sanitizedNameOf(). */
-export const artistsOf = (tracks: readonly { fileName: string; artist: string | null }[]) =>
-  knownArtists(tracks.map((track) => ({ name: songFileName(track), artist: track.artist })));
+type SongLike = { fileName: string; title: string; artist: string | null };
+
+/** What a folder's songs say about its artists (folderArtistsOf()), for tidyOf(). */
+export const folderArtistsFor = (tracks: readonly SongLike[]): FolderArtists =>
+  folderArtistsOf(
+    tracks.map((track) => ({
+      name: songFileName(track),
+      title: track.title,
+      artist: track.artist,
+    })),
+  );
+
+/** What Sanitize Filename would change about a song: its file name, title or artist. */
+export type Tidy = { name?: string; title?: string; artist?: string };
 
 /**
- * Sanitize Filename: the name a folder song's file should have, without its
- * folder or extension ("Junoon - Heer"), or undefined if it has it already —
- * "Song - Artist" put round when `artists` (artistsOf()) names its artist.
+ * Sanitize Filename: the file name a folder song should have (without its
+ * folder or extension), and its title and artist (tidiedFile()) — only what
+ * would change, or undefined if nothing would. `folder` (folderArtistsFor())
+ * knows the folder's artists: "Song - Artist" is put round, and the artist
+ * spelt, as the folder's other songs have them.
  */
-export function sanitizedNameOf(
-  track: { fileName: string; artist: string | null },
-  artists: KnownArtists = artistsOf([track]),
-): string | undefined {
+export function tidyOf(
+  track: SongLike,
+  folder: FolderArtists = folderArtistsFor([track]),
+): Tidy | undefined {
   const name = songFileName(track);
-  const clean = artistFirst(sanitizedFileName(name), artists);
-  return clean !== name ? clean : undefined;
+  const tidy = tidiedFile({ name, title: track.title, artist: track.artist }, folder);
+  // A song given an artist gets its title tag too: without one, its title is its file name.
+  const tagging = !!tidy.artist && tidy.artist !== track.artist;
+  const change: Tidy = {
+    ...(tidy.name !== name ? { name: tidy.name } : {}),
+    ...(tidy.title !== track.title || (tagging && !track.artist) ? { title: tidy.title } : {}),
+    ...(tagging ? { artist: tidy.artist! } : {}),
+  };
+  return Object.keys(change).length > 0 ? change : undefined;
 }
 
 /**
  * Rename, and Sanitize Filename: gives a folder song a new file name (its
  * extension stays), title or artist; answers with it as it is now.
  */
+/**
+ * What Sanitize Filename asks renameFolderSong() to change, from what its list
+ * shows for a song: the name when it changes or the extension is wrong (an
+ * M4A named .mp3), the title and artist when there are ones to write.
+ */
+export function sanitizeChangeOf(
+  track: { fileName: string; realType?: string | null },
+  { name, title, artist }: Tidy,
+): Tidy {
+  const newName = (name ?? songFileName(track)).trim();
+  return {
+    ...(newName !== songFileName(track) || track.realType ? { name: newName } : {}),
+    ...(title?.trim() ? { title: title.trim() } : {}),
+    ...(artist?.trim() ? { artist: artist.trim() } : {}),
+  };
+}
+
 export function renameFolderSong(
   id: string,
   change: { name?: string; title?: string; artist?: string },

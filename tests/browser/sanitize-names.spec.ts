@@ -6,8 +6,8 @@ import path from "path";
 import ffmpegPath from "ffmpeg-static";
 import { stayOffline } from "./stand-ins";
 
-// Sanitize Filename and Rename: songs ffmpeg makes in a Save to folder, named the way
-// videos and copies leave them, and the real app renaming the ones ticked.
+// Sanitize Filename and Rename: songs ffmpeg makes in a Save to folder, named and tagged
+// the way videos and copies leave them, and the real app renaming and retagging the ones ticked.
 
 function ffmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -43,18 +43,32 @@ test.beforeAll(async () => {
       ...["-c:a", "libmp3lame", "-b:a", "128k", path.join(folder, `${name}.mp3`)],
     ]);
   }
-  // An M4A named .mp3, with a tidy name: offered for its extension alone.
+  // An M4A named .mp3, with a tidy name: offered for its extension (and its tags).
   await ffmpeg([
     ...["-f", "lavfi", "-i", "sine=frequency=440:duration=2"],
     ...["-c:a", "aac", "-f", "mp4", path.join(folder, "Faithless - Insomnia.mp3")],
   ]);
+  // Tagged: a title with "ft." (offered for its title alone), and one tidy already.
+  const tagged = (name: string, title: string, artist: string) =>
+    ffmpeg([
+      ...["-f", "lavfi", "-i", "sine=frequency=440:duration=2"],
+      ...["-c:a", "libmp3lame", "-b:a", "128k", "-id3v2_version", "3"],
+      ...["-metadata", `title=${title}`, "-metadata", `artist=${artist}`],
+      path.join(folder, `${name}.mp3`),
+    ]);
+  await tagged(
+    "Kendrick Lamar - Money Trees ft. Jay Rock",
+    "Money Trees ft. Jay Rock",
+    "Kendrick Lamar",
+  );
+  await tagged("Queen - Don't Stop Me Now", "Don't Stop Me Now", "Queen");
 });
 
 test.afterAll(async () => {
   await fs.rm(folder, { recursive: true, force: true });
 });
 
-test("Sanitize Filename suggests tidy names and right extensions, renames only the ones ticked, and Rename changes one", async ({
+test("Sanitize Filename suggests tidy names, titles, artists and right extensions, changes only the ones ticked, and Rename changes one", async ({
   page,
   request,
 }) => {
@@ -64,17 +78,35 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
   const library = page.getByRole("region", { name: "Your music" });
   // The songs' own list (the panel's lists are listed too).
   const rows = library.locator("ol > li");
-  await expect(rows).toHaveCount(8);
+  await expect(rows).toHaveCount(10);
 
   await library.getByRole("button", { name: "Sanitize Filename" }).click();
   const panel = library.getByRole("region", { name: "Sanitize Filename" });
-  // The tidy ones aren't offered.
+  // The tidy one isn't offered.
   await expect(
-    panel.getByText("6 songs could have a tidier name.", { exact: false }),
+    panel.getByText("9 songs could have a tidier name, title or artist.", { exact: false }),
   ).toBeVisible();
   await expect(
-    panel.getByRole("checkbox", { name: "Rename “Queen - Under Pressure.mp3”" }),
+    panel.getByRole("checkbox", { name: "Rename “Queen - Don't Stop Me Now.mp3”" }),
   ).toHaveCount(0);
+  // A song without tags is given the artist and title its name says; its name stays.
+  const rhapsody = panel.getByRole("listitem").filter({ hasText: "Queen - Bohemian Rhapsody.mp3" });
+  await expect(
+    rhapsody.getByRole("textbox", { name: "Artist for “Queen - Bohemian Rhapsody.mp3”" }),
+  ).toHaveValue("Queen");
+  await expect(
+    rhapsody.getByRole("textbox", { name: "Title for “Queen - Bohemian Rhapsody.mp3”" }),
+  ).toHaveValue("Bohemian Rhapsody");
+  await expect(rhapsody).toContainText("Its tags now: “Queen - Bohemian Rhapsody”, no artist");
+  // A tagged song with "ft." in its title: its title alone.
+  const moneyTrees = panel.getByRole("listitem").filter({ hasText: "Money Trees" });
+  await expect(moneyTrees.getByRole("textbox", { name: /^Title for/ })).toHaveValue(
+    "Money Trees (feat. Jay Rock)",
+  );
+  await expect(moneyTrees.getByRole("textbox", { name: /^Artist for/ })).toHaveCount(0);
+  await expect(moneyTrees).toContainText(
+    "Its tags now: “Money Trees ft. Jay Rock” by Kendrick Lamar",
+  );
 
   // The copy would have the other song's name: never given, nor a "(2)" — it's shown
   // beside the other, to delete one.
@@ -105,7 +137,7 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
   await dialog.getByRole("button", { name: /^Move to the (Trash|Recycle Bin)$/ }).click();
   await expect(dialog).toBeHidden();
   await expect(copy).toHaveCount(0);
-  await expect(rows).toHaveCount(7);
+  await expect(rows).toHaveCount(9);
   await expect(
     panel.getByText("would have the name of another song", { exact: false }),
   ).toHaveCount(0);
@@ -113,7 +145,9 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
     panel.getByRole("textbox", { name: "New name for “Junoon - Heer (Official Audio).mp3”" }),
   ).toHaveValue("Junoon - Heer");
   const insomnia = panel.getByRole("listitem").filter({ hasText: "Faithless - Insomnia.mp3" });
-  await expect(insomnia.getByRole("textbox")).toHaveValue("Faithless - Insomnia");
+  await expect(insomnia.getByRole("textbox", { name: /^New name for/ })).toHaveValue(
+    "Faithless - Insomnia",
+  );
   await expect(insomnia).toContainText(".m4a");
   await expect(
     panel.getByRole("textbox", { name: "New name for “SOMEBODY TO LOVE - QUEEN.mp3”" }),
@@ -130,29 +164,38 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
     if (route.request().method() !== "GET") return route.continue();
     return new Promise<void>((resolve) => held.push(() => route.continue().then(resolve)));
   });
-  await panel.getByRole("button", { name: "Rename 4 songs" }).click();
-  await expect(panel.getByText("Renamed 4 songs.")).toBeVisible();
-  await expect(rows.filter({ hasText: "Nirvana - Lithium" })).toHaveCount(1);
+  await panel.getByRole("button", { name: "Rename 7 songs" }).click();
+  await expect(panel.getByText("Renamed 7 songs.")).toBeVisible();
+  // Listed by their new titles and artists.
+  await expect(rows.filter({ hasText: "Lithium HQ" })).toHaveCount(0);
   await expect(rows.filter({ hasText: "Official Audio" })).toHaveCount(0);
+  await expect(rows.filter({ hasText: "Somebody To Love" })).toContainText("Queen");
+  await expect(rows.filter({ hasText: "Bohemian Rhapsody" })).toContainText("Queen");
+  await expect(rows.filter({ hasText: "Money Trees (feat. Jay Rock)" })).toHaveCount(1);
   const each = panel.getByRole("log", { name: "Each song" });
   await expect(each.getByRole("listitem").filter({ hasText: "Lithium HQ.mp3" })).toContainText(
     "is now “Nirvana - Lithium.mp3”",
   );
+  await expect(
+    each.getByRole("listitem").filter({ hasText: "Queen - Bohemian Rhapsody.mp3" }),
+  ).toContainText("has its title “Bohemian Rhapsody”, artist “Queen”");
   await Promise.all(held.map((go) => go()));
   await page.unroute("**/api/music");
 
   expect((await fs.readdir(folder)).sort()).toEqual([
     "Faithless - Insomnia.m4a",
     "Junoon - Heer.mp3",
+    "Kendrick Lamar - Money Trees ft. Jay Rock.mp3",
     "Nirvana - Lithium.mp3",
     "Queen - Bohemian Rhapsody.mp3",
+    "Queen - Don't Stop Me Now.mp3",
     "Queen - Somebody To Love.mp3",
     "Queen - Under Pressure.mp3",
     "Tone (1).mp3",
   ]);
   await panel.getByRole("button", { name: "Close", exact: true }).click();
   await expect(panel).toBeHidden();
-  await expect(rows).toHaveCount(7);
+  await expect(rows).toHaveCount(9);
 
   // Rename one song: its title and artist tags, and its file name with Sanitize's suggestion.
   await library.getByRole("button", { name: "Rename: “Tone (1)”" }).click();
@@ -164,6 +207,6 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
   await renameDialog.getByRole("button", { name: "Save" }).click();
   await expect(renameDialog).toBeHidden();
   await expect(rows.filter({ hasText: "Test Tone" })).toContainText("Sine Wave");
-  await expect(rows).toHaveCount(7);
+  await expect(rows).toHaveCount(9);
   expect(await fs.readdir(folder)).toContain("Tone.mp3");
 });

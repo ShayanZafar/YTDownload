@@ -87,6 +87,8 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── schema.ts              # Zod schemas + types (history, search, settings, folders, save progress)
 │   ├── routes.ts              # Typed API route definitions
 │   ├── filename.ts            # safeFileName(): download names Windows accepts
+│   ├── name-noise.ts          # What videos and copies add to a name ("(Official Video)", "HQ"…), taken out
+│   ├── song-name.ts           # A song's artist and title: downloads' "Artist - Title", Sanitize's tidy tags
 │   ├── youtube-link.ts        # extractVideoId(): which links are YouTube videos (server checks, page spots copied ones)
 │   ├── soundcloud-link.ts     # SoundCloud tracks' canonical links; audioLinkOf(): the only links a download may fetch
 │   ├── audio-types.ts         # Audio files by extension: MIME type, what to ask canPlayType()
@@ -385,12 +387,22 @@ What each file does, and the function and constant names to look for. This was C
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
   default name of any download found from Spotify); `shared/name-noise.ts` has `withoutNameNoise()`
   (a name without "(Official Video)", "HQ", "Lyrics Video", "Lyrical Video", "High Quality",
-  "(prod. …)", "(1998)", a copy's "(1)", a converter site's "yt1s.com - " or "HD " in front, and
-  `decodeEntities()` for "&#39"), used before the catalogues and LRCLIB are searched and for a
-  download's title tag, and `sanitizedFileName()` (Sanitize Filename's tidy name, also a download's
-  default file name, on the page and the server; parts in capitals put in title case by
-  `fromAllCaps()`), and `knownArtists()` / `artistFirst()` ("Song - Artist" put round when the
-  folder names the artist); `shared/audio-types.ts` has `AUDIO_TYPES` (the
+  "(prod. …)", "(1998)", a copy's "(1)", a converter site's "yt1s.com - " or "HD " in front, "HD"
+  or "LyricsHQ" run on to the name, "(Full Version)", "- 2011 Remaster", and `decodeEntities()`
+  for "&#39"), used before the catalogues and LRCLIB are searched, and `sanitizedFileName()`
+  (Sanitize Filename's tidy name; parts in capitals put in title case by `fromAllCaps()`), and
+  `knownArtists()` / `artistFirst()` ("Song - Artist" put round when the folder names the artist);
+  `shared/song-name.ts` has a song's artist and title as a player shows them, shared by the server
+  and the page so the name shown is the name saved: `songOfVideo()` (a download's, from the video's
+  title and channel: the artist the title names, not the channel that uploaded it, else the
+  channel's artist — "Linkin Park - Topic", "TaylorSwiftVEVO" — with "ft." as "(feat. …)") and
+  `fileNameOf()` ("Artist - Title", a download's default file name and its title and artist tags),
+  `folderArtistsOf()` (what a folder's songs say about its artists: how each is spelt most, and
+  which artist tags are really a channel that uploads other people's songs) with `tidiedSong()` and
+  `tidiedFile()` (Sanitize Filename's tidy title, artist and file name for a folder song: swapped
+  tags put back, a channel's uploads given the artist their titles name, track numbers and an album
+  after the song taken out), and `songKeyOf()` (what two copies of a song have in common, for
+  Housekeeping's Extra copies); `shared/audio-types.ts` has `AUDIO_TYPES` (the
   audio files the app knows: MIME type, and what to ask `canPlayType()`)
 - `client/src/pages/Home.tsx` — the page: its state and what each action does (open a link, search,
   open a playlist, Paste, download or save), laid out from components — `find-box.tsx` (the Link /
@@ -442,8 +454,10 @@ What each file does, and the function and constant names to look for. This was C
 - `client/src/components/video-preview.tsx` — a search result's video in YouTube's embedded player
   (`youtubeEmbedUrl()` in `shared/youtube-link.ts`, youtube-nocookie), opened by its thumbnail under
   that result, one at a time; it pauses the app's player
-- `client/src/components/renameable-title.tsx` — the preview card's title; click it to rename the
-  file (sent as `?name=` on the download link); Enter keeps, Esc cancels
+- `client/src/components/renameable-title.tsx` — the preview card's title: the name the song is
+  saved as unless renamed (`defaultNameOf()` in `preview-card.tsx`: "Artist - Title" from the
+  video's title and channel, `songOfVideo()`); click it to rename the file (sent as `?name=` on
+  the download link); Enter keeps, Esc cancels, **Use that name** goes back
 - `client/src/lib/history-filter.ts` + `components/history-search.tsx` — searching Recent
   Extractions in the browser: word/partial matching, autocomplete suggestions (combobox; picking one
   filters to that exact title), date ranges, highlighting; the list pages 25 at a time
@@ -462,13 +476,17 @@ What each file does, and the function and constant names to look for. This was C
   `lib/music.ts` has the pure parts (songs, sort/filter, the genre/artist/album/year filters
   `facetCounts()`/`filterByFacets()`, play order; unit-tested); `components/fill-in-details.tsx`
   and `lib/song-details.ts` are **Fill in details** (look up, review, write; one per core).
-  `components/sanitize-names.tsx` is **Sanitize Filename** (tidy names suggested by
-  `sanitizedNameOf()` / `sanitizedFileName()` in `shared/name-noise.ts`, renamed when ticked, one per
-  core) and `components/rename-song-dialog.tsx` is **Rename** (each folder song's pencil button: file
-  name, title and artist), both through `renameFolderSong()` in `lib/music.ts`.
+  `components/sanitize-names.tsx` is **Sanitize Filename** (a tidy file name, title and artist for
+  each song, suggested by `tidyOf()` in `lib/music.ts` — `tidiedFile()` in `shared/song-name.ts`
+  over what `folderArtistsFor()` says about the whole folder — editable, changed when ticked through
+  `sanitizeChangeOf()`, one per core) and `components/rename-song-dialog.tsx` is **Rename** (each
+  folder song's pencil button: file name, title and artist; its Sanitize button fills all three),
+  both through `renameFolderSong()` in `lib/music.ts`.
   `components/housekeeping.tsx` is **Housekeeping** (check one per core, review, delete ticked) and
-  `lib/housekeeping.ts` its API calls and `songProblem()` (the worst thing wrong with a song, against
-  the quality bar; unit-tested); the bar is saved through `useSaveSettings().setQualityBar`.
+  `lib/housekeeping.ts` its API calls, `songProblem()` (the worst thing wrong with a song, against
+  the quality bar) and `copiesOf()` (Extra copies: songs with the same artist and title, tidied, the
+  same version and at most `SAME_LENGTH_SECONDS` apart, and which copy to keep; both unit-tested);
+  the bar is saved through `useSaveSettings().setQualityBar`.
   `components/delete-song-dialog.tsx` is Delete from folder (from a song's row or the player bar):
   asks, takes the song out of the queue (`discard()`, `queueWithoutSong()`), then
   `DELETE /api/music/:id` (`deleteFolderSong()`), asking again before deleting for good
@@ -668,7 +686,7 @@ The Express server and the Vite dev server are mounted on a single port (default
    - **Search:** the frontend calls `GET /api/search?q=...`. The backend runs `yt-dlp --flat-playlist --dump-single-json ytsearch12:<query>` (`server/search.ts`), which lists YouTube's top results in a few seconds without opening each video, then ranks them (below) and returns up to 8. When YouTube's search fails or finds nothing, SoundCloud's `scsearch12:<query>` is asked at once — and at the same time as YouTube while YouTube has refused this computer in the last 10 minutes — and its results are used instead, ranked the same way; every result and the answer say which source they're from (`source`). `?source=soundcloud` searches SoundCloud alone (the results' **Search SoundCloud** button). See [docs/sources.md](docs/sources.md). Picking a result fills the same preview card with the result's own title and thumbnail — no second `yt-dlp` call. Clicking a result's thumbnail plays its video right there, under that result, in YouTube's embedded player (`client/src/components/video-preview.tsx`; `youtubeEmbedUrl()` in `shared/youtube-link.ts` builds the `youtube-nocookie.com` address from a validated id), one at a time and before it's chosen; the app's own player pauses meanwhile. The results' **Close** button hides them (resets the search) and leaves the preview card as it is.
 2. Both paths end at the preview card, which links to the download endpoint for that video.
 3. When the user clicks **Download Audio**, the browser navigates to `GET /api/video/download?url=...` — a YouTube video's link, or a SoundCloud result's canonical track link (`audioLinkOf()` in `shared/soundcloud-link.ts` lets nothing else through, and only the canonical link reaches `yt-dlp`). The server does a metadata pass (for the filename and ID3 tags), then runs a two-process pipeline (`server/audio.ts`): `yt-dlp` writes the best audio stream the source serves without an account (on YouTube usually Opus at ~130 kbps; on SoundCloud MP3 or Opus) to stdout → `ffmpeg` reads it on stdin and writes a 320 kbps constant-bitrate MP3 with title/artist tags to stdout → the HTTP response, with `Content-Type: audio/mpeg` and a `Content-Disposition` header. Nothing touches disk, and the browser's download starts as soon as the first frames are encoded. With `?format=original` (the UI's **Original audio** toggle), ffmpeg doesn't re-encode: it copies the source's stream into a proper tagged file — Ogg Opus (`.opus`) for Opus, fragmented MP4 (`.m4a`) for AAC, MP3 (`.mp3`) for SoundCloud's MP3, Matroska (`.mka`) for anything else. The metadata pass requests the same `bestaudio` selection and the stream is pinned to the `format_id` it picked, so the container always matches the audio that arrives.
-   The file is named after the video's title, or after `?name=` when you renamed it in the preview card (click the title — `client/src/components/renameable-title.tsx`). Either way the name goes through `safeFileName()` in `shared/filename.ts` — used by the page too, so the name shown is the name saved: characters Windows can't store are replaced (`/` → `-`, `:` and `|` → `-`, `?*"<>` dropped), a typed `.mp3` is dropped, reserved names like `CON` get a `_`, and it's capped at 150 characters. Accents and non-Latin letters are kept: `res.attachment()` sends both an ASCII `filename` and a UTF-8 `filename*` (RFC 6266), which browsers prefer. The ID3 tags and the history keep the video's title.
+   The file is named "Artist - Title", or after `?name=` when you renamed it in the preview card (click the title — `client/src/components/renameable-title.tsx`). `songOfVideo()` in `shared/song-name.ts` finds the song in the video's title and channel: the artist the title names ("Paul van Dyk - For An Angel (Official Video) HD" uploaded by Trance Classics is Paul van Dyk's), else the channel's artist (" - Topic" and "VEVO" taken off), spelt as the artist's own channel spells them; who's featured goes in the title as "(feat. …)", and what videos add ("(Official Video)", "HQ"…) goes. `fileNameOf()` joins the two (the title alone when no artist is known); the page uses the same functions for the name it shows (`defaultNameOf()` in `preview-card.tsx`). Either way the name goes through `safeFileName()` in `shared/filename.ts` — used by the page too, so the name shown is the name saved: characters Windows can't store are replaced (`/` → `-`, `:` and `|` → `-`, `?*"<>` dropped), a typed `.mp3` is dropped, reserved names like `CON` get a `_`, and it's capped at 150 characters. Accents and non-Latin letters are kept: `res.attachment()` sends both an ASCII `filename` and a UTF-8 `filename*` (RFC 6266), which browsers prefer. The title and artist tags are that song's (Spotify's when the song came from a Spotify link); the history keeps the video's title.
 4. Only when the download has fully succeeded — `yt-dlp` and `ffmpeg` both exited cleanly and the whole file was handed to the browser — does the server add it to the history. A cancelled or failed download is never recorded.
 5. Meanwhile the page polls `/api/downloads` every few seconds until the new entry appears, so the Recent Extractions list updates by itself (it gives up after 15 minutes, since a cancelled download never shows up).
 6. With a **Save to** folder chosen, step 3 changes: the app saves the file into that folder itself (`POST /api/video/save`) instead of handing it to the browser's download manager — see [Save to a folder](#save-to-a-folder).

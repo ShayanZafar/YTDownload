@@ -1,5 +1,6 @@
 import { api, buildUrl } from "@shared/routes";
 import {
+  SAME_LENGTH_SECONDS,
   folderFilesSchema,
   saveSettingsSchema,
   songCheckSchema,
@@ -8,6 +9,7 @@ import {
   type SaveSettings,
   type SongCheck,
 } from "@shared/schema";
+import { folderArtistsOf, songKeyOf, tidiedSong } from "@shared/song-name";
 import { formatDuration } from "@/lib/format";
 import { requestJson } from "@/lib/save-to-folder";
 
@@ -39,7 +41,14 @@ export const qualityBarLabels: Record<QualityBar, string> = {
 };
 
 /** What can be wrong with a file, in the order Housekeeping lists them. */
-export const problemKinds = ["notAudio", "cutShort", "damaged", "lowQuality", "other"] as const;
+export const problemKinds = [
+  "notAudio",
+  "cutShort",
+  "damaged",
+  "lowQuality",
+  "copy",
+  "other",
+] as const;
 export type ProblemKind = (typeof problemKinds)[number];
 
 export const problemHeadings: Record<ProblemKind, string> = {
@@ -47,6 +56,7 @@ export const problemHeadings: Record<ProblemKind, string> = {
   cutShort: "Cut short",
   damaged: "Damaged",
   lowQuality: "Low quality",
+  copy: "Extra copies",
   other: "Other files",
 };
 
@@ -58,7 +68,7 @@ export const problemHeadings: Record<ProblemKind, string> = {
 export function songProblem(
   check: SongCheck,
   bar: QualityBar,
-): { kind: Exclude<ProblemKind, "other">; text: string } | null {
+): { kind: Exclude<ProblemKind, "copy" | "other">; text: string } | null {
   if (check.notAudio) return { kind: "notAudio", text: `It's ${check.notAudio}, not audio.` };
   if (check.cutShort) {
     const { plays, says } = check.cutShort;
@@ -80,4 +90,99 @@ export function songProblem(
     return { kind: "lowQuality", text: `${kbps}: below ${bar} kbps.` };
   }
   return null;
+}
+
+// --- Extra copies ---------------------------------------------------------------------
+
+/** A folder song and its check, as copiesOf() weighs it. */
+export type CopyCandidate = {
+  key: string;
+  fileName: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  genres: readonly string[];
+  year: number | null;
+  duration: number | null;
+  /** When it arrived (ms since 1970). */
+  addedAt: number;
+  check: SongCheck;
+};
+
+// What makes a recording another version of a song, not a copy: "(Live)", "(Remix)"…
+const VERSION_RE =
+  /\b(?:live|remix(?:ed)?|mix|edit|extended|demo|acoustic|unplugged|instrumental|karaoke|reprise|cover|session|dub|version|radio|club|lpu|acapella|a cappella)\b/gi;
+// A copy's "(1)", "- Copy".
+const COPY_MARK_RE = /\(\d\)$|[\s-]+copy(?: \(\d\))?$/i;
+
+const nameOf = (fileName: string) =>
+  (fileName.split(/[\\/]/).pop() ?? fileName).replace(/\.[^.]+$/, "");
+
+/**
+ * Which copy to keep: lossless, then the highest bitrate, then a name without
+ * "(1)", then the one with the most details, then the first there.
+ */
+function better(a: CopyCandidate, b: CopyCandidate): number {
+  const details = (song: CopyCandidate) =>
+    Number(!!song.artist) +
+    Number(!!song.album) +
+    Number(song.genres.length > 0) +
+    Number(!!song.year);
+  return (
+    Number(b.check.lossless) - Number(a.check.lossless) ||
+    (b.check.kbps ?? 0) - (a.check.kbps ?? 0) ||
+    Number(COPY_MARK_RE.test(nameOf(a.fileName))) - Number(COPY_MARK_RE.test(nameOf(b.fileName))) ||
+    details(b) - details(a) ||
+    a.addedAt - b.addedAt
+  );
+}
+
+/**
+ * Extra copies: songs in the folder two or more times — the same artist and
+ * title (tidied: "Linkin Park - Numb (1).mp3" with no tags is Linkin Park's
+ * Numb), no more than SAME_LENGTH_SECONDS apart, and the same version (a "(Live)"
+ * and a studio recording are two songs). For each song, the copy kept —
+ * lossless, else the highest bitrate, then a name without a copy's "(1)",
+ * then the most details, then the first one there — and the extra ones. A
+ * song whose length isn't known is never called a copy.
+ */
+export function copiesOf(
+  songs: readonly CopyCandidate[],
+): { keep: CopyCandidate; extra: CopyCandidate[] }[] {
+  const folder = folderArtistsOf(
+    songs.map((song) => ({ name: nameOf(song.fileName), title: song.title, artist: song.artist })),
+  );
+  const bySong = new Map<string, { song: CopyCandidate; seconds: number }[]>();
+  for (const song of songs) {
+    const seconds = song.check.seconds ?? song.duration;
+    if (!seconds) continue;
+    const tidied = tidiedSong({ title: song.title, artist: song.artist }, folder);
+    const versions = new Set(
+      `${tidied.title} ${nameOf(song.fileName)}`.toLowerCase().match(VERSION_RE) ?? [],
+    );
+    const key = `${songKeyOf(tidied)}|${[...versions].sort().join(" ")}`;
+    bySong.set(key, [...(bySong.get(key) ?? []), { song, seconds }]);
+  }
+  const sets: { keep: CopyCandidate; extra: CopyCandidate[] }[] = [];
+  for (const same of bySong.values()) {
+    if (same.length < 2) continue;
+    same.sort((a, b) => a.seconds - b.seconds);
+    // Runs of lengths each within SAME_LENGTH_SECONDS of the run's first.
+    let run: typeof same = [];
+    const close = () => {
+      if (run.length >= 2) {
+        const [keep, ...extra] = run.map(({ song }) => song).sort(better);
+        sets.push({ keep, extra });
+      }
+    };
+    for (const each of same) {
+      if (run.length > 0 && each.seconds - run[0].seconds > SAME_LENGTH_SECONDS) {
+        close();
+        run = [];
+      }
+      run.push(each);
+    }
+    close();
+  }
+  return sets;
 }

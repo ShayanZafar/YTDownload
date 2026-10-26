@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { AlertCircle, Eraser, Loader2, PencilLine, X } from "lucide-react";
 import type { MusicTrack } from "@shared/schema";
 import { usePlayer } from "@/hooks/use-player";
-import { renameFolderSong, sanitizedNameOf, type PlayerTrack } from "@/lib/music";
+import { renameFolderSong, tidyOf, type PlayerTrack } from "@/lib/music";
 
 type RenameSongDialogProps = {
   /** The folder song to rename. */
@@ -18,8 +18,8 @@ const field =
 
 /**
  * "Rename": a folder song's file name (its extension stays) and its title
- * and artist tags, typed in; "Sanitize" fills in the tidy file name Sanitize
- * Filename would suggest. Only what's changed is written. The song that's
+ * and artist tags, typed in; "Sanitize" fills in the tidy file name, title
+ * and artist Sanitize Filename would suggest. Only what's changed is written. The song that's
  * playing leaves the player first, so its file isn't in use.
  *
  * A native <dialog>, like Delete from folder: focus stays inside, and Escape
@@ -38,7 +38,12 @@ export function RenameSongDialog({ track, onRenamed, onClose }: RenameSongDialog
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pressedOnBackdrop = useRef(false);
-  const tidy = sanitizedNameOf(track);
+  const tidy = tidyOf(track);
+  // What Sanitize gives: its new name, or (when only its tags change) "Artist - Title".
+  const tidyLabel =
+    tidy?.name ??
+    [tidy?.artist ?? track.artist, tidy?.title ?? track.title].filter(Boolean).join(" - ");
+  const untouched = name === ownName && title === track.title && artist === (track.artist ?? "");
   const isCurrent = player.current?.key === track.key;
 
   useLayoutEffect(() => {
@@ -123,15 +128,19 @@ export function RenameSongDialog({ track, onRenamed, onClose }: RenameSongDialog
               <span className="shrink-0 text-xs text-muted-foreground">{ext}</span>
             </span>
           </label>
-          {tidy && name === ownName && (
+          {tidy && untouched && (
             <button
               type="button"
-              onClick={() => setName(tidy)}
+              onClick={() => {
+                if (tidy.name) setName(tidy.name);
+                if (tidy.title) setTitle(tidy.title);
+                if (tidy.artist) setArtist(tidy.artist);
+              }}
               disabled={busy}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary"
             >
               <Eraser className="h-3.5 w-3.5" />
-              Sanitize: “{tidy}”
+              Sanitize: “{tidyLabel}”
             </button>
           )}
           <label className="block space-y-1">

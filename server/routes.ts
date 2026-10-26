@@ -8,7 +8,7 @@ import { extractVideoId } from "./youtube-url";
 import { SearchFailed, searchSongs, searchSoundCloudOnly, type SongSearchOptions } from "./search";
 import { audioLinkOf } from "@shared/soundcloud-link";
 import { safeFileName } from "@shared/filename";
-import { sanitizedFileName, withoutNameNoise } from "@shared/name-noise";
+import { fileNameOf, songOfVideo } from "@shared/song-name";
 import { audioTypeOf, songNameOf } from "@shared/audio-types";
 import { musicIdSchema, type SaveSettings } from "@shared/schema";
 import {
@@ -537,7 +537,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // Rename, and Sanitize Filename: a song gets the file name, title or artist
-  // the person typed or ticked — the tags first, then the file's name.
+  // the person typed or ticked — the tags first, then the file's name (but a
+  // song that's another kind of audio than its name says gets its right name
+  // first: its tags can't be written until then).
   app.post(api.music.rename.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
     const input = api.music.rename.input.safeParse(req.body);
     if (!input.success) return res.status(400).json(validationError(input.error));
@@ -560,6 +562,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // A name that's taken is refused before anything is changed.
       if (renaming) await assertNameFree(file, fileName);
       let changed = false;
+      let id = String(req.params.id);
+      const renameFirst = renaming && !!file.realType;
+      if (renameFirst) {
+        id = (await renameSong(saveFolder!, file, fileName)).id;
+        changed = true;
+        file = await findMusicFile(saveFolder!, id);
+        if (!file) return res.status(404).json({ message: SONG_GONE });
+      }
       if (retagging) {
         changed = (await writeSongDetails(file, {}, { replace: { title, artist } })).length > 0;
         void logDetails({
@@ -571,8 +581,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           ),
         });
       }
-      let id = String(req.params.id);
-      if (renaming) {
+      if (renaming && !renameFirst) {
         id = (await renameSong(saveFolder!, file, fileName)).id;
         changed = true;
       }
@@ -858,8 +867,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // error before a streaming response is opened. (A refusal from YouTube
       // is answered at once with a 502 that says so.)
       const info = await lookUpAudio(link);
-      // Its title without what videos add ("(Official Video)", "HQ"…), unless Spotify names it.
-      const tags = { ...info, title: withoutNameNoise(info.title), ...(await songTags), spotifyId };
+      // Its artist and title as a player shows them — the artist the video's title names, not
+      // the channel that uploaded it, without "(Official Video)", "HQ"… — unless Spotify names it.
+      const song = songOfVideo(info.title, info.artist);
+      const tags = {
+        ...info,
+        title: song.title,
+        artist: song.artist ?? undefined,
+        ...(await songTags),
+        spotifyId,
+      };
       // Its genre (and for a song without an album, its album) from the music
       // catalogues, looked up meanwhile. It never fails or holds the download up.
       const lookedUp = lookUpDownload(tags, info.duration);
@@ -878,10 +895,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       void later.then((found) => logDetails(downloadEntry(name || info.title, found)));
       output = await prepareAudioOutput(format, tags, info.acodec, ownCover, later);
       if (clientGone) return;
-      // Saved as the name chosen on the page, or the video's title sanitized
-      // (sanitizedFileName). res.attachment writes both a plain filename and a
-      // UTF-8 one (filename*), so accents and non-Latin titles survive.
-      const fileName = `${name ? safeFileName(name) : sanitizedFileName(info.title)}.${output.ext}`;
+      // Saved as the name chosen on the page, or "Artist - Title" (fileNameOf: made
+      // safe too). res.attachment writes both a plain filename and a UTF-8 one
+      // (filename*), so accents and non-Latin titles survive.
+      const fileName = `${name ? safeFileName(name) : fileNameOf(song)}.${output.ext}`;
       res.attachment(fileName);
       res.header("Content-Type", output.contentType);
 

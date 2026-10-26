@@ -1,28 +1,27 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Pencil } from "lucide-react";
 import { safeFileName } from "@shared/filename";
-import { sanitizedFileName } from "@shared/name-noise";
 
 type RenameableTitleProps = {
-  /** The video's own title: sanitized, it's the name shown until you rename the file. */
-  title: string;
-  /** The new file name, or null to use the title. */
+  /** The name it's saved as unless renamed ("Artist - Title"): shown until you rename the file. */
+  defaultName: string;
+  /** The new file name, or null to use `defaultName`. */
   fileName: string | null;
   /** Shown after the name while renaming, e.g. ".mp3". */
   extension: string;
   extensionHint?: string;
-  /** Called with the new name, or null to go back to the title. */
+  /** Called with the new name, or null to go back to `defaultName`. */
   onRename: (fileName: string | null) => void;
 };
 
 /**
  * The preview card's title, which is also the downloaded file's name. It shows
- * the video's title, sanitized, with a dashed underline and a pencil; click it to rename
+ * the name it's saved as ("Artist - Title"), with a dashed underline and a pencil; click it to rename
  * the file right there, as a browser's "Save as" dialog would let you. Enter
  * (or clicking away) keeps the new name, Escape cancels.
  */
 export function RenameableTitle({
-  title,
+  defaultName,
   fileName,
   extension,
   extensionHint,
@@ -37,8 +36,6 @@ export function RenameableTitle({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const returnFocus = useRef(false);
   const hintId = useId();
-  // What the server saves it as when it isn't renamed: without "(Official Video)", "HQ"…
-  const defaultName = sanitizedFileName(title);
   const shown = fileName ?? defaultName;
 
   const start = () => {
@@ -141,13 +138,13 @@ export function RenameableTitle({
       </h3>
       {fileName !== null && (
         <p className="mt-1 text-xs text-muted-foreground">
-          Renamed from “{title}” ·{" "}
+          Renamed from “{defaultName}” ·{" "}
           <button
             type="button"
             onClick={() => onRename(null)}
             className="font-medium text-foreground underline underline-offset-2"
           >
-            Use the original title
+            Use that name
           </button>
         </p>
       )}

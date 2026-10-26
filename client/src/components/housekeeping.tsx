@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Check, Loader2, ShieldCheck, Trash2, X } from "lucide-react";
 import { qualityBars, type FolderFile, type QualityBar, type SongCheck } from "@shared/schema";
 import { formatBytes } from "@/lib/format";
 import {
   checkFolderSong,
+  copiesOf,
   fetchOtherFiles,
   problemHeadings,
   problemKinds,
@@ -54,13 +55,26 @@ const secondary = `${button} border border-border bg-card text-foreground hover:
 const danger = `${button} bg-destructive text-destructive-foreground hover:bg-destructive/90`;
 
 const fileOf = (path: string) => path.split(/[\\/]/).pop() ?? path;
+/** How a song is encoded, in a few words: "320 kbps", "lossless". */
+const qualityOf = (check: SongCheck) =>
+  check.lossless ? "lossless" : check.kbps !== null ? `${check.kbps} kbps` : "";
+
+/** Why a song is an extra copy, and which copy is kept. */
+function copyText({ keep, check, kept }: { keep: FolderTrack; check: SongCheck; kept: SongCheck }) {
+  const quality =
+    qualityOf(kept) && qualityOf(check) && qualityOf(kept) !== qualityOf(check)
+      ? ` (${qualityOf(kept)}; this one ${qualityOf(check)})`
+      : "";
+  return `The same song as “${fileOf(keep.fileName)}”, the same length: that one is kept${quality}.`;
+}
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
  * "Housekeeping": reads each listed song all the way through, on the app's
  * computer, one per CPU core, and lists the ones that aren't audio, are cut
  * short, can't be read through, or sound worse than the quality bar the
- * person chose — and the folder's files that aren't songs at all. Nothing is
+ * person chose, the extra copies of songs in the folder twice (copiesOf():
+ * the best copy is kept) — and the folder's files that aren't songs at all. Nothing is
  * deleted until the person has seen the list and pressed Delete; then the
  * ticked ones go to the Recycle Bin / Trash (a drive with none is asked
  * about again). The song that's playing is left alone.
@@ -94,14 +108,38 @@ export function Housekeeping({
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
 
+  // Once every song is checked: the copies of songs in the folder twice, among the
+  // ones that play through. A copy sounding worse than the bar is listed as a copy.
+  const checked = stage.name === "review";
+  const copies = useMemo(() => {
+    const extra = new Map<string, { keep: FolderTrack; check: SongCheck; kept: SongCheck }>();
+    if (!checked) return extra;
+    const byKey = new Map(tracks.map((track) => [track.key, track]));
+    const playable = tracks.flatMap((track) => {
+      const check = checks.get(track.key);
+      if (!check || typeof check === "string" || gone.has(track.key)) return [];
+      if (check.notAudio || check.cutShort || check.damaged) return [];
+      return [{ ...track, check }];
+    });
+    for (const { keep, extra: others } of copiesOf(playable)) {
+      for (const other of others) {
+        extra.set(other.key, { keep: byKey.get(keep.key)!, check: other.check, kept: keep.check });
+      }
+    }
+    return extra;
+  }, [checked, tracks, checks, gone]);
+
   const items: Item[] = [];
   for (const track of tracks) {
     const check = checks.get(track.key);
     if (check === undefined || gone.has(track.key)) continue;
+    const copy = copies.get(track.key);
     const problem =
       typeof check === "string"
         ? { kind: "damaged" as const, text: `Couldn't be checked: ${check}` }
-        : songProblem(check, qualityBar);
+        : copy
+          ? { kind: "copy" as const, text: copyText(copy) }
+          : songProblem(check, qualityBar);
     if (!problem) continue;
     items.push({
       key: track.key,
@@ -208,8 +246,8 @@ export function Housekeeping({
             <>
               <p className="font-medium text-foreground">
                 Check {count(tracks.length, "song")} for files that aren't audio, are cut short,
-                can't be read through, or sound worse than the bar below — and the folder's other
-                files.
+                can't be read through, sound worse than the bar below, or are extra copies of a song
+                — and the folder's other files.
               </p>
               <p className="text-xs text-muted-foreground">
                 Each song is read all the way through on this computer,{" "}

@@ -69,8 +69,9 @@ test.describe("YouTube → MP3 end-to-end (browser)", () => {
       // The preview should show the title and a thumbnail.
       await expect(page.locator("img[alt]").first()).toBeVisible();
 
-      // The title can be renamed in place; the file is then saved under that name.
-      await page.getByRole("button", { name: /^rename file: me at the zoo/i }).click();
+      // Named "Artist - Title" (the channel's artist), it can be renamed in place; the file is
+      // then saved under that name.
+      await page.getByRole("button", { name: /^rename file: jawed - me at the zoo/i }).click();
       const nameBox = page.getByRole("textbox", { name: /file name/i });
       await expect(nameBox).toHaveValue(/me at the zoo/i);
       await nameBox.fill("Zoo clip: the first video");
