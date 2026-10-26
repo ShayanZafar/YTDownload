@@ -94,7 +94,7 @@ describe("the development server", () => {
       { what: "a dotfile among the packages", name: "node_modules/.package-lock.json" },
       { what: "data/ (the history and settings)", name: DATA_FILE },
       { what: "the project's other files", name: "package.json" },
-      { what: "the server's code", name: "server/routes.ts" },
+      { what: "the server's code", name: "server/routes/index.ts" },
     ])("$what", async ({ name }) => {
       // As a file, and as the modules Vite would make of it.
       for (const query of ["", "?import", "?raw", "?url"]) {

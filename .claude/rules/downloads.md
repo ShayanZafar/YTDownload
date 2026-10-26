@@ -1,7 +1,7 @@
 ---
 paths:
   - "server/audio*.ts"
-  - "server/routes.ts"
+  - "server/routes/{index,helpers,download,search}.ts"
   - "server/save.ts"
   - "server/tags.ts"
   - "server/cover.ts"

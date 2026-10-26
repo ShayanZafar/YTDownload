@@ -50,7 +50,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── index.ts               # App bootstrap, middleware, port binding
 │   ├── env.ts                 # Loads .env before anything reads settings
 │   ├── host-check.ts          # Refuses requests for unknown host names (DNS rebinding)
-│   ├── routes.ts              # API route handlers
+│   ├── routes/                # API route handlers, one module per area (index.ts registers them all)
 │   ├── youtube-url.ts         # Pure URL-parsing / thumbnail helpers (the parsing is shared/youtube-link.ts)
 │   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first; SoundCloud as the fallback (hedged)
 │   ├── soundcloud.ts          # SoundCloud results with canonical links, previews, the recorded look-up
@@ -136,21 +136,29 @@ What each file does, and the function and constant names to look for. This was C
 - `server/index.ts` — entry point; Vite middleware in dev, static `dist/public` in prod
 - `server/env.ts` — loads `.env`; imported first by `index.ts`
 - `server/host-check.ts` — refuses unknown Host headers (DNS rebinding); `ALLOWED_HOSTS` adds names
-- `server/routes.ts` — `POST /api/video/info`, `GET /api/search` (`?source=soundcloud`: SoundCloud
-  alone), `GET /api/spotify/link`, `GET /api/spotify/playlist`, `GET /api/youtube/playlist`,
-  Spotify sign-in (`GET /api/spotify/account`, `PUT …/account/client-id`, `POST …/account/sign-in`,
-  `POST …/account/sign-out`, `GET …/account/playlists`, `GET /api/spotify/callback`),
-  `GET /api/video/download`, `POST /api/video/save`, `GET/PUT /api/settings` (with `cpuCores`),
-  `GET/POST /api/folders`, `POST /api/folders/songs`, `POST /api/folders/playlist-file`,
-  `GET /api/music` (+ `/api/music/:id`, `/:id/flac`, `/:id/cover`, `/:id/waveform`,
-  `GET/POST /:id/details`), `POST /api/music/:id/trim`, `POST /api/music/trim/undo`,
-  `POST /api/music/:id/fix-name`, `POST /api/music/:id/rename`, `GET /api/music/:id/check`,
-  `GET/POST /api/music/:id/better-copy`,
-  `GET /api/folder-files`, `DELETE /api/folder-files/:id`,
-  `GET/DELETE /api/downloads`,
-  `DELETE /api/downloads/:id`, `POST /api/downloads/restore` (Undo), `GET /api/downloads/in-folder`,
-  `GET /api/lyrics`,
-  `GET /api/health/sources`
+- `server/routes/` — the API routes, one module per area, each a `register…Routes(app)` that
+  `index.ts` (`registerRoutes()`) calls; what they share is `helpers.ts` (`songFor()`: the folder
+  song a request names, or the reply why not; `sendAudioFile()`, `sendFolderError()`,
+  `validationError()` and the messages). Paths and inputs are in `shared/routes.ts`. A new route
+  goes in its area's module:
+  - `folders.ts` — `GET/PUT /api/settings` (with `cpuCores`), `GET/POST /api/folders`,
+    `POST /api/video/save`, `POST /api/folders/songs`, `POST /api/folders/playlist-file`
+  - `music.ts` — `GET /api/music`, `GET /api/music/:id` (+ `/:id/flac`, `/:id/cover`),
+    `DELETE /api/music/:id`, `POST /api/music/:id/fix-name`, `POST /api/music/:id/rename`,
+    `GET /api/lyrics`
+  - `song-details.ts` — `GET/POST /api/music/:id/details`, `GET /api/details-log`
+  - `trim.ts` — `GET /api/music/:id/waveform`, `POST /api/music/:id/trim`,
+    `POST /api/music/trim/undo`
+  - `housekeeping.ts` — `GET /api/music/:id/check`, `GET/POST /api/music/:id/better-copy`,
+    `GET /api/folder-files`, `DELETE /api/folder-files/:id`
+  - `history.ts` — `GET/DELETE /api/downloads`, `DELETE /api/downloads/:id`,
+    `POST /api/downloads/restore` (Undo), `GET /api/downloads/in-folder`
+  - `search.ts` — `GET /api/health/sources`, `POST /api/video/info`, `GET /api/search`
+    (`?source=soundcloud`: SoundCloud alone), `GET /api/youtube/playlist`
+  - `spotify.ts` — `GET /api/spotify/link`, `GET /api/spotify/playlist`, Spotify sign-in
+    (`GET /api/spotify/account`, `PUT …/account/client-id`, `POST …/account/sign-in`,
+    `POST …/account/sign-out`, `GET …/account/playlists`, `GET /api/spotify/callback`)
+  - `download.ts` — `GET /api/video/download`
 - `server/youtube-limits.ts` — `youtubeGuard`, which every yt-dlp call to YouTube but the audio stream
   goes through (search, video info, playlists, the metadata pass before a download): a 10-minute
   cache of search/video/playlist answers (`TtlCache`, 200 entries, LRU) and
@@ -1136,7 +1144,7 @@ Notes on this topology:
 
 ### Failure modes
 
-The interesting failures are at the boundaries with `yt-dlp`, YouTube, SoundCloud, Spotify and the history file. The table below is the truth as of the code in `server/routes.ts`:
+The interesting failures are at the boundaries with `yt-dlp`, YouTube, SoundCloud, Spotify and the history file. The table below is the truth as of the code in `server/routes/`:
 
 | Failure                                                                                | Where surfaced                                     | Behavior                                                                                                                                                                                                                                                                                                                                                     | User sees                                                                                                                   |
 | -------------------------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
