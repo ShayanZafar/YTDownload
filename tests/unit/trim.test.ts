@@ -133,6 +133,18 @@ describe("Finding dead air", () => {
     expect(waveform.silences[1].start).toBeCloseTo(5, 0);
     expect(waveform.silences[1].end).toBeCloseTo(7, 0);
   });
+
+  it("stops reading the waveform when the page gives up", async () => {
+    await appMp3("waveform-stopped.mp3");
+    await expect(
+      readWaveform(await audioFile("waveform-stopped.mp3"), AbortSignal.abort()),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("says what ffmpeg said when a file has no waveform to read", async () => {
+    await fs.writeFile(path.join(folder, "not-audio.mp3"), "not a song at all");
+    await expect(readWaveform(await audioFile("not-audio.mp3"))).rejects.toThrow(/\S/);
+  });
 });
 
 describe("Cutting a part out", () => {

@@ -84,6 +84,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── local-only.ts          # Folder routes answer only this computer's own page; history changes only the app's page
 │   ├── retry-when-busy.ts     # Retries a rename/delete Windows briefly blocks (antivirus, indexer)
 │   ├── json-file.ts           # writeJsonFile() (temp file + rename) and oneAtATime() for every data/*.json store
+│   ├── ffmpeg.ts              # ffmpeg() / runFfmpeg(): every one-off ffmpeg run (timeout, Stop, its error line)
 │   ├── vite.ts                # Dev-only Vite middleware integration
 │   └── static.ts              # Production static-file serving
 ├── shared/                    # Code shared between client & server
@@ -425,6 +426,13 @@ What each file does, and the function and constant names to look for. This was C
   sign-in's 0o600) and `oneAtATime()`, the queue that runs one file's changes one after another.
   Used by the history, settings, Not found marks, source health and Spotify sign-in; a new JSON
   store uses them too (unit-tested)
+- `server/ffmpeg.ts` — every ffmpeg run that isn't the download pipeline (yt-dlp piped into
+  ffmpeg, `audio.ts`): `ffmpeg(args, options)` feeds an `input`, streams (`onStdout`) or keeps the
+  output, keeps the first or last of what it prints, stops it after `timeoutMs` or when `signal`
+  gives up (stopped outright 2 s later if it ignores that, as it can on macOS and Linux) and
+  answers with how it ended; `ffmpegFailure()` is its last error line; `runFfmpeg()` (30-minute
+  limit) rejects with that line. Used by the player's FLAC conversions, Trim's waveform and cut,
+  Housekeeping's check, Fill in details' probe and write, and covers (unit-tested)
 - `shared/` — schema and API contracts shared by client and server; `shared/soundcloud-link.ts` has
   `parseSoundCloudLink()` (a SoundCloud track's one canonical link,
   `https://api.soundcloud.com/tracks/<digits>`, from that or the URL-encoded URN form yt-dlp lists —

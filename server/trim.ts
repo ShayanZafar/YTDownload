@@ -18,10 +18,10 @@ import path from "path";
 import { z } from "zod";
 import { extensionOf } from "@shared/audio-types";
 import type { TimeRange, Waveform } from "@shared/schema";
-import { spawnFfmpeg } from "./audio";
+import { ffmpeg, ffmpegFailure, runFfmpeg } from "./ffmpeg";
 import { FolderError } from "./folders";
 import { parseFile, type AudioFile } from "./library";
-import { musicTrackId, runFfmpeg } from "./music";
+import { musicTrackId } from "./music";
 import { retryWhenBusy } from "./retry-when-busy";
 
 // --- The waveform, and the song's quiet stretches -------------------------------------
@@ -127,40 +127,18 @@ export function ffmpegWaveformArgs(input: string): string[] {
 }
 
 /** The song's waveform and quiet stretches. Stops (and rejects) if `signal` gives up. */
-export function readWaveform(file: AudioFile, signal?: AbortSignal): Promise<Waveform> {
-  return new Promise((resolve, reject) => {
-    const child = spawnFfmpeg(ffmpegWaveformArgs(file.absolute));
-    const windows = new WindowPeaks();
-    let stderr = "";
-    const stop = () => child.kill();
-    signal?.addEventListener("abort", stop, { once: true });
-    const timer = setTimeout(stop, WAVEFORM_TIMEOUT_MS);
-    child.stdout.on("data", (chunk: Buffer) => windows.add(chunk));
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr = (stderr + chunk.toString()).slice(-4000);
-    });
-    child.stdin.on("error", () => {});
-    child.stdin.end();
-    const done = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", stop);
-    };
-    child.on("error", (err) => {
-      done();
-      reject(err);
-    });
-    child.on("close", (code, killedBy) => {
-      done();
-      if (signal?.aborted) return reject(new DOMException("Stopped", "AbortError"));
-      if (code !== 0) {
-        const lastLine = stderr.trim().split(/\r?\n/).pop();
-        return reject(new Error(lastLine || `ffmpeg stopped (${killedBy ?? `exit code ${code}`})`));
-      }
-      const peaks = windows.finish();
-      const duration = round3(windows.samples / WAVEFORM_RATE);
-      resolve({ duration, peaks: barsOf(peaks), silences: silencesIn(peaks, duration) });
-    });
+export async function readWaveform(file: AudioFile, signal?: AbortSignal): Promise<Waveform> {
+  const windows = new WindowPeaks();
+  const result = await ffmpeg(ffmpegWaveformArgs(file.absolute), {
+    timeoutMs: WAVEFORM_TIMEOUT_MS,
+    signal,
+    onStdout: (chunk) => windows.add(chunk),
   });
+  if (result.aborted) throw new DOMException("Stopped", "AbortError");
+  if (result.code !== 0) throw new Error(ffmpegFailure(result));
+  const peaks = windows.finish();
+  const duration = round3(windows.samples / WAVEFORM_RATE);
+  return { duration, peaks: barsOf(peaks), silences: silencesIn(peaks, duration) };
 }
 
 // --- Cutting a part out -------------------------------------------------------------
