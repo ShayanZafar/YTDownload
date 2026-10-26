@@ -424,7 +424,9 @@ export function SpotifyPlaylistPanel({
     () => new Set(tracks.filter((t) => downloadedIds.has(t.id)).map((t) => t.id)).size,
     [tracks, downloadedIds],
   );
-  const finished = Object.keys(statuses).map(statusOf);
+  // This playlist's songs only: a run started from another one keeps going
+  // (and marking its own songs) after this one is opened.
+  const finished = uniqueIds(tracks).map(statusOf);
   const toCheck = finished.filter((s) => s?.state === "check").length;
   const failed = finished.filter((s) => s?.state === "failed").length;
   const where = folder ? `“${folderName(folder.path)}”` : "";

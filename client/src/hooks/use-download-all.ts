@@ -258,6 +258,21 @@ const isActive = (status: SongStatus) =>
   status.state === "waiting" || status.state === "finding" || status.state === "saving";
 
 /**
+ * The songs' marks that are still `active` (waiting, finding, saving) — or,
+ * with `active` false, the ones a run is done with (saved, to check, failed).
+ */
+export function marksWhere(
+  statuses: Record<string, SongStatus>,
+  active: boolean,
+): Record<string, SongStatus> {
+  const next: Record<string, SongStatus> = {};
+  Object.keys(statuses).forEach((id) => {
+    if (isActive(statuses[id]) === active) next[id] = statuses[id];
+  });
+  return next;
+}
+
+/**
  * "Download all" for a playlist: its songs saved into the "Save to" folder,
  * as many at once as the app's computer has CPU cores (`atOnce`). A Spotify
  * song is looked for, and saved when the best match is the same length as the
@@ -326,13 +341,7 @@ export function useDownloadAll({
         run.current = null;
         setProgress(null);
         // Songs it didn't get to aren't waiting any more.
-        setStatuses((current) => {
-          const next: Record<string, SongStatus> = {};
-          Object.keys(current).forEach((id) => {
-            if (!isActive(current[id])) next[id] = current[id];
-          });
-          return next;
-        });
+        setStatuses((current) => marksWhere(current, false));
         callbacks.current.onDone?.(summary ?? { saved: 0, check: 0, failed: 0, stopped: true });
       }
     },
@@ -341,11 +350,12 @@ export function useDownloadAll({
 
   const stop = useCallback(() => run.current?.abort(), []);
 
-  /** Forget how the last run went (another playlist was opened). */
-  const reset = useCallback(() => {
-    run.current?.abort();
-    setStatuses({});
-  }, []);
+  /**
+   * Forget how the last run went (another playlist was opened, or a search
+   * made). A run still going keeps going, its songs' marks with it: only Stop
+   * (or leaving the page) cancels it.
+   */
+  const reset = useCallback(() => setStatuses((current) => marksWhere(current, true)), []);
 
   return { statuses, progress, running: progress !== null, start, stop, reset };
 }
