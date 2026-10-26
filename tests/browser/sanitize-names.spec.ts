@@ -87,6 +87,19 @@ test("Sanitize Filename suggests tidy names and right extensions, renames only t
   await expect(
     copy.getByRole("button", { name: "Delete “Queen - Under Pressure.mp3”" }),
   ).toBeVisible();
+  // Each can be listened to first, on its own.
+  const player = page.getByRole("region", { name: "Music player" });
+  await copy.getByRole("button", { name: "Play “Queen - Under Pressure.mp3”" }).click();
+  await expect(player.getByTestId("player-title")).toHaveText("Queen - Under Pressure");
+  await expect(
+    copy.getByRole("button", { name: "Pause “Queen - Under Pressure.mp3”" }),
+  ).toBeVisible();
+  await copy.getByRole("button", { name: "Play “Queen - Under Pressure (1).mp3”" }).click();
+  await expect(player.getByTestId("player-title")).toHaveText("Queen - Under Pressure (1)");
+  await expect(
+    copy.getByRole("button", { name: "Play “Queen - Under Pressure.mp3”" }),
+  ).toBeVisible();
+  // The one playing can be deleted: it leaves the player first.
   await copy.getByRole("button", { name: "Delete “Queen - Under Pressure (1).mp3”" }).click();
   const dialog = page.getByRole("dialog", { name: "Delete from the folder?" });
   await dialog.getByRole("button", { name: /^Move to the (Trash|Recycle Bin)$/ }).click();

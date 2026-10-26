@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Copy, Eraser, Loader2, Trash2, X } from "lucide-react";
+import { AlertCircle, Check, Copy, Eraser, Loader2, Pause, Play, Trash2, X } from "lucide-react";
 import type { MusicTrack } from "@shared/schema";
 import { artistsOf, renameFolderSong, sanitizedNameOf, type PlayerTrack } from "@/lib/music";
 import { formatDuration } from "@/lib/format";
+import { usePlayer } from "@/hooks/use-player";
 import { eachAtOnce } from "@/lib/song-details";
 import { cn } from "@/lib/utils";
 
@@ -63,12 +64,12 @@ function clashesOf(renames: readonly Rename[], folder: readonly FolderTrack[]): 
  * "(1998)", a copy's "(1)", "&#39" — and renames only the ones ticked, each
  * name editable first. The extension stays, and the song that's playing is
  * left alone. A name another song has already is never given (nor a number
- * added): the two are shown side by side, to delete one if they're the same.
+ * added): the two are shown side by side, each to listen to, to delete one if
+ * they're the same.
  */
 export function SanitizeNames({
   tracks,
   folderTracks,
-  playingKey,
   atOnce,
   onSongRenamed,
   onRenamed,
@@ -79,8 +80,6 @@ export function SanitizeNames({
   tracks: readonly FolderTrack[];
   /** All the folder's songs, to see which names are taken. */
   folderTracks: readonly FolderTrack[];
-  /** The song playing now, which isn't renamed while it plays. */
-  playingKey: string | null;
   /** How many songs at once: the app's computer's CPU cores. */
   atOnce: number;
   /** One song was renamed (it had id `from`): here it is as it is now, to show at once. */
@@ -91,6 +90,9 @@ export function SanitizeNames({
   onDelete: (track: FolderTrack) => void;
   onClose: () => void;
 }) {
+  const player = usePlayer();
+  // The song playing as it opens isn't offered: it's left alone while it plays.
+  const [playingKey] = useState(() => player.current?.key ?? null);
   const [stage, setStage] = useState<Stage>(() => {
     // "Song - Artist" is put round when the folder's other songs name that artist.
     const artists = artistsOf(tracks);
@@ -120,6 +122,10 @@ export function SanitizeNames({
     const kept = renames.filter(
       (item) => item.keep && item.name.trim() && !clashes.has(item.track.key),
     );
+    // A song listened to since (one of two with a name) leaves the player first, inside
+    // the click, so its file isn't being played while it's renamed.
+    const current = player.current?.key;
+    if (current && kept.some(({ track }) => track.key === current)) player.discard(current);
     const abort = new AbortController();
     controller.current = abort;
     let renamed = 0;
@@ -179,7 +185,13 @@ export function SanitizeNames({
             <Review
               renames={renames}
               clashes={clashes}
-              playingKey={playingKey}
+              listening={{
+                key: player.current?.key ?? null,
+                playing: player.status === "playing",
+              }}
+              onListen={(track) =>
+                player.current?.key === track.key ? player.toggle() : player.play([track], 0)
+              }
               onDelete={onDelete}
               skipsPlaying={tracks.some((track) => track.key === playingKey)}
               onChange={(renames) => setStage({ name: "review", renames })}
@@ -259,7 +271,8 @@ export function SanitizeNames({
 function Review({
   renames,
   clashes,
-  playingKey,
+  listening,
+  onListen,
   onDelete,
   skipsPlaying,
   onChange,
@@ -268,7 +281,10 @@ function Review({
 }: {
   renames: Rename[];
   clashes: Map<string, Clash>;
-  playingKey: string | null;
+  /** The player's song, and whether it's playing (not paused). */
+  listening: { key: string | null; playing: boolean };
+  /** Play this song on its own, to hear it (or pause it, if it's the one playing). */
+  onListen: (track: FolderTrack) => void;
   onDelete: (track: FolderTrack) => void;
   skipsPlaying: boolean;
   onChange: (renames: Rename[]) => void;
@@ -336,22 +352,43 @@ function Review({
                         <Copy className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                         <span>
                           “{fileOf(clash.other)}”{lengthOf(clash.other)} has that name already: this
-                          one{lengthOf(track)} may be the same song.
+                          one{lengthOf(track)} may be the same song. Listen to both to choose.
                         </span>
                       </span>
                       <span className="flex flex-wrap gap-1.5">
-                        {[track, clash.other].map((song) => (
-                          <button
-                            key={song.key}
-                            type="button"
-                            className={secondary}
-                            disabled={song.key === playingKey}
-                            onClick={() => onDelete(song)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete “{fileOf(song)}”
-                          </button>
-                        ))}
+                        {[track, clash.other].map((song) => {
+                          const playing = listening.playing && listening.key === song.key;
+                          return (
+                            <span key={song.key} className="inline-flex min-w-0 gap-1">
+                              <button
+                                type="button"
+                                className={cn(
+                                  secondary,
+                                  "px-2",
+                                  listening.key === song.key && "border-primary text-primary",
+                                )}
+                                disabled={!!song.notAudio}
+                                onClick={() => onListen(song)}
+                                aria-label={`${playing ? "Pause" : "Play"} “${fileOf(song)}”`}
+                                title={playing ? "Pause" : "Play"}
+                              >
+                                {playing ? (
+                                  <Pause className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Play className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                className={secondary}
+                                onClick={() => onDelete(song)}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                Delete “{fileOf(song)}”
+                              </button>
+                            </span>
+                          );
+                        })}
                       </span>
                     </span>
                   )}
