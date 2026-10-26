@@ -445,6 +445,11 @@ export const renamedSongSchema = z.object({
 
 export type RenamedSong = z.infer<typeof renamedSongSchema>;
 
+/** Sanitize Filename's answer: the song as it is now, under its new name (and id). */
+export const sanitizedSongSchema = z.object({ track: musicTrackSchema });
+
+export type SanitizedSong = z.infer<typeof sanitizedSongSchema>;
+
 /**
  * A `409` for a delete that would have had to be for good — the song's drive
  * has no bin (a network or removable drive) — so it's left where it is.

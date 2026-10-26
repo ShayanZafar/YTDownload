@@ -1,15 +1,15 @@
 ---
 paths:
   - "server/{music,lyrics,trash,trim,catalogues,song-details,details-log}.ts"
-  - "shared/audio-types.ts"
+  - "shared/{audio-types,name-noise}.ts"
   - "client/src/App.tsx"
   - "client/src/hooks/{use-player,use-player-shortcuts}.tsx"
   - "client/src/hooks/{use-folder-music,use-device-music,use-lyrics}.ts"
-  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog,trim-song,fill-in-details}.tsx"
+  - "client/src/components/{player-bar,up-next,lyrics-panel,music-library,layout,video-preview,delete-song-dialog,trim-song,fill-in-details,sanitize-names,rename-song-dialog}.tsx"
   - "client/src/lib/{music,device-music,lyrics,player-keys,remembered-player,trim,song-details}.ts"
   - "tests/unit/{music,music-player,player-keys,remembered-player,lyrics,trash,trim,trim-routes,song-details,song-details-routes,details-log}.test.ts"
   - "tests/api/music.e2e.test.ts"
-  - "tests/browser/{player,playlist,trim,song-details}.spec.ts"
+  - "tests/browser/{player,playlist,trim,song-details,sanitize-names}.spec.ts"
 ---
 
 # The music player

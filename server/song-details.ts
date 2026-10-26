@@ -319,6 +319,7 @@ export function detailsArgs({
   cover,
   id3,
   muxer = MUXERS[ext],
+  replace = {},
 }: {
   input: string;
   output: string;
@@ -331,6 +332,8 @@ export function detailsArgs({
   cover?: string;
   /** An MP3's ID3v2 version (3 or 4), and whether it has an ID3v1 tag at its end. */
   id3?: { version: 3 | 4; v1: boolean };
+  /** Tags to set over the ones the file has (a renamed title or artist). */
+  replace?: Partial<Record<"title" | "artist", string>>;
 }): string[] {
   const args = ["-hide_banner", "-loglevel", "error", "-nostdin", "-i", input];
   if (cover) args.push("-i", cover);
@@ -341,6 +344,8 @@ export function detailsArgs({
   if (cover) args.push("-map", "1:v");
   args.push("-map_metadata", "0", "-map_metadata", String(metadataInput), "-c", "copy");
   if (cover) args.push("-disposition:v:0", "attached_pic");
+  // The file's own tags would win over the metadata file's: these win over both.
+  for (const [key, value] of Object.entries(replace)) args.push("-metadata", `${key}=${value}`);
   if (id3) {
     args.push("-id3v2_version", String(id3.version));
     if (id3.v1) args.push("-write_id3v1", "1");
@@ -370,6 +375,7 @@ async function overwrite(file: string, data: Buffer, times: { atimeMs: number; m
 export async function writeSongDetails(
   file: AudioFile,
   details: SongDetails,
+  { replace = {} }: { replace?: Partial<Record<"title" | "artist", string>> } = {},
 ): Promise<SongDetailField[]> {
   const ext = extensionOf(file.relative);
   if (!canWriteDetails(file.relative)) {
@@ -387,6 +393,13 @@ export async function writeSongDetails(
   }
   const missing = missingFrom(detailsPresent(before));
   const adding = detailsFor(missing, details);
+  // A new title or artist the person typed (Rename), over the one it has.
+  const replacing = Object.fromEntries(
+    Object.entries(replace).filter(
+      ([field, value]) => value && value !== before.common[field as "title" | "artist"],
+    ),
+  );
+  Object.assign(adding, replacing);
   const cover =
     adding.coverUrl !== undefined
       ? await fetchCover({ kind: "catalogue", url: adding.coverUrl })
@@ -435,6 +448,7 @@ export async function writeSongDetails(
           cover: coverFile,
           id3,
           muxer: muxed.muxer,
+          replace: replacing,
         }),
       );
     } catch (err) {
@@ -448,7 +462,13 @@ export async function writeSongDetails(
       () => undefined,
     );
     if (after && ext === ".mp3") after = await putBackFrames(file.absolute, output, before, after);
-    const problem = after ? rewriteProblem(before, after, added) : "the copy couldn't be read";
+    const wrong = Object.keys(replacing).find(
+      (field) => after?.common[field as "title" | "artist"] !== replacing[field],
+    );
+    const problem = !after
+      ? "the copy couldn't be read"
+      : (rewriteProblem(before, after, added) ??
+        (wrong ? `the new ${wrong} didn't go in` : undefined));
     if (problem) {
       throw new SongDetailsError(422, `The song was left as it was: ${problem}.`);
     }

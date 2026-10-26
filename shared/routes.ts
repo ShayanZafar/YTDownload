@@ -3,6 +3,7 @@ import {
   audioSources,
   deletedSongSchema,
   renamedSongSchema,
+  sanitizedSongSchema,
   downloadSchema,
   folderEntrySchema,
   lyricsSchema,
@@ -425,6 +426,26 @@ export const api = {
       method: "POST" as const,
       path: "/api/music/:id/fix-name" as const,
       responses: { 200: renamedSongSchema },
+    },
+    /**
+     * Rename, and Sanitize Filename: renames a song's file, in its own folder,
+     * to `name` (made safe; its extension stays; a numbered name if that's
+     * taken), and/or gives it a new `title` and `artist` tag. `409` if nothing
+     * would change.
+     */
+    rename: {
+      method: "POST" as const,
+      path: "/api/music/:id/rename" as const,
+      input: z
+        .object({
+          name: z.string().trim().min(1).max(300).optional(),
+          title: z.string().trim().min(1).max(300).optional(),
+          artist: z.string().trim().min(1).max(300).optional(),
+        })
+        .refine((input) => input.name ?? input.title ?? input.artist, {
+          message: "Give a new name, title or artist.",
+        }),
+      responses: { 200: sanitizedSongSchema },
     },
   },
 };

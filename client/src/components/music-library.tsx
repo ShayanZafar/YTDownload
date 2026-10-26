@@ -27,6 +27,8 @@ import {
   Shuffle,
   Trash2,
   Wand2,
+  Eraser,
+  PencilLine,
   X,
 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -47,6 +49,8 @@ import { usePlayer } from "@/hooks/use-player";
 import { SONGS_IN_FOLDER_KEY } from "@/hooks/use-songs-in-folder";
 import { useStoredChoice } from "@/hooks/use-stored-choice";
 import { FillInDetails } from "@/components/fill-in-details";
+import { SanitizeNames } from "@/components/sanitize-names";
+import { RenameSongDialog } from "@/components/rename-song-dialog";
 import { formatDuration } from "@/lib/format";
 import {
   AUDIO_FILE_ACCEPT,
@@ -131,6 +135,8 @@ type SongRowProps = {
   onDelete: (track: PlayerTrack) => void;
   /** Fix name: a folder song that's another kind of audio than its name says. */
   onFixName: (track: PlayerTrack) => void;
+  /** Rename: a folder song's file name, title and artist. */
+  onRename: (track: PlayerTrack) => void;
 };
 
 /** A song in the list: click it to play the list from there, or line it up. */
@@ -146,6 +152,7 @@ const SongRow = memo(function SongRow({
   onTrim,
   onDelete,
   onFixName,
+  onRename,
 }: SongRowProps) {
   const byline = [track.artist, track.album].filter(Boolean).join(" · ");
   const deleteButton = track.source === "folder" && (
@@ -271,6 +278,17 @@ const SongRow = memo(function SongRow({
               <FileWarning className="h-4 w-4" />
             </button>
           )}
+          {track.source === "folder" && (
+            <button
+              type="button"
+              onClick={() => onRename(track)}
+              aria-label={`Rename: “${track.title}”`}
+              title="Rename (file name, title, artist)"
+              className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-secondary hover:text-foreground transition-colors"
+            >
+              <PencilLine className="h-4 w-4" />
+            </button>
+          )}
           {track.source === "folder" && canTrimFile(track.fileName) && (
             <button
               type="button"
@@ -315,16 +333,30 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
           tracks: library.tracks.map((track) => (track.id === written.id ? written : track)),
         },
     );
+  // A song just renamed: shown under its new name (and id) at once, and out of the Up next queue.
+  const showRenamed = (from: string, renamed: MusicTrack) => {
+    player.discard(`folder:${from}`);
+    queryClient.setQueryData<FolderLibrary>(
+      [...MUSIC_KEY, folder],
+      (library) =>
+        library && {
+          ...library,
+          tracks: library.tracks.map((track) => (track.id === from ? renamed : track)),
+        },
+    );
+  };
   const device = useDeviceMusic();
   const [chosenSource, setSource] = useState<"folder" | "device">("folder");
   const [filter, setFilter] = useState("");
   // Genre, artist, album, year: what each is set to (unset: every song).
   const [facets, setFacets] = useState<MusicFilters>({});
   const [fillingIn, setFillingIn] = useState(false);
+  const [sanitizing, setSanitizing] = useState(false);
   const [sort, setSort] = useStoredChoice<MusicSort>("music-sort", musicSorts, "added");
   const [limit, setLimit] = useState(PAGE);
   // The song "Delete from folder" is asking about.
   const [deleting, setDeleting] = useState<(PlayerTrack & { source: "folder" }) | null>(null);
+  const [renaming, setRenaming] = useState<(PlayerTrack & { source: "folder" }) | null>(null);
   const [pickFolders] = useState(canPickFolders);
   const isLocal = settings?.canSaveToFolder === true;
 
@@ -498,6 +530,9 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
   );
   const onDelete = useCallback((track: PlayerTrack) => {
     if (track.source === "folder") setDeleting(track);
+  }, []);
+  const onRename = useCallback((track: PlayerTrack) => {
+    if (track.source === "folder") setRenaming(track);
   }, []);
   // Fix name: the extension the song's content says it should have.
   const { discard } = player;
@@ -773,12 +808,31 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
                   type="button"
                   aria-pressed={fillingIn}
                   disabled={shown.length === 0}
-                  onClick={() => setFillingIn((open) => !open)}
+                  onClick={() => {
+                    setFillingIn((open) => !open);
+                    setSanitizing(false);
+                  }}
                   title="Look up the songs' missing genre, album, year, track number and cover"
                   className={smallButton}
                 >
                   <Wand2 className="h-3.5 w-3.5" />
                   Fill in details
+                </button>
+              )}
+              {source === "folder" && isLocal && folder && (
+                <button
+                  type="button"
+                  aria-pressed={sanitizing}
+                  disabled={shown.length === 0}
+                  onClick={() => {
+                    setSanitizing((open) => !open);
+                    setFillingIn(false);
+                  }}
+                  title="Take “(Official Video)”, “HQ”, “(1998)” and the like out of the songs' file names"
+                  className={smallButton}
+                >
+                  <Eraser className="h-3.5 w-3.5" />
+                  Sanitize Filename
                 </button>
               )}
               <button
@@ -821,6 +875,23 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
           />
         )}
 
+        {sanitizing && source === "folder" && isLocal && folder && (
+          <SanitizeNames
+            key={folder}
+            tracks={shown.filter(
+              (t): t is Extract<PlayerTrack, { source: "folder" }> => t.source === "folder",
+            )}
+            playingKey={player.current?.key ?? null}
+            atOnce={settings?.cpuCores ?? 1}
+            onSongRenamed={showRenamed}
+            onRenamed={() => {
+              void folderMusic.refetch();
+              void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
+            }}
+            onClose={() => setSanitizing(false)}
+          />
+        )}
+
         {isLoadingFolder ? (
           <div className="divide-y divide-border/60" aria-hidden="true">
             {[1, 2, 3].map((i) => (
@@ -850,6 +921,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
                   onEnqueue={onEnqueue}
                   onTrim={onTrim}
                   onDelete={onDelete}
+                  onRename={onRename}
                   onFixName={onFixName}
                 />
               );
@@ -907,6 +979,18 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
         />
       )}
       {deleting && <DeleteSongDialog track={deleting} onClose={() => setDeleting(null)} />}
+      {renaming && (
+        <RenameSongDialog
+          key={renaming.key}
+          track={renaming}
+          onRenamed={(from, now) => {
+            showRenamed(from, now);
+            void folderMusic.refetch();
+            void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
+          }}
+          onClose={() => setRenaming(null)}
+        />
+      )}
     </section>
   );
 }
