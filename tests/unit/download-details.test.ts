@@ -77,9 +77,12 @@ describe("lookUpDownload and lateDetails", () => {
     });
     const started = Date.now();
     const slow = lookUpDownload(tags, 3, { lookUp: () => new Promise(() => {}), waitMs: 50 });
-    expect(await fails).toEqual({ tags: {} });
-    expect(await throws).toEqual({ tags: {} });
-    expect(await slow).toEqual({ tags: {} });
+    // Nothing to add, and why: for the details log.
+    expect(await fails).toEqual({ tags: {}, why: "Couldn't reach the music catalogues" });
+    expect(await throws).toEqual({ tags: {}, why: "thrown at once" });
+    expect(await slow).toEqual({ tags: {}, why: "no answer within 0.05 s" });
+    const none = await lookUpDownload(tags, 3, { lookUp: async () => null });
+    expect(none).toEqual({ tags: {}, why: "not found in iTunes or Deezer" });
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 

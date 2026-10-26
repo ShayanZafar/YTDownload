@@ -17,7 +17,7 @@ import path from "path";
 import type { IAudioMetadata } from "music-metadata";
 import { extensionOf, songNameOf } from "@shared/audio-types";
 import type { SongDetailField, SongDetails, SongLookup } from "@shared/schema";
-import { lookUpSong } from "./catalogues";
+import { lookUpSongNoted } from "./catalogues";
 import { fetchCover } from "./cover";
 import { forgetTags, parseFile, readTags, type AudioFile } from "./library";
 import { spawnFfmpeg } from "./audio";
@@ -177,7 +177,7 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
   const metadata = await readWithCovers(file).catch(() => undefined);
   const missing = metadata ? missingFrom(detailsPresent(metadata)) : [];
   let writable = metadata !== undefined && canWriteDetails(file.relative);
-  let problem: string | null = null;
+  let problem: string | null = metadata ? null : "the app couldn't read the file's tags";
   if (writable && missing.length > 0) {
     // A file whose name says one kind and whose contents are another can't be written.
     const muxed = muxerFor(extensionOf(file.relative), await probeFile(file.absolute));
@@ -186,23 +186,32 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
       problem = muxed.problem;
     }
   }
-  const none = { missing, writable, problem, found: null, match: null, source: null };
+  const none = { missing, writable, problem, notes: [], found: null, match: null, source: null };
   if (missing.length === 0 || !writable) return none;
 
   const tags = await readTags(file);
-  const match = await lookUpSong({
+  const { match, notes } = await lookUpSongNoted({
     title: tags.title ?? songNameOf(file.relative),
     artist: tags.trackArtist,
     duration: tags.duration,
   });
-  if (!match) return none;
+  if (!match) return { ...none, notes };
   const { song, source } = match;
   const found = detailsFor(missing, song);
-  if (Object.keys(found).length === 0) return none;
+  if (Object.keys(found).length === 0) {
+    const catalogue = source === "itunes" ? "iTunes" : "Deezer";
+    return {
+      ...none,
+      notes: [
+        `${catalogue} has it (“${song.title}” by ${song.artist}) but not what it lacks (${missing.join(", ")})`,
+      ],
+    };
+  }
   return {
     missing,
     writable,
     problem,
+    notes: [],
     found,
     match: { title: song.title, artist: song.artist, album: song.album ?? null },
     source,

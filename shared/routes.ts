@@ -387,6 +387,14 @@ export const api = {
       responses: { 200: songDetailsWrittenSchema },
     },
     /**
+     * The details log's newest lines, as plain text: each song looked up,
+     * written or downloaded, and what happened and why (server/details-log.ts).
+     */
+    detailsLog: {
+      method: "GET" as const,
+      path: "/api/details-log" as const,
+    },
+    /**
      * Deletes a song from the folder: to the Recycle Bin / Trash, so it can be
      * put back from there — or for good, only when `permanently` says so
      * (a drive with no bin answers `409` with `noBin` instead).

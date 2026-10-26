@@ -46,6 +46,7 @@ beforeAll(async () => {
   process.env.HISTORY_FILE = path.join(dir, "history.json");
   process.env.SETTINGS_FILE = path.join(dir, "settings.json");
   process.env.PLAYER_CACHE_DIR = path.join(dir, "cache");
+  process.env.DETAILS_LOG_FILE = path.join(dir, "details.log");
   folder = path.join(dir, "Music");
   await fs.mkdir(folder);
   await tone(path.join(folder, "Test Tone.mp3"), [
@@ -96,6 +97,7 @@ afterAll(async () => {
   delete process.env.HISTORY_FILE;
   delete process.env.SETTINGS_FILE;
   delete process.env.PLAYER_CACHE_DIR;
+  delete process.env.DETAILS_LOG_FILE;
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -174,6 +176,26 @@ describe("Fill in details (API)", () => {
     expect(res.body.message).toContain("rename it to end in .m4a");
     expect(await fs.readFile(path.join(folder, "Misnamed.mp3"))).toEqual(before);
     await fs.rm(path.join(folder, "Misnamed.mp3"));
+  });
+
+  it("keeps a log of each song looked up and written, and why one wasn't found", async () => {
+    const tracks = await songs();
+    await request(app).get(`/api/music/${tracks["Rock Song.mp3"].id}/details`).expect(200);
+    const res = await request(app).get("/api/details-log").expect(200);
+    expect(res.headers["content-type"]).toMatch(/^text\/plain/);
+    const lines: string[] = res.text.split("\n");
+    // The earlier tests' songs, in order, each with what happened and why.
+    expect(lines.find((line) => line.includes("look-up  Test Tone.mp3  found"))).toContain(
+      "matched “Test Tone” by Sine Wave on iTunes; album Pure Tones; genre Electronic",
+    );
+    expect(lines.find((line) => line.includes("write  Test Tone.mp3  added"))).toContain(
+      "genre Electronic",
+    );
+    // Not found: what it lacks, and each search with why its answers weren't it.
+    expect(lines.at(-1)).toMatch(
+      /look-up {2}Rock Song\.mp3 {2}not found: lacks artist, album, year, track, cover; iTunes, “Rock Song”: nothing came back; Deezer, “Rock Song”: nothing came back$/,
+    );
+    expect(lines.some((line) => line.includes("Misnamed.mp3  can't be written"))).toBe(true);
   });
 
   it("takes only details that make sense, as JSON, by a song's id", async () => {

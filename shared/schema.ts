@@ -333,6 +333,8 @@ export const songLookupSchema = z.object({
   writable: z.boolean(),
   /** Why a file of a kind the app writes can't be written after all (its contents aren't what its name says). */
   problem: z.string().nullable().default(null),
+  /** For a song not found (or with nothing to add): each search and why its answers weren't it. */
+  notes: z.array(z.string()).default([]),
   /** What was found, just for the details it lacks — null when nothing was. */
   found: songDetailsSchema.nullable(),
   /** The catalogue's song it matched, to show who's who before anything is written. */

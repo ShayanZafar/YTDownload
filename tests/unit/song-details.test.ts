@@ -11,6 +11,7 @@ import {
   isCatalogueCoverUrl,
   itunesSongs,
   lookUpSong,
+  lookUpSongNoted,
   pickMatch,
   resetCatalogues,
   type CatalogueSong,
@@ -238,6 +239,33 @@ describe("lookUpSong", () => {
     expect(await lookUpSong({ title: "Test Tone", artist: "Sine Wave" })).toMatchObject({
       source: "deezer",
     });
+  });
+
+  it("says why a song wasn't found: each search, its closest answer, a catalogue that was busy", async () => {
+    let itunesBusy = true;
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) {
+        if (itunesBusy) return new Response("", { status: 403 });
+        return json(itunesAnswer({ ...SINE_SONG, trackName: "Test Tone (Live)" }));
+      }
+      return json({ data: [{ id: 1, title: "Test Tone", artist: { name: "Someone Else" } }] });
+    });
+    const busy = await lookUpSongNoted({ title: "Sine Wave - Test Tone", artist: "SineWaveVEVO" });
+    expect(busy).toEqual({
+      match: null,
+      notes: [
+        "iTunes was busy, so it wasn't asked",
+        "Deezer, “Sine Wave Test Tone”: 1 answer; closest “Test Tone” by Someone Else: a different artist",
+        "Deezer, “SineWave Sine Wave - Test Tone”: 1 answer, none with that title or artist (first: “Test Tone” by Someone Else)",
+      ],
+    });
+    // With iTunes answering: its closest answer, and why it wasn't taken.
+    resetCatalogues();
+    itunesBusy = false;
+    const again = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" });
+    expect(again.notes[0]).toBe(
+      "iTunes, “Sine Wave Test Tone”: 1 answer; closest “Test Tone (Live)” by Sine Wave: a different title",
+    );
   });
 
   it("says when neither catalogue can be reached", async () => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Check, Loader2, Minus, Wand2, X } from "lucide-react";
+import { api } from "@shared/routes";
 import type { MusicTrack, SongLookup } from "@shared/schema";
 import type { PlayerTrack } from "@/lib/music";
 import {
@@ -106,12 +107,12 @@ export function FillInDetails({
         const { key, title } = track;
         try {
           const lookup = await lookUpSongDetails(track.id, abort.signal);
-          if (lookup.missing.length === 0) {
-            complete++;
-            report({ key, title, result: "none", text: "has every detail already" });
-          } else if (lookup.problem) {
+          if (lookup.problem) {
             failed.push({ title, message: lookup.problem });
             report({ key, title, result: "failed", text: `can't be changed: ${lookup.problem}` });
+          } else if (lookup.missing.length === 0) {
+            complete++;
+            report({ key, title, result: "none", text: "has every detail already" });
           } else if (!lookup.writable) {
             unwritable.push(track.fileName);
             report({ key, title, result: "none", text: "this kind of file can't hold tags" });
@@ -125,7 +126,14 @@ export function FillInDetails({
             });
           } else {
             notFound++;
-            report({ key, title, result: "none", text: "not found in iTunes or Deezer" });
+            report({
+              key,
+              title,
+              result: "none",
+              text: ["not found in iTunes or Deezer", lookup.notes.join("; ")]
+                .filter(Boolean)
+                .join(": "),
+            });
           }
         } catch (err) {
           if (!abort.signal.aborted) {
@@ -330,6 +338,14 @@ function Outcomes({ outcomes }: { outcomes: Outcome[] }) {
           </li>
         ))}
       </ul>
+      <a
+        href={api.music.detailsLog.path}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-1 inline-block text-muted-foreground underline hover:text-foreground"
+      >
+        The details log: every song looked up, written or downloaded, and why
+      </a>
     </details>
   );
 }
