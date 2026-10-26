@@ -413,7 +413,7 @@ export function facetChoicesOf(
 }
 
 /** Letters and digits only, lower case, without accents: "Hip-Hop/Rap" → "hiphoprap". */
-const squashed = (text: string) => foldSquashed(text, "latin", (t) => t.toLocaleLowerCase());
+const squashed = (text: string) => foldSquashed(text, (t) => t.toLocaleLowerCase());
 
 /**
  * The choices whose name has what's typed — in any case, without accents,

@@ -433,7 +433,7 @@ export async function readSongFiles(
  * anything that isn't a letter or digit a space. "Beyoncé — Halo!" → "beyonce halo".
  */
 export function words(text: string): string {
-  return foldWords(text, "all");
+  return foldWords(text);
 }
 
 /** Does `text` have `phrase` in it, as whole words? */

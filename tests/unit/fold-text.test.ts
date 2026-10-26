@@ -6,93 +6,57 @@ import { artistKey } from "../../shared/name-noise";
 import { searchableText } from "../../client/src/lib/history-filter";
 import { foldCase, foldSquashed, foldWords } from "../../shared/fold-text";
 
-// What each feature's name folding gives today, recorded before they were moved onto
-// shared/fold-text.ts: the move must not change one of them. Some of these are
-// surprising (see the notes); changing them is a decision of its own.
-const TODAY = {
-  words: {
-    "Beyoncé — Halo!": "beyonce halo",
-    "Mötley Crüe": "motley crue",
-    "AC/DC & Friends": "ac dc friends",
-    "हिन्दी गाना": "हनद गन",
-    "Sigur Rós – Hoppípolla": "sigur ros hoppipolla",
-    "  The Beatles  ": "the beatles",
-    İstanbul: "istanbul",
-    "ＦＵＬＬ　ＷＩＤＴＨ ½": "full width 1 2",
-    "Café del Mar (Remix)": "cafe del mar remix",
-    "Ñandú 2005": "nandu 2005",
-  },
-  normalize: {
-    "Beyoncé — Halo!": "beyonce halo",
-    "Mötley Crüe": "motley crue",
-    "AC/DC & Friends": "ac dc friends",
-    "हिन्दी गाना": "",
-    "Sigur Rós – Hoppípolla": "sigur ros hoppipolla",
-    "  The Beatles  ": "the beatles",
-    İstanbul: "istanbul",
-    "ＦＵＬＬ　ＷＩＤＴＨ ½": "full width 1 2",
-    "Café del Mar (Remix)": "cafe del mar remix",
-    "Ñandú 2005": "nandu 2005",
-  },
-  plain: {
-    "Beyoncé — Halo!": "beyonce halo",
-    "Mötley Crüe": "motley crue",
-    "AC/DC & Friends": "ac dc and friends",
-    "हिन्दी गाना": "ह न द ग न",
-    "Sigur Rós – Hoppípolla": "sigur ros hoppipolla",
-    "  The Beatles  ": "the beatles",
-    İstanbul: "istanbul",
-    "ＦＵＬＬ　ＷＩＤＴＨ ½": "full width 1 2",
-    "Café del Mar (Remix)": "cafe del mar remix",
-    "Ñandú 2005": "nandu 2005",
-  },
-  artistKey: {
-    "Beyoncé — Halo!": "beyonce halo",
-    "Mötley Crüe": "mo tley cru e",
-    "AC/DC & Friends": "ac dc friends",
-    "हिन्दी गाना": "ह न द ग न",
-    "Sigur Rós – Hoppípolla": "sigur ro s hoppi polla",
-    "  The Beatles  ": "the beatles",
-    İstanbul: "i stanbul",
-    "ＦＵＬＬ　ＷＩＤＴＨ ½": "full width 1 2",
-    "Café del Mar (Remix)": "cafe del mar remix",
-    "Ñandú 2005": "n andu 2005",
-  },
-  searchableText: {
-    "Beyoncé — Halo!": "beyonce halo",
-    "Mötley Crüe": "motley crue",
-    "AC/DC & Friends": "ac dc friends",
-    "हिन्दी गाना": "ह न द ग न",
-    "Sigur Rós – Hoppípolla": "sigur ros hoppipolla",
-    "  The Beatles  ": "the beatles",
-    İstanbul: "istanbul",
-    "ＦＵＬＬ　ＷＩＤＴＨ ½": "full width 1 2",
-    "Café del Mar (Remix)": "cafe del mar remix",
-    "Ñandú 2005": "nandu 2005",
-  },
-} as const;
+// Every feature folds a name the same way, so a name one feature finds the
+// others find too. Before they shared shared/fold-text.ts, they didn't: Fill
+// in details' artist check made "Mötley Crüe" "mo tley cru e" (so it never
+// matched "Motley Crue"), search dropped a Hindi title to nothing, and the
+// others broke Hindi words apart ("हनद गन", "ह न द ग न").
+const FOLDED = {
+  "Beyoncé — Halo!": "beyonce halo",
+  "Mötley Crüe": "motley crue",
+  "AC/DC & Friends": "ac dc friends",
+  "हिन्दी गाना": "हिन्दी गाना",
+  "Sigur Rós – Hoppípolla": "sigur ros hoppipolla",
+  "  The Beatles  ": "the beatles",
+  İstanbul: "istanbul",
+  "ＦＵＬＬ　ＷＩＤＴＨ ½": "full width 1 2",
+  "Café del Mar (Remix)": "cafe del mar remix",
+  "Ñandú 2005": "nandu 2005",
+};
 
 const FOLDS = { words, normalize, plain, artistKey, searchableText };
 
-describe("each feature's folding, as it was", () => {
+describe("each feature's folding", () => {
   for (const [name, fold] of Object.entries(FOLDS)) {
-    it(name, () => {
-      const today = TODAY[name as keyof typeof TODAY];
-      for (const [input, folded] of Object.entries(today)) expect(fold(input), input).toBe(folded);
+    it(`${name} folds like the others`, () => {
+      for (const [input, folded] of Object.entries(FOLDED)) {
+        // Catalogue look-ups also read "&" as "and" ("Simon & Garfunkel" is "Simon and Garfunkel").
+        const expected = name === "plain" ? folded.replace("ac dc", "ac dc and") : folded;
+        expect(fold(input), input).toBe(expected);
+      }
     });
   }
+
+  it("matches a name typed with or without its accents", () => {
+    for (const fold of Object.values(FOLDS)) {
+      expect(fold("Mötley Crüe")).toBe(fold("Motley Crue"));
+      expect(fold("Sigur Rós")).toBe(fold("Sigur Ros"));
+    }
+    expect(artistKey("Beyoncé")).toBe(artistKey("BEYONCE"));
+  });
 });
 
 describe("fold-text", () => {
-  it("takes every mark, only the Latin accents, or none", () => {
-    expect(foldCase("Mötley हिन्दी", "all")).toBe("motley हनद");
-    expect(foldCase("Mötley", "latin")).toBe("motley");
-    expect(foldCase("Mötley", "keep")).toBe("mo\u0308tley");
+  it("drops Latin accents and keeps other scripts' marks", () => {
+    expect(foldCase("Mötley")).toBe("motley");
+    expect(foldCase("हिन्दी")).toBe("हिन्दी");
+    expect(foldCase("İstanbul")).toBe("istanbul");
   });
 
   it("makes words, or squashes them together", () => {
     expect(foldWords("  Beyoncé — Halo! ")).toBe("beyonce halo");
+    expect(foldWords("हिन्दी — गाना!")).toBe("हिन्दी गाना");
     expect(foldSquashed("Hip-Hop/Rap")).toBe("hiphoprap");
-    expect(foldSquashed("I", "latin", (t) => t.toLocaleLowerCase("tr"))).toBe("ı");
+    expect(foldSquashed("I", (t) => t.toLocaleLowerCase("tr"))).toBe("ı");
   });
 });

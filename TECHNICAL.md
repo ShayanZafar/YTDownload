@@ -458,11 +458,12 @@ What each file does, and the function and constant names to look for. This was C
   exact text matching, nothing else) and `audioLinkOf()` (what a download or save may fetch: a
   YouTube video's canonical watch link or a SoundCloud track's — the only links that reach yt-dlp);
   `shared/fold-text.ts` is how every name is folded for matching (`foldCase()`, `foldWords()`,
-  `foldSquashed()`: lower case, accents gone, punctuation a space): search ranking
+  `foldSquashed()`: lower case, Latin accents gone, punctuation a space): search ranking
   (`normalize()`), finding songs in the folder (`words()`), the catalogues (`plain()`), Sanitize's
-  artist keys (`artistKey()`), song names and the page's filters all call it, each saying which
-  marks go (`"all"`, `"latin"` or `"keep"`, as they did before; a new comparison uses
-  `foldWords()`; pinned in `tests/unit/fold-text.test.ts`);
+  artist keys (`artistKey()`), song names and the page's filters all call it, so they all agree:
+  Latin accents go ("Mötley Crüe" is "motley crue"), other scripts keep their marks (a Hindi
+  title stays whole); a new comparison uses `foldWords()`; pinned in
+  `tests/unit/fold-text.test.ts`);
   `shared/filename.ts` has
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
