@@ -17,7 +17,7 @@
  * 3. or is named exactly like the song ("Bohemian Rhapsody.mp3"), with no
  *    artist tag that says it's someone else's.
  */
-import { promises as fs, type Dirent } from "fs";
+import { promises as fs, type Dirent, type Stats } from "fs";
 import path from "path";
 import type { IAudioMetadata, IOptions } from "music-metadata";
 import { AUDIO_TYPES, genresOf } from "@shared/audio-types";
@@ -88,11 +88,12 @@ export type AudioFile = {
 /**
  * The audio files in `folder` and its subfolders (not hidden or system ones,
  * and not through shortcuts/links), in the same order every time. `complete`
- * is false if there were more than the app looks at.
+ * is false if there were more than the app looks at. With `others`, every
+ * other file found goes there (for Housekeeping).
  */
 export async function findAudioFiles(
   folder: string,
-  { maxFiles = MAX_SONG_FILES } = {},
+  { maxFiles = MAX_SONG_FILES, others }: { maxFiles?: number; others?: AudioFile[] } = {},
 ): Promise<{ files: AudioFile[]; complete: boolean }> {
   const files: AudioFile[] = [];
   let complete = true;
@@ -111,6 +112,7 @@ export async function findAudioFiles(
     items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
     const audio: string[] = [];
+    const other: string[] = [];
     for (const item of items) {
       if (++entries > MAX_ENTRIES) {
         complete = false;
@@ -122,7 +124,16 @@ export async function findAudioFiles(
         else complete = false;
       } else if (item.isFile() && AUDIO_EXTENSIONS.has(path.extname(item.name).toLowerCase())) {
         audio.push(path.join(dir, item.name));
+      } else if (item.isFile() && others) {
+        other.push(path.join(dir, item.name));
       }
+    }
+    if (others) {
+      const found = await Promise.all(other.map((file) => fs.stat(file).catch(() => undefined)));
+      other.forEach((absolute, i) => {
+        const stat = found[i];
+        if (stat) others.push(audioFileOf(folder, absolute, stat));
+      });
     }
 
     const stats = await Promise.all(audio.map((file) => fs.stat(file).catch(() => undefined)));
@@ -133,13 +144,7 @@ export async function findAudioFiles(
         complete = false;
         return;
       }
-      files.push({
-        absolute,
-        relative: path.relative(folder, absolute),
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-        addedMs: Math.max(stat.birthtimeMs || 0, stat.mtimeMs),
-      });
+      files.push(audioFileOf(folder, absolute, stat));
     });
     if (entries > MAX_ENTRIES || files.length >= maxFiles) {
       if (queue.length > 0) complete = false;
@@ -147,6 +152,16 @@ export async function findAudioFiles(
     }
   }
   return { files, complete };
+}
+
+function audioFileOf(folder: string, absolute: string, stat: Stats): AudioFile {
+  return {
+    absolute,
+    relative: path.relative(folder, absolute),
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    addedMs: Math.max(stat.birthtimeMs || 0, stat.mtimeMs),
+  };
 }
 
 // --- Reading tags -------------------------------------------------------------------

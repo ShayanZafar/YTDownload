@@ -32,7 +32,7 @@ import {
 import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
 import { lateDetails, lookUpDownload } from "./download-details";
-import { settings } from "./settings";
+import { settings, type Settings } from "./settings";
 import { cpuCores } from "./cpu-cores";
 import { isLocalRequest, localOnly, sameOriginOnly } from "./local-only";
 import { LyricsError, findLyrics } from "./lyrics";
@@ -48,6 +48,7 @@ import { saveIntoFolder } from "./save";
 import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import { readTags, songsInFolder, type AudioFile } from "./library";
 import { writePlaylistFile } from "./playlist-file";
+import { checkSong, deleteOtherFile, otherFiles } from "./housekeeping";
 import { CatalogueError } from "./catalogues";
 import {
   convertedForBrowser,
@@ -77,6 +78,7 @@ function sendFolderError(res: Response, err: unknown, fallback: string) {
 
 const NO_FOLDER = "Choose a folder to save into first.";
 const SONG_GONE = "That song isn't in the folder any more.";
+const FILE_GONE = "That file isn't in the folder any more.";
 const PLAYER_NOT_LOCAL =
   "The songs in the Save to folder play only in a browser on the computer running the app.";
 
@@ -150,11 +152,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get(api.settings.get.path, async (req, res) => {
     const local = isLocalRequest(req);
     try {
-      const { saveFolder } = await settings.get();
+      const { saveFolder, qualityBar } = await settings.get();
       const body: SaveSettings = {
         saveFolder: local ? saveFolder : null,
         canSaveToFolder: local,
         cpuCores: cpuCores(),
+        qualityBar,
       };
       res.json(body);
     } catch (err) {
@@ -168,12 +171,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       // Checked by actually writing there, so a folder the app can't use is
       // refused now rather than at the first download.
-      const saveFolder =
-        input.data.saveFolder === null
-          ? null
-          : await assertWritableFolder(input.data.saveFolder, { tryWriting: true });
-      await settings.update({ saveFolder });
-      const body: SaveSettings = { saveFolder, canSaveToFolder: true, cpuCores: cpuCores() };
+      const patch: Partial<Settings> = {};
+      if (input.data.saveFolder !== undefined) {
+        patch.saveFolder =
+          input.data.saveFolder === null
+            ? null
+            : await assertWritableFolder(input.data.saveFolder, { tryWriting: true });
+      }
+      if (input.data.qualityBar) patch.qualityBar = input.data.qualityBar;
+      const { saveFolder, qualityBar } = await settings.update(patch);
+      const body: SaveSettings = {
+        saveFolder,
+        canSaveToFolder: true,
+        cpuCores: cpuCores(),
+        qualityBar,
+      };
       res.json(body);
     } catch (err) {
       sendFolderError(res, err, "Couldn't save the setting");
@@ -455,6 +467,55 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         return res.status(404).json({ message: SONG_GONE });
       }
       sendFolderError(res, err, "Couldn't delete that song");
+    }
+  });
+
+  // Housekeeping: a song read all the way through, and what's wrong with it.
+  app.get(api.music.check.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    try {
+      const file = await songFor(req, res, { anyFile: true });
+      if (!file) return;
+      res.json(await checkSong(file));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: SONG_GONE });
+      }
+      sendFolderError(res, err, "Couldn't check that song");
+    }
+  });
+
+  // Housekeeping: the folder's files that aren't songs, and deleting one.
+  app.get(api.music.otherFiles.path, localOnly(PLAYER_NOT_LOCAL), async (_req, res) => {
+    try {
+      const { saveFolder } = await settings.get();
+      if (!saveFolder) return res.status(409).json({ message: NO_FOLDER });
+      res.json({ files: (await otherFiles(saveFolder)).files });
+    } catch (err) {
+      sendFolderError(res, err, "Couldn't look through the folder");
+    }
+  });
+
+  app.delete(api.music.removeOtherFile.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
+    const input = api.music.removeOtherFile.input.safeParse(req.body ?? {});
+    const id = musicIdSchema.safeParse(req.params.id);
+    if (!input.success) return res.status(400).json(validationError(input.error));
+    if (!id.success) return res.status(400).json({ message: id.error.issues[0].message });
+    try {
+      const { saveFolder } = await settings.get();
+      if (!saveFolder) return res.status(409).json({ message: NO_FOLDER });
+      const permanently = input.data.permanently === true;
+      if (!(await deleteOtherFile(saveFolder, id.data, { permanently }))) {
+        return res.status(404).json({ message: FILE_GONE });
+      }
+      res.json({ trashed: !permanently, bin: binName() });
+    } catch (err) {
+      if (err instanceof NoBinError) {
+        return res.status(409).json({ message: err.message, bin: binName(), noBin: true });
+      }
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return res.status(404).json({ message: FILE_GONE });
+      }
+      sendFolderError(res, err, "Couldn't delete that file");
     }
   });
 

@@ -20,13 +20,14 @@ afterEach(async () => {
 
 describe("SettingsStore", () => {
   it("starts with downloads going to the browser", async () => {
-    expect(await store.get()).toEqual({ saveFolder: null });
+    expect(await store.get()).toEqual({ saveFolder: null, qualityBar: "128" });
   });
 
   it("remembers the folder in a small JSON file", async () => {
-    expect(await store.update({ saveFolder: "C:\\Music" })).toEqual({ saveFolder: "C:\\Music" });
-    expect(await new SettingsStore(() => file).get()).toEqual({ saveFolder: "C:\\Music" });
-    expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual({ saveFolder: "C:\\Music" });
+    const saved = { saveFolder: "C:\\Music", qualityBar: "128" };
+    expect(await store.update({ saveFolder: "C:\\Music" })).toEqual(saved);
+    expect(await new SettingsStore(() => file).get()).toEqual(saved);
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).toEqual(saved);
     // No temp file left over.
     expect(await fs.readdir(path.dirname(file))).toEqual(["settings.json"]);
   });
@@ -38,14 +39,26 @@ describe("SettingsStore", () => {
       store.update({ saveFolder: null }),
       store.update({ saveFolder: "/c" }),
     ]);
-    expect(await store.get()).toEqual({ saveFolder: "/c" });
+    expect(await store.get()).toEqual({ saveFolder: "/c", qualityBar: "128" });
+  });
+
+  it("keeps Housekeeping's quality bar: 128 kbps for a file from before it, or one that's wrong", async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ saveFolder: "/music" }));
+    expect(await store.get()).toEqual({ saveFolder: "/music", qualityBar: "128" });
+    expect(await store.update({ qualityBar: "lossless" })).toEqual({
+      saveFolder: "/music",
+      qualityBar: "lossless",
+    });
+    await fs.writeFile(file, JSON.stringify({ saveFolder: "/music", qualityBar: "999" }));
+    expect(await store.get()).toEqual({ saveFolder: "/music", qualityBar: "128" });
   });
 
   it("treats a damaged file as no settings rather than failing", async () => {
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, "{ not json");
-    expect(await store.get()).toEqual({ saveFolder: null });
+    expect(await store.get()).toEqual({ saveFolder: null, qualityBar: "128" });
     await fs.writeFile(file, JSON.stringify({ saveFolder: 42 }));
-    expect(await store.get()).toEqual({ saveFolder: null });
+    expect(await store.get()).toEqual({ saveFolder: null, qualityBar: "128" });
   });
 });

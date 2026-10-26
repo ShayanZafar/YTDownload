@@ -1,21 +1,24 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { z } from "zod";
+import { qualityBarSchema } from "@shared/schema";
 import { retryWhenBusy } from "./retry-when-busy";
 
 /**
  * App settings that live on the server, so every browser on this computer
- * shares them: for now just the "Save to" folder. Kept as a small JSON file
+ * shares them: the "Save to" folder, and Housekeeping's quality bar. Kept as a small JSON file
  * next to the history (data/settings.json, or wherever SETTINGS_FILE points).
  */
 export const settingsSchema = z.object({
   /** Absolute path of the folder downloads are saved into, or null for the browser's downloads. */
   saveFolder: z.string().nullable().default(null),
+  /** Housekeeping lists songs below this as low quality (the owner's choice: 128 kbps). */
+  qualityBar: qualityBarSchema.catch("128").default("128"),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
 
-const DEFAULT_SETTINGS: Settings = { saveFolder: null };
+const DEFAULT_SETTINGS: Settings = { saveFolder: null, qualityBar: "128" };
 
 export function settingsFilePath(): string {
   return path.resolve(

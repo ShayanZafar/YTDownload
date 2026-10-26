@@ -2,6 +2,9 @@ import { z } from "zod";
 import {
   audioSources,
   deletedSongSchema,
+  folderFilesSchema,
+  qualityBarSchema,
+  songCheckSchema,
   renamedSongSchema,
   sanitizedSongSchema,
   downloadSchema,
@@ -290,10 +293,16 @@ export const api = {
     update: {
       method: "PUT" as const,
       path: "/api/settings" as const,
-      input: z.object({
-        /** A folder on this computer, or null to go back to the browser's downloads. */
-        saveFolder: z.string().max(1000).nullable(),
-      }),
+      input: z
+        .object({
+          /** A folder on this computer, or null to go back to the browser's downloads. */
+          saveFolder: z.string().max(1000).nullable().optional(),
+          /** Housekeeping's bar for a song's sound. */
+          qualityBar: qualityBarSchema.optional(),
+        })
+        .refine((input) => input.saveFolder !== undefined || input.qualityBar !== undefined, {
+          message: "Give a folder or a quality bar.",
+        }),
       responses: { 200: saveSettingsSchema, 400: errorSchemas.validation },
     },
   },
@@ -414,6 +423,29 @@ export const api = {
     remove: {
       method: "DELETE" as const,
       path: "/api/music/:id" as const,
+      input: z.object({ permanently: z.boolean().optional() }),
+      responses: { 200: deletedSongSchema, 409: noBinSchema },
+    },
+    /**
+     * Housekeeping: reads a song all the way through (ffmpeg) and says what's
+     * wrong with it — not audio, cut short, damaged — with its bitrate.
+     * Nothing is changed.
+     */
+    check: {
+      method: "GET" as const,
+      path: "/api/music/:id/check" as const,
+      responses: { 200: songCheckSchema },
+    },
+    /** Housekeeping: the folder's files that aren't songs (pictures, programs, leftovers). */
+    otherFiles: {
+      method: "GET" as const,
+      path: "/api/folder-files" as const,
+      responses: { 200: folderFilesSchema },
+    },
+    /** Deletes a file that isn't a song, as `remove` does a song: to the bin, or for good. */
+    removeOtherFile: {
+      method: "DELETE" as const,
+      path: "/api/folder-files/:id" as const,
       input: z.object({ permanently: z.boolean().optional() }),
       responses: { 200: deletedSongSchema, 409: noBinSchema },
     },

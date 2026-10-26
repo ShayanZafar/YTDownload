@@ -186,6 +186,15 @@ export const spotifyPlaylistSchema = z.object({
 export type SpotifyPlaylist = z.infer<typeof spotifyPlaylistSchema>;
 export type PlaylistMore = NonNullable<SpotifyPlaylist["more"]>;
 
+/**
+ * Housekeeping's bar for a song's sound: songs below it are listed as low
+ * quality. A bitrate in kbps (lossless files always pass), "lossless" for
+ * lossless files only, or "off" not to look.
+ */
+export const qualityBars = ["off", "128", "192", "256", "lossless"] as const;
+export const qualityBarSchema = z.enum(qualityBars);
+export type QualityBar = z.infer<typeof qualityBarSchema>;
+
 /** The "Save to" setting as the page sees it. */
 export const saveSettingsSchema = z.object({
   /** Folder downloads are saved into, or null for the browser's own downloads. */
@@ -201,6 +210,8 @@ export const saveSettingsSchema = z.object({
    * says nothing about the app's computer.)
    */
   cpuCores: z.number().int().positive(),
+  /** Housekeeping's bar for a song's sound (see qualityBars). */
+  qualityBar: qualityBarSchema.default("128"),
 });
 
 export type SaveSettings = z.infer<typeof saveSettingsSchema>;
@@ -456,6 +467,40 @@ export type RenamedSong = z.infer<typeof renamedSongSchema>;
 export const sanitizedSongSchema = z.object({ track: musicTrackSchema });
 
 export type SanitizedSong = z.infer<typeof sanitizedSongSchema>;
+
+/** Housekeeping's check of one folder song: what's wrong with it, and how it's encoded. */
+export const songCheckSchema = z.object({
+  /** It isn't audio, by its content: what it is ("a Windows program"). */
+  notAudio: z.string().nullable(),
+  /** It ends long before the length its header gives: how far it plays, and what it says. */
+  cutShort: z.object({ plays: z.number(), says: z.number() }).nullable(),
+  /** It can't be read through: why. */
+  damaged: z.string().nullable(),
+  /** How long it plays (or, if that's unknown, says it is), in seconds. */
+  seconds: z.number().nullable(),
+  /** Its average bitrate, for a lossy file. */
+  kbps: z.number().nullable(),
+  lossless: z.boolean(),
+  /** "MPEG 1 Layer 3", "AAC", "FLAC"… as music-metadata names it. */
+  codec: z.string().nullable(),
+});
+
+export type SongCheck = z.infer<typeof songCheckSchema>;
+
+/** A file in the "Save to" folder that isn't a song (Housekeeping), by an id like a song's. */
+export const folderFileSchema = z.object({
+  id: z.string(),
+  path: z.string(),
+  size: z.number(),
+  /** What it is: "a picture", "a Windows program", "a download that didn't finish", "a TXT file". */
+  what: z.string(),
+  /** Left behind by a download that didn't finish (".part"): nothing to keep. */
+  leftover: z.boolean(),
+});
+
+export type FolderFile = z.infer<typeof folderFileSchema>;
+
+export const folderFilesSchema = z.object({ files: z.array(folderFileSchema) });
 
 /**
  * A `409` for a delete that would have had to be for good — the song's drive
