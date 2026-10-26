@@ -1,7 +1,7 @@
 ---
 paths:
   - "server/storage.ts"
-  - "server/routes.ts"
+  - "server/routes/history.ts"
   - "server/local-only.ts"
   - "client/src/components/{recent-extractions,history-search}.tsx"
   - "client/src/hooks/use-history-actions.tsx"

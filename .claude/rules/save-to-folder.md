@@ -1,6 +1,7 @@
 ---
 paths:
   - "server/{save,folders,settings,local-only,library,playlist-file,retry-when-busy}.ts"
+  - "server/routes/folders.ts"
   - "client/src/lib/save-to-folder.ts"
   - "client/src/hooks/{use-save-settings,use-songs-in-folder}.ts"
   - "client/src/components/{folder-picker,save-to-setting,preview-card}.tsx"

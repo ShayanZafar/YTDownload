@@ -1,6 +1,7 @@
 ---
 paths:
   - "server/{spotify,spotify-sign-in,youtube-playlist,library,playlist-file}.ts"
+  - "server/routes/{spotify,search}.ts"
   - "shared/spotify-names.ts"
   - "client/src/components/{spotify-playlist,recent-playlists,spotify-account}.tsx"
   - "client/src/hooks/{use-download-all,use-songs-in-folder,use-ask-again-at,use-youtube,use-spotify-account}.ts"

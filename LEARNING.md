@@ -16,12 +16,12 @@ If something feels arbitrary, jump to [Why we chose what we chose](#why-we-chose
 | `.csproj`                             | **`package.json`**                           | Lists dependencies and runnable scripts.                                                                                   |
 | NuGet                                 | **npm registry**                             | `npm install foo` ↔ `dotnet add package Foo`.                                                                              |
 | `Program.cs` / `Startup.cs`           | **`server/index.ts`**                        | Entry point, sets up middleware, starts the listener.                                                                      |
-| ASP.NET Core controllers              | **`server/routes.ts`**                       | Express routes are the equivalent of attribute-routed controllers.                                                         |
+| ASP.NET Core controllers              | **`server/routes/`**                         | Express routes are the equivalent of attribute-routed controllers.                                                         |
 | ASP.NET Core middleware pipeline      | **Express middleware**                       | Same pipeline pattern: `app.use(...)`, request → response.                                                                 |
 | Entity Framework Core                 | **Nothing — there's no database**            | The download history is a JSON file. See §5.                                                                               |
 | `DbContext` / repository              | **`FileStorage` in `server/storage.ts`**     | Reads and writes `data/history.json`.                                                                                      |
 | DTOs / models                         | **`shared/schema.ts`**                       | Zod schemas + inferred TypeScript types — the single source of truth for both sides.                                       |
-| FluentValidation / DataAnnotations    | **Zod**                                      | Schema-based runtime validation. Used to validate request bodies in `server/routes.ts`.                                    |
+| FluentValidation / DataAnnotations    | **Zod**                                      | Schema-based runtime validation. Used to validate request bodies in `server/routes/`.                                      |
 | Razor / Blazor                        | **React + JSX/TSX**                          | A single-page app: one HTML shell, then React renders everything in the browser. Bigger conceptual leap; see §7.           |
 | Refit + `IMemoryCache` + `HttpClient` | **TanStack Query (`@tanstack/react-query`)** | Typed HTTP fetching with built-in caching, retries, and request deduplication for the frontend.                            |
 | `appsettings.json` + environment      | **`.env` file + `process.env`**              | Same idea, simpler. See `.env.example`.                                                                                    |
@@ -76,7 +76,7 @@ client/                     ← React frontend (the equivalent of a Blazor proje
   src/
 server/                     ← Express API (the equivalent of Api + Domain + Data)
   index.ts                  ← Program.cs
-  routes.ts                 ← Controllers
+  routes/                   ← Controllers (one file per area)
   storage.ts                ← Repository (IStorage) over a JSON file
   audio.ts                  ← yt-dlp / ffmpeg pipeline arguments
   youtube-url.ts            ← Pure domain helpers
@@ -98,7 +98,7 @@ The single biggest difference: **`shared/`**. In .NET, sharing types between a w
 The mental model is identical: a pipeline of middleware that turns an HTTP request into a response. The syntax is just smaller and less attribute-heavy.
 
 ```ts
-// server/routes.ts — equivalent of an attribute-routed controller
+// server/routes/ — equivalent of an attribute-routed controller
 app.post(api.video.info.path, async (req, res) => {
   const input = api.video.info.input.parse(req.body); // ← Zod validation
   const videoId = extractVideoId(input.url);
@@ -220,7 +220,7 @@ If the app ever had several server instances, many users, or needed to search/fi
 // shared/routes.ts
 input: z.object({ url: z.url() }),
 
-// server/routes.ts — runtime check at the controller boundary
+// server/routes/ — runtime check at the controller boundary
 const input = api.video.info.input.parse(req.body);
 //                                   ↑ throws ZodError if shape is wrong
 ```
@@ -411,7 +411,7 @@ If you want to trace one full request top-to-bottom, this is the path:
 
 1. **`server/index.ts`** — the entry point (`Program.cs` equivalent). Sets up middleware, registers routes, starts listening.
 2. **`shared/routes.ts`** — the API contract. Paths, methods, input/output Zod schemas. Read this once and you'll understand what the API does.
-3. **`server/routes.ts`** — the actual handlers. Each one validates input with Zod, calls into `storage` or yt-dlp/ffmpeg (`server/audio.ts`), and returns JSON or streams audio.
+3. **`server/routes/`** — the actual handlers. Each one validates input with Zod, calls into `storage` or yt-dlp/ffmpeg (`server/audio.ts`), and returns JSON or streams audio.
 4. **`server/storage.ts`** — the repository.
 5. **`shared/schema.ts`** — the shape of a history entry.
 6. **`client/src/pages/Home.tsx`** — the UI's only page; a good entry point to see how React components, hooks, and TanStack Query fit together. It keeps the state and passes it down as props to the components it's built from (`find-box.tsx`, `preview-card.tsx`, `search-results.tsx`, `recent-extractions.tsx` in `client/src/components/`) — like a parent view model handing data to child controls.

@@ -1,6 +1,7 @@
 ---
 paths:
   - "server/{music,lyrics,trash,trim,catalogues,song-details,details-log,not-found,housekeeping}.ts"
+  - "server/routes/{music,trim,song-details,housekeeping}.ts"
   - "shared/{audio-types,name-noise}.ts"
   - "client/src/App.tsx"
   - "client/src/hooks/{use-player,use-player-shortcuts}.tsx"
