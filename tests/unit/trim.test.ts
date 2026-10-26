@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { spawn } from "child_process";
 import { promises as fs } from "fs";
 import os from "os";
@@ -237,6 +237,44 @@ describe("Cutting a part out", () => {
     expect(format.lossless).toBe(true);
     expect(format.bitsPerSample).toBe(24);
     expect(common.title).toBe("Lossless");
+  });
+
+  it("lets one change at a time at a song: a second trim while one runs gets a 409", async () => {
+    await appMp3("twice.mp3");
+    const file = await audioFile("twice.mp3");
+    const first = trimSong(folder, file, { start: 5, end: 7 });
+    await expect(trimSong(folder, file, { start: 0, end: 1 })).rejects.toMatchObject({
+      status: 409,
+      message: "That song is being changed already.",
+    });
+    expect((await first).removed).toBe(2);
+    // Free again once it's done.
+    await expect(
+      trimSong(folder, await audioFile("twice.mp3"), { start: 0, end: 1 }),
+    ).resolves.toMatchObject({ removed: 1 });
+  });
+
+  it("writes the trimmed song over the old one when Windows won't let it be replaced", async () => {
+    await appMp3("held.mp3");
+    const target = path.join(folder, "held.mp3");
+    const rename = fs.rename;
+    // As when the player or another program has it open.
+    const refused = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === target) throw Object.assign(new Error("EPERM: held"), { code: "EPERM" });
+      return rename(from, to);
+    });
+    try {
+      const trimmed = await trimSong(folder, await audioFile("held.mp3"), { start: 5, end: 7 });
+      expect(trimmed.duration).toBeCloseTo(8, 0);
+      expect(refused).toHaveBeenCalled();
+    } finally {
+      refused.mockRestore();
+    }
+    const { format } = await parseFile(target, { duration: true });
+    expect(format.duration).toBeCloseTo(8, 0);
+    expect((await fs.readdir(folder)).filter((name) => name.startsWith("held"))).toEqual([
+      "held.mp3",
+    ]);
   });
 
   it("refuses to cut out the whole song, or past its end", async () => {

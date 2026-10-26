@@ -1154,6 +1154,8 @@ describe("writeSongDetails", () => {
     // To the millisecond (file systems keep finer times than a number of seconds can carry).
     expect(Math.abs(after.mtimeMs - before.mtimeMs)).toBeLessThan(1);
     if (before.birthtimeMs) expect(after.birthtimeMs).toBe(before.birthtimeMs);
+    // Written over in place: the same file, not a new one in its place.
+    expect(after.ino).toBe(before.ino);
     const { common, format } = await parseFile(file.absolute, { duration: true });
     expect(common).toMatchObject({
       title: "Test Tone", // kept: it had one

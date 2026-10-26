@@ -310,6 +310,16 @@ describe("replaceWithBetterCopy", () => {
     expect(common).toMatchObject({ title: "Low Tone", artist: "Sine Wave", album: "Tests" });
   });
 
+  it("lets one change at a time at a song: a second replace while one runs gets a 409", async () => {
+    const file = await song("Busy Tone.opus", 48);
+    const deps = { lookUp: async () => opusInfo(130), spawnSource: playing(opus20) };
+    const first = replaceWithBetterCopy(file, "https://youtu.be/ddddddddddd", deps);
+    await expect(
+      replaceWithBetterCopy(file, "https://youtu.be/ddddddddddd", deps),
+    ).rejects.toMatchObject({ status: 409, message: "That song is being changed already." });
+    expect((await first).codec).toBe("Opus");
+  });
+
   it("leaves the song as it was when the copy isn't its length, or the link isn't one", async () => {
     const file = await song("Sine Wave - Low Tone.mp3", 64);
     const before = await fs.readFile(file.absolute);
