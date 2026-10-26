@@ -5,7 +5,7 @@
 #
 # The branch holds the built app (dist/), what npm needs to install the
 # packages it runs with (package.json, package-lock.json, and
-# scripts/yt-dlp.mjs, which runs after the install), the Windows and Unix scripts, and
+# scripts/yt-dlp.mjs and scripts/ffmpeg-check.mjs, which run after the install), the Windows and Unix scripts, and
 # scripts/install/'s README, .gitignore and Start/Stop/Update shortcuts (.cmd for Windows,
 # .command for macOS, .sh for Linux).
 # Not yt-dlp or ffmpeg: each PC downloads its own when it installs the
@@ -54,7 +54,7 @@ jobs:
           cp -R dist package.json package-lock.json .env.example .gitattributes "$out/"
           cp -R scripts/windows "$out/scripts/windows"
           cp -R scripts/unix "$out/scripts/unix"
-          cp scripts/yt-dlp.mjs "$out/scripts/"
+          cp scripts/yt-dlp.mjs scripts/ffmpeg-check.mjs "$out/scripts/"
           cp scripts/install/Start.cmd scripts/install/Stop.cmd scripts/install/Update.cmd scripts/install/.gitignore "$out/"
           cp scripts/install/Start.command scripts/install/Stop.command scripts/install/Update.command "$out/"
           cp scripts/install/Start.sh scripts/install/Stop.sh scripts/install/Update.sh "$out/"
