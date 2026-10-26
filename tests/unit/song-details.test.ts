@@ -631,7 +631,7 @@ describe("lookUpSong", () => {
     );
   });
 
-  it("asks each catalogue no faster than its published limit, waiting for one's turn when it's the only one left", async () => {
+  it("asks each catalogue no faster than its published limit, waiting for one only a moment once another has answered", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
     try {
       const asked = { itunes: 0, deezer: 0, musicbrainz: 0 };
@@ -654,24 +654,24 @@ describe("lookUpSong", () => {
       // iTunes' 20 a minute, then Deezer's 50 in 5 seconds; the rest wait for Deezer.
       // MusicBrainz, for the songs neither has, one a second.
       expect(asked).toEqual({ itunes: 20, deezer: 50, musicbrainz: 1 });
-      // A minute later all 60 have been asked of MusicBrainz too, and 40 still
-      // wait for iTunes: there's no other catalogue left to ask them.
+      // A minute later every song has its answer: none waited out iTunes' minute.
       await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.musicbrainz.perMs * 60);
+      const answers = await Promise.all(songs);
       expect(asked).toMatchObject({ deezer: 60, musicbrainz: 60 });
       expect(asked.itunes).toBeLessThan(60);
-      // Two minutes on, iTunes has had its turns for all of them.
-      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.itunes.perMs * 2);
-      const answers = await Promise.all(songs);
-      expect(asked).toEqual({ itunes: 60, deezer: 60, musicbrainz: 60 });
-      // Every catalogue answered: none has them.
-      expect(answers.every((answer) => answer.match === null && answer.noneHasIt)).toBe(true);
-      expect(answers.some((answer) => answer.notes.some((note) => /busy/.test(note)))).toBe(false);
+      const skipped = answers.filter((answer) =>
+        answer.notes.includes("iTunes was busy, so it wasn't asked"),
+      );
+      expect(skipped).toHaveLength(60 - asked.itunes);
+      // Not marked Not found: iTunes may have them, and the next run asks it.
+      expect(skipped.every((answer) => answer.noneHasIt === false)).toBe(true);
+      expect(answers.every((answer) => answer.match === null)).toBe(true);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("waits once for a catalogue that refused, when there's no other left; if it refuses again, it's busy", async () => {
+  it("doesn't wait out a catalogue that refused once the others have answered", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
     try {
       let itunes = 0;
@@ -683,13 +683,14 @@ describe("lookUpSong", () => {
         return json(url.startsWith("https://musicbrainz.org/") ? { recordings: [] } : { data: [] });
       });
       const answer = lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" });
-      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.itunes.perMs * 3);
+      // Deezer and MusicBrainz answer within seconds, well inside iTunes' minute.
+      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.musicbrainz.perMs * 5);
       expect(await answer).toMatchObject({
         match: null,
         noneHasIt: false,
         notes: expect.arrayContaining(["iTunes was busy, so it wasn't asked"]),
       });
-      expect(itunes).toBe(2);
+      expect(itunes).toBe(1);
     } finally {
       vi.useRealTimers();
     }
@@ -711,6 +712,17 @@ describe("lookUpSong", () => {
     const match = await lookUpSong({ title: "Rebellion - Linkin Park (feat. Daron Malakian)" });
     expect(match).toMatchObject({ source: "deezer", song: { artist: "Linkin Park" } });
     expect(searched).toEqual(["Rebellion Linkin Park"]);
+  });
+
+  it("finds a “Song - Artist (Album)” name, the album in brackets after the artist", async () => {
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) return json(itunesAnswer());
+      if (url.startsWith("https://musicbrainz.org/")) return json({ recordings: [] });
+      if (!url.includes("/search?")) return json({});
+      return json({ data: [{ id: 1, title: "My December", artist: { name: "Linkin Park" } }] });
+    });
+    const match = await lookUpSong({ title: "My December - Linkin Park (Hybrid Theory)" });
+    expect(match).toMatchObject({ source: "deezer", song: { artist: "Linkin Park" } });
   });
 
   it("asks Deezer again without what versions add when its answers aren't the song", async () => {

@@ -53,6 +53,8 @@ beforeAll(async () => {
   process.env.SETTINGS_FILE = path.join(dir, "settings.json");
   process.env.PLAYER_CACHE_DIR = path.join(dir, "cache");
   process.env.DETAILS_NOT_FOUND_FILE = path.join(dir, "details-not-found.json");
+  // Renames are logged here, not in this computer's data/details.log.
+  process.env.DETAILS_LOG_FILE = path.join(dir, "details.log");
   // Deleted songs go here, not into this computer's Recycle Bin / Trash.
   process.env.TRASH_DIR = path.join(dir, "bin");
 
@@ -85,6 +87,7 @@ afterAll(async () => {
   delete process.env.SETTINGS_FILE;
   delete process.env.PLAYER_CACHE_DIR;
   delete process.env.DETAILS_NOT_FOUND_FILE;
+  delete process.env.DETAILS_LOG_FILE;
   delete process.env.TRASH_DIR;
   await fs.rm(dir, { recursive: true, force: true });
 });
@@ -430,6 +433,10 @@ describe("Music player (API)", () => {
     });
     const { common } = await parseFile(path.join(sub, "Nirvana - Lithium.mp3"));
     expect([common.title, common.artist]).toEqual(["Lithium", "Nirvana"]);
+    // Logged in the test's own log.
+    await expect
+      .poll(() => fs.readFile(path.join(dir, "details.log"), "utf8").catch(() => ""))
+      .toContain("renamed: title Lithium; artist Nirvana");
     const same = await request(app)
       .post(`/api/music/${both.body.track.id}/rename`)
       .send({ title: "Lithium" });
