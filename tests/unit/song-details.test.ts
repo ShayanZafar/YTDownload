@@ -714,6 +714,17 @@ describe("lookUpSong", () => {
     expect(searched).toEqual(["Rebellion Linkin Park"]);
   });
 
+  it("finds a “Song - Artist (Album)” name, the album in brackets after the artist", async () => {
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) return json(itunesAnswer());
+      if (url.startsWith("https://musicbrainz.org/")) return json({ recordings: [] });
+      if (!url.includes("/search?")) return json({});
+      return json({ data: [{ id: 1, title: "My December", artist: { name: "Linkin Park" } }] });
+    });
+    const match = await lookUpSong({ title: "My December - Linkin Park (Hybrid Theory)" });
+    expect(match).toMatchObject({ source: "deezer", song: { artist: "Linkin Park" } });
+  });
+
   it("asks Deezer again without what versions add when its answers aren't the song", async () => {
     const searched: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {

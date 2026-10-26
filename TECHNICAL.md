@@ -299,7 +299,8 @@ What each file does, and the function and constant names to look for. This was C
   any order (`namesBoth()`). `pickMatch()` takes only the same title by the same artist (or,
   without an artist, the same length) — or a title that differs only in brackets, the same length —
   best the artist's own, then the same title and length, on the artist's own album; the halves of
-  a name are also taken the other way round ("Rebellion - Linkin Park", `pickEither()`). The same
+  a name are also taken the other way round ("Rebellion - Linkin Park", `pickEither()`; an album
+  in brackets after the artist left out: "My December - Linkin Park (Hybrid Theory)"). The same
   title can have its words in another order ("Remix (Paul Oakenfold)"), "Remix" for "Mix", a
   featured artist after it ("ft. Daddy Yankee") left out, the same recording's notes ("(Original
   Mix)", "[Amended]") left out, a year or "original" after ours ("Heaven Lange Remix 1999"), no

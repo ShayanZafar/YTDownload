@@ -260,10 +260,13 @@ function fromAlbum(ours: string, song: CatalogueSong): boolean {
 
 const COVERS_RE = /\b(?:tribute|karaoke|covers?|made famous|originally performed|in the style)\b/i;
 
-/** The other way round: "Rebellion - Linkin Park" asked as Linkin Park's "Rebellion". */
+/**
+ * The other way round: "Rebellion - Linkin Park" asked as Linkin Park's "Rebellion", and
+ * "My December - Linkin Park (Hybrid Theory)" as Linkin Park's, the album in brackets left out.
+ */
 const swapped = (search: { track: string; artist: string }) => ({
   track: search.artist,
-  artist: search.track,
+  artist: search.track.replace(/(?:\s*[([][^()[\]]*[)\]])+$/, "").trim() || search.track,
 });
 
 /**
