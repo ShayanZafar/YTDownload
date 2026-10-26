@@ -18,3 +18,6 @@ paths:
 - `music-metadata` is ESM-only and describes `parseFile` only under the "node" exports condition,
   which TypeScript's `bundler` resolution ignores: `library.ts` loads it with `import()` and types it
   by hand.
+- The tags `readTags()` reads are kept on disk between runs (`data/song-tags.json`): bump
+  `SONG_TAGS_VERSION` whenever what's read from a file changes (`tagsFrom()`, `kindProblem()`,
+  `FileTags`), or old answers stay until each file changes.
