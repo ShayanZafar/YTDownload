@@ -58,6 +58,7 @@ import {
   toMusicTrack,
 } from "./music";
 import { lookUpDetails, SongDetailsError, writeSongDetails } from "./song-details";
+import { detailWords, downloadEntry, logDetails, lookupEntry, readDetailsLog } from "./details-log";
 import { binName, NoBinError } from "./trash";
 import { readWaveform, trimSong, undoTrim } from "./trim";
 import { YouTubeRefused, sendRefused, videoCacheKey, youtubeGuard } from "./youtube-limits";
@@ -315,11 +316,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get(api.music.lookUpDetails.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
     try {
       const file = await songFor(req, res);
-      if (file) res.json(await lookUpDetails(file));
+      if (!file) return;
+      try {
+        const lookup = await lookUpDetails(file);
+        void logDetails(lookupEntry(file.relative, lookup));
+        res.json(lookup);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        void logDetails({
+          kind: "look-up",
+          song: file.relative,
+          outcome: "failed",
+          details: [message],
+        });
+        throw err;
+      }
     } catch (err) {
       if (err instanceof CatalogueError) return res.status(502).json({ message: err.message });
       sendFolderError(res, err, "Couldn't look that song up");
     }
+  });
+
+  // The details log's newest lines, for reading in the browser.
+  app.get(api.music.detailsLog.path, localOnly(PLAYER_NOT_LOCAL), async (_req, res) => {
+    const log = await readDetailsLog();
+    res
+      .type("text/plain; charset=utf-8")
+      .send(log || "Nothing in the details log yet: Fill in details and downloads add to it.");
   });
 
   app.post(api.music.writeDetails.path, localOnly(PLAYER_NOT_LOCAL), async (req, res) => {
@@ -328,7 +351,24 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const file = await songFor(req, res);
       if (!file) return;
-      const added = await writeSongDetails(file, details.data);
+      const added = await writeSongDetails(file, details.data).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        void logDetails({
+          kind: "write",
+          song: file.relative,
+          outcome: "failed",
+          details: [message],
+        });
+        throw err;
+      });
+      void logDetails({
+        kind: "write",
+        song: file.relative,
+        outcome: added.length > 0 ? "added" : "nothing to add (it has them all now)",
+        details: detailWords(details.data).filter((word) =>
+          added.some((field) => word.startsWith(field === "cover" ? "cover" : `${field} `)),
+        ),
+      });
       const { saveFolder } = await settings.get();
       const now = await findMusicFile(saveFolder!, String(req.params.id));
       if (!now) return res.status(404).json({ message: SONG_GONE });
@@ -713,13 +753,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         videoCover ??
         coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
       const ownCover = await cover;
-      output = await prepareAudioOutput(
-        format,
-        tags,
-        info.acodec,
-        ownCover,
-        lateDetails(lookedUp, ownCover !== undefined),
-      );
+      const later = lateDetails(lookedUp, ownCover !== undefined);
+      // What it got, or why not, goes in the details log.
+      void later.then((found) => logDetails(downloadEntry(name || info.title, found)));
+      output = await prepareAudioOutput(format, tags, info.acodec, ownCover, later);
       if (clientGone) return;
       // Saved as the name chosen on the page, or the video's title. res.attachment
       // writes both a plain filename and a UTF-8 one (filename*), so accents and

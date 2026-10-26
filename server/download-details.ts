@@ -22,8 +22,11 @@ export const DETAILS_WAIT_MS = 5_000;
 /** What the catalogues add to a download's tags. */
 export type CatalogueTags = Pick<SongTags, "genre" | "album" | "date" | "track">;
 
-/** What a download gets from the catalogues: tags, and a cover if it had none. */
-export type LateDetails = { tags: CatalogueTags; cover?: Buffer };
+/** What a download gets from the catalogues: tags, a cover if it had none, and why nothing if so. */
+export type LateDetails = { tags: CatalogueTags; cover?: Buffer; why?: string };
+
+/** What the look-up found to add, and, when nothing, why. */
+type LookedUp = { tags: CatalogueTags; coverUrl?: string; why?: string };
 
 /**
  * The catalogue's details that `tags` lack: its genre, and its album, year
@@ -56,11 +59,18 @@ export function lookUpDownload(
     lookUp = lookUpSong,
     waitMs = DETAILS_WAIT_MS,
   }: { lookUp?: (song: SongToLookUp) => Promise<CatalogueMatch | null>; waitMs?: number } = {},
-): Promise<{ tags: CatalogueTags; coverUrl?: string }> {
-  const found: Promise<{ tags: CatalogueTags; coverUrl?: string }> = Promise.resolve()
+): Promise<LookedUp> {
+  const found: Promise<LookedUp> = Promise.resolve()
     .then(() => lookUp({ title: tags.title, artist: tags.artist, duration }))
-    .then((match) => ({ tags: catalogueTagsFor(tags, match), coverUrl: match?.song.coverUrl }));
-  return within(found, waitMs, { tags: {} });
+    .then(
+      (match) => ({
+        tags: catalogueTagsFor(tags, match),
+        coverUrl: match?.song.coverUrl,
+        ...(match ? {} : { why: "not found in iTunes or Deezer" }),
+      }),
+      (err: unknown) => ({ tags: {}, why: err instanceof Error ? err.message : String(err) }),
+    );
+  return within(found, waitMs, { tags: {}, why: `no answer within ${waitMs / 1000} s` });
 }
 
 /** `promise`, or `fallback` if it takes longer than `ms` or fails. */
@@ -78,12 +88,15 @@ function within<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
  * rejects.
  */
 export async function lateDetails(
-  lookedUp: Promise<{ tags: CatalogueTags; coverUrl?: string }>,
+  lookedUp: Promise<LookedUp>,
   hasCover: boolean,
   { getCover, waitMs = DETAILS_WAIT_MS }: { getCover?: typeof fetchCover; waitMs?: number } = {},
 ): Promise<LateDetails> {
-  const { tags, coverUrl } = await within(lookedUp, waitMs, { tags: {} });
-  if (hasCover || !coverUrl) return { tags };
+  const { tags, coverUrl, why } = await within<LookedUp>(lookedUp, waitMs, {
+    tags: {},
+    why: `no answer within ${waitMs / 1000} s`,
+  });
+  if (hasCover || !coverUrl) return why ? { tags, why } : { tags };
   const fetching = Promise.resolve().then(() =>
     (getCover ?? fetchCover)({ kind: "catalogue", url: coverUrl }),
   );

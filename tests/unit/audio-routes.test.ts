@@ -13,6 +13,7 @@ import { PREVIEW_ONLY } from "../../server/soundcloud";
 import { sourceHealth } from "../../server/source-health";
 import { spotifyTrackCache } from "../../server/spotify";
 import { FFMPEG_PATH } from "../../server/audio";
+import { readDetailsLog } from "../../server/details-log";
 import { errorSchemas } from "../../shared/routes";
 import { sourceHealthReportSchema } from "../../shared/schema";
 import { verifyMp3File } from "../utils/mp3";
@@ -238,6 +239,7 @@ beforeAll(async () => {
   process.env.HISTORY_FILE = path.join(dir, "history.json");
   process.env.SETTINGS_FILE = path.join(dir, "settings.json");
   process.env.SOURCE_HEALTH_FILE = path.join(dir, "source-health.json");
+  process.env.DETAILS_LOG_FILE = path.join(dir, "details.log");
   folder = path.join(dir, "Music");
   await fs.mkdir(folder);
   // 20 seconds of tone as a 128 kbps MP3 (~320 KB): what "YouTube" sends.
@@ -266,6 +268,7 @@ afterAll(async () => {
   delete process.env.HISTORY_FILE;
   delete process.env.SETTINGS_FILE;
   delete process.env.SOURCE_HEALTH_FILE;
+  delete process.env.DETAILS_LOG_FILE;
   await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
@@ -748,6 +751,10 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     });
     const frames = Object.fromEntries(native["ID3v2.3"].map(({ id, value }) => [id, value]));
     expect(frames).toMatchObject({ TCON: "Electronic", TYER: "1999" });
+    // The details log says what it got.
+    expect((await readDetailsLog()).split("\n").at(-1)).toMatch(
+      /download {2}Looked up {2}added: genre Electronic; album Pure Tones; date 1999; track 4$/,
+    );
     await fs.rm(file);
   });
 
@@ -761,6 +768,9 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     const { common, native } = await readTags(file);
     expect(common).toMatchObject({ title: "Tone", artist: "Test" });
     expect(native["ID3v2.3"].map(({ id }) => id)).not.toContain("TCON");
+    expect((await readDetailsLog()).split("\n").at(-1)).toMatch(
+      /download {2}Not looked up {2}nothing added: Couldn't reach the music catalogues$/,
+    );
     await fs.rm(file);
 
     const res = await request(app)

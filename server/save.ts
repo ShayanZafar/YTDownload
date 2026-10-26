@@ -9,6 +9,7 @@ import { prepareAudioOutput, startAudioPipeline, type PreparedOutput } from "./a
 import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
 import { lateDetails, lookUpDownload } from "./download-details";
+import { downloadEntry, logDetails } from "./details-log";
 import { kindProblem, sniffFile } from "./file-kind";
 import {
   FolderError,
@@ -110,13 +111,10 @@ export async function saveIntoFolder(req: Request, res: Response) {
       videoCover ??
       coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
     const ownCover = await cover;
-    output = await prepareAudioOutput(
-      format,
-      tags,
-      info.acodec,
-      ownCover,
-      lateDetails(lookedUp, ownCover !== undefined),
-    );
+    const later = lateDetails(lookedUp, ownCover !== undefined);
+    // What it got, or why not, goes in the details log.
+    void later.then((found) => logDetails(downloadEntry(name || info.title, found)));
+    output = await prepareAudioOutput(format, tags, info.acodec, ownCover, later);
     if (clientGone) return;
     const fileName = `${safeFileName(name || info.title)}.${output.ext}`;
     const created = await createNewFile(folder, `${fileName}.part`);

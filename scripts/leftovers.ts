@@ -11,7 +11,7 @@ import path from "path";
 /**
  * A name the tests give their temp files: "yt-audio-<what>-" and fs.mkdtemp()'s six random
  * characters, or the id of the Playwright run (tests/browser/test-server-files.ts names the
- * test server's history, settings and player cache that way, and deletes them when the run
+ * test server's history, settings, details log and player cache that way, and deletes them when the run
  * ends — unless it's stopped first). The app's own "yt-audio-player" has neither.
  */
 export function isTestLeftover(name: string): boolean {
@@ -20,7 +20,7 @@ export function isTestLeftover(name: string): boolean {
 
 /** The process id of the Playwright run a test server file belongs to, if it is one. */
 export function runOf(name: string): number | undefined {
-  const match = /^yt-audio-e2e-[a-z]+-(\d+)(\.json)?$/.exec(name);
+  const match = /^yt-audio-e2e-[a-z]+-(\d+)(\.json|\.log)?$/.exec(name);
   return match ? Number(match[1]) : undefined;
 }
 

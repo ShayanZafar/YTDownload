@@ -121,6 +121,35 @@ export function pickMatch(
   return [...ours].sort((a, b) => score(b) - score(a))[0];
 }
 
+/**
+ * Why none of a search's answers was taken, for the person to see: no
+ * answers, or the closest one and what's different about it.
+ */
+export function explainMiss(
+  candidates: readonly CatalogueSong[],
+  search: { track: string; artist: string },
+  duration?: number,
+): string {
+  if (candidates.length === 0) return "nothing came back";
+  const titled = candidates.filter((song) => sameTitle(song.title, search.track));
+  const byArtist = search.artist
+    ? candidates.filter((song) => sameArtist(search.artist, song.artist))
+    : [];
+  const closest = titled[0] ?? byArtist[0] ?? candidates[0];
+  const name = `“${closest.title}” by ${closest.artist}`;
+  const count = `${candidates.length} ${candidates.length === 1 ? "answer" : "answers"}`;
+  if (titled.length > 0 && !search.artist) {
+    const off =
+      duration !== undefined && closest.duration !== undefined
+        ? `, ${Math.round(Math.abs(closest.duration - duration))} s ${closest.duration > duration ? "longer" : "shorter"}`
+        : ", and the song's length isn't known";
+    return `${count}; closest ${name}: the song has no artist to check, and it isn't the same length${off}`;
+  }
+  if (titled.length > 0) return `${count}; closest ${name}: a different artist`;
+  if (byArtist.length > 0) return `${count}; closest ${name}: a different title`;
+  return `${count}, none with that title or artist (first: ${name})`;
+}
+
 // --- iTunes ---------------------------------------------------------------------
 
 type ItunesTrack = {
@@ -278,20 +307,35 @@ async function getJson(source: CatalogueSource, url: string): Promise<unknown> {
   return answer;
 }
 
-/** The song in one catalogue, or undefined if it doesn't have it. */
+const sourceName = (source: CatalogueSource) => (source === "itunes" ? "iTunes" : "Deezer");
+
+/**
+ * The song in one catalogue, or undefined if it doesn't have it — in which
+ * case `notes` says, for each search, why none of the answers was it.
+ */
 async function lookUpIn(
   source: CatalogueSource,
   song: SongToLookUp,
+  notes: string[],
 ): Promise<CatalogueSong | undefined> {
-  for (const search of searchesFor(song)) {
+  const searches = searchesFor(song);
+  if (searches.length === 0) notes.push(`${sourceName(source)}: nothing to search by`);
+  for (const search of searches) {
+    const asked = [search.artist, search.track].filter(Boolean).join(" ");
     if (source === "itunes") {
-      const found = pickMatch(await searchItunes(search), search, song.duration);
+      const answers = await searchItunes(search);
+      const found = pickMatch(answers, search, song.duration);
       if (found) return found;
+      notes.push(`iTunes, “${asked}”: ${explainMiss(answers, search, song.duration)}`);
       continue;
     }
-    const found = pickMatch(await searchDeezer(search), search, song.duration) as
+    const answers = await searchDeezer(search);
+    const found = pickMatch(answers, search, song.duration) as
       ReturnType<typeof deezerSongs>[number] | undefined;
-    if (!found) continue;
+    if (!found) {
+      notes.push(`Deezer, “${asked}”: ${explainMiss(answers, search, song.duration)}`);
+      continue;
+    }
     const [track, album] = await Promise.all([
       getJson("deezer", `${DEEZER_API}/track/${found.id}`),
       found.albumId ? getJson("deezer", `${DEEZER_API}/album/${found.albumId}`) : undefined,
@@ -302,7 +346,10 @@ async function lookUpIn(
   return undefined;
 }
 
-const cache = new Map<string, CatalogueMatch | null>();
+/** A look-up's answer, and why the song wasn't found (or which catalogue was busy). */
+export type CatalogueAnswer = { match: CatalogueMatch | null; notes: string[] };
+
+const cache = new Map<string, CatalogueAnswer>();
 const cacheKey = (song: SongToLookUp) =>
   JSON.stringify([song.title.toLowerCase(), song.artist?.toLowerCase() ?? "", song.duration ?? 0]);
 
@@ -314,11 +361,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * could be asked.
  */
 export async function lookUpSong(song: SongToLookUp): Promise<CatalogueMatch | null> {
+  return (await lookUpSongNoted(song)).match;
+}
+
+/** `lookUpSong()`, with notes on why the song wasn't found: each search and its closest answer. */
+export async function lookUpSongNoted(song: SongToLookUp): Promise<CatalogueAnswer> {
   const key = cacheKey(song);
   if (cache.has(key)) return cache.get(key)!;
 
   const tried = new Set<CatalogueSource>();
   const failures: string[] = [];
+  const notes: string[] = [];
   for (;;) {
     const untried = catalogueSources.filter((source) => !tried.has(source));
     if (untried.length === 0) break;
@@ -332,31 +385,35 @@ export async function lookUpSong(song: SongToLookUp): Promise<CatalogueMatch | n
     }
     const source = open[0];
     try {
-      const found = await lookUpIn(source, song);
+      const found = await lookUpIn(source, song, notes);
       tried.add(source);
       if (found) {
-        const match = { song: found, source };
-        remember(key, match);
-        return match;
+        const answer = { match: { song: found, source }, notes: [] };
+        remember(key, answer);
+        return answer;
       }
     } catch (err) {
       if (err instanceof Refused) {
         refusedUntil[source] = Math.max(refusedUntil[source], err.retryAt);
+        notes.push(`${sourceName(source)} was busy, so it wasn't asked`);
         continue; // the next catalogue, at once
       }
       tried.add(source);
-      failures.push(`${source === "itunes" ? "iTunes" : "Deezer"}: ${(err as Error).message}`);
+      failures.push(`${sourceName(source)}: ${(err as Error).message}`);
+      notes.push(`${sourceName(source)} couldn't be reached (${(err as Error).message})`);
     }
   }
   if (failures.length === catalogueSources.length) {
     throw new CatalogueError(`Couldn't reach the music catalogues (${failures.join("; ")}).`);
   }
-  remember(key, null);
-  return null;
+  const answer = { match: null, notes };
+  // Not remembered when a catalogue was busy or unreachable: it may have the song.
+  if (tried.size === catalogueSources.length && failures.length === 0) remember(key, answer);
+  return answer;
 }
 
-function remember(key: string, match: CatalogueMatch | null) {
-  cache.set(key, match);
+function remember(key: string, answer: CatalogueAnswer) {
+  cache.set(key, answer);
   if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!);
 }
 

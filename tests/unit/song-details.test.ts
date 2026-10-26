@@ -11,6 +11,7 @@ import {
   isCatalogueCoverUrl,
   itunesSongs,
   lookUpSong,
+  lookUpSongNoted,
   pickMatch,
   resetCatalogues,
   type CatalogueSong,
@@ -20,6 +21,8 @@ import {
   canWriteDetails,
   detailsArgs,
   lookUpDetails,
+  muxerFor,
+  parseProbe,
   rewriteProblem,
   writeSongDetails,
 } from "../../server/song-details";
@@ -236,6 +239,33 @@ describe("lookUpSong", () => {
     expect(await lookUpSong({ title: "Test Tone", artist: "Sine Wave" })).toMatchObject({
       source: "deezer",
     });
+  });
+
+  it("says why a song wasn't found: each search, its closest answer, a catalogue that was busy", async () => {
+    let itunesBusy = true;
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) {
+        if (itunesBusy) return new Response("", { status: 403 });
+        return json(itunesAnswer({ ...SINE_SONG, trackName: "Test Tone (Live)" }));
+      }
+      return json({ data: [{ id: 1, title: "Test Tone", artist: { name: "Someone Else" } }] });
+    });
+    const busy = await lookUpSongNoted({ title: "Sine Wave - Test Tone", artist: "SineWaveVEVO" });
+    expect(busy).toEqual({
+      match: null,
+      notes: [
+        "iTunes was busy, so it wasn't asked",
+        "Deezer, “Sine Wave Test Tone”: 1 answer; closest “Test Tone” by Someone Else: a different artist",
+        "Deezer, “SineWave Sine Wave - Test Tone”: 1 answer, none with that title or artist (first: “Test Tone” by Someone Else)",
+      ],
+    });
+    // With iTunes answering: its closest answer, and why it wasn't taken.
+    resetCatalogues();
+    itunesBusy = false;
+    const again = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" });
+    expect(again.notes[0]).toBe(
+      "iTunes, “Sine Wave Test Tone”: 1 answer; closest “Test Tone (Live)” by Sine Wave: a different title",
+    );
   });
 
   it("says when neither catalogue can be reached", async () => {
@@ -539,6 +569,48 @@ describe("writeSongDetails", () => {
       writable: false,
       found: null,
     });
+  });
+
+  it("tells what's wrong with a file named .mp3 that isn't one, leaving it as it was", async () => {
+    // An M4A someone renamed: copied as an MP3, ffmpeg would refuse ("Invalid argument").
+    await fs.copyFile(path.join(dir, "Tone.m4a"), path.join(dir, "Renamed.mp3"));
+    const before = await fs.readFile(path.join(dir, "Renamed.mp3"));
+    const lookup = await lookUpDetails(await scanned("Renamed.mp3"));
+    expect(lookup).toMatchObject({ writable: false, found: null });
+    expect(lookup.problem).toMatch(
+      /really an M4A .* \(AAC audio\) named \.mp3: rename it to end in \.m4a/,
+    );
+    await expect(writeSongDetails(await scanned("Renamed.mp3"), details)).rejects.toThrow(
+      /left as it was: it's really an M4A/,
+    );
+    expect(await fs.readFile(path.join(dir, "Renamed.mp3"))).toEqual(before);
+    // A real MP3 has no problem.
+    expect((await lookUpDetails(await scanned("Sine Wave - Test Tone.mp3"))).problem).toBeNull();
+    await fs.rm(path.join(dir, "Renamed.mp3"));
+  });
+
+  it("knows each kind of file by what's in it, not its name", () => {
+    expect(
+      parseProbe(
+        "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'x.mp3':\n  Duration: 00:00:03.02\n  Stream #0:0[0x1](und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz\n",
+      ),
+    ).toEqual({ container: "mov,mp4,m4a,3gp,3g2,mj2", codec: "aac" });
+    expect(muxerFor(".mp3", { container: "mp3", codec: "mp3" })).toEqual({ muxer: "mp3" });
+    expect(muxerFor(".m4a", { container: "mov,mp4,m4a,3gp,3g2,mj2", codec: "alac" })).toEqual({
+      muxer: "ipod",
+    });
+    expect(muxerFor(".ogg", { container: "ogg", codec: "opus" })).toEqual({ muxer: "ogg" });
+    expect(muxerFor(".mp3", { container: "ogg", codec: "opus" })).toEqual({
+      problem: expect.stringContaining("rename it to end in .opus"),
+    });
+    expect(muxerFor(".mp3", { container: "mp3", codec: "mp2" })).toEqual({
+      problem:
+        "it's really MP2 audio in a file ffmpeg calls “mp3”, though it's named .mp3, and the app can't add tags to that",
+    });
+    expect(muxerFor(".opus", { container: "ogg", codec: "vorbis" })).toEqual({
+      problem: expect.stringContaining("rename it to end in .ogg"),
+    });
+    expect(muxerFor(".flac", {})).toEqual({ problem: expect.stringContaining("couldn't tell") });
   });
 
   it("leaves the song as it was if the copy lost a tag, the audio changed or a detail is missing", () => {
