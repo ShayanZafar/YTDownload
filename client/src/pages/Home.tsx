@@ -54,11 +54,12 @@ import { queryClient } from "@/lib/queryClient";
 import { api, buildDownloadUrl } from "@shared/routes";
 import { spotifyFileName } from "@shared/spotify-names";
 import { extractVideoId } from "@shared/youtube-link";
-import type {
-  SearchResult,
-  SpotifyPlaylist,
-  SpotifyPlaylistTrack,
-  SpotifyTrack,
+import {
+  otherLength,
+  type SearchResult,
+  type SpotifyPlaylist,
+  type SpotifyPlaylistTrack,
+  type SpotifyTrack,
 } from "@shared/schema";
 
 // A download started from this page that hasn't shown up in the history yet.
@@ -275,9 +276,17 @@ export default function Home() {
       { query, soundCloudOnly },
       {
         // A Spotify link asks for one particular song: show the best match
-        // straight away (the other matches stay listed below).
+        // straight away (the other matches stay listed below) — unless even
+        // the best is another length altogether (a full set, a mix): then
+        // nothing is picked, and the results say why.
         onSuccess: (data) => {
-          if (data.spotify && data.results[0]) pick(data.results[0], data.spotify);
+          const [best] = data.results;
+          if (!data.spotify || !best) return;
+          const { duration } = data.spotify;
+          if (duration != null && best.duration != null && otherLength(best.duration, duration)) {
+            return;
+          }
+          pick(best, data.spotify);
         },
         onError: (err) => {
           toast({ title: "Search failed", description: err.message, variant: "destructive" });

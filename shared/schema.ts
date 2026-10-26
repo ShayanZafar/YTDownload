@@ -77,6 +77,17 @@ export type SearchResult = z.infer<typeof searchResultSchema>;
 export const SAME_LENGTH_SECONDS = 5;
 
 /**
+ * Is an upload of `seconds` a different recording from a song of `songSeconds`
+ * altogether — a full set, a mix or an album (a 1:44:39 festival set for a
+ * 7-minute song), or a preview? More than half the song's length, or two
+ * minutes, away from it. Such uploads go after all the others in a song's
+ * search, and the page never picks one by itself (it says why).
+ */
+export function otherLength(seconds: number, songSeconds: number): boolean {
+  return Math.abs(seconds - songSeconds) > Math.max(120, songSeconds / 2);
+}
+
+/**
  * Where a song's details came from: Spotify's embed page (the usual; left
  * out), or Spotify's oEmbed endpoint — the fallback when the embed page can't
  * be read, which knows only the title and cover: no artists, no length.

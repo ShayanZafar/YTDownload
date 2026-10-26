@@ -88,6 +88,7 @@ This document covers the project's architecture, local development setup, enviro
 ├── shared/                    # Code shared between client & server
 │   ├── schema.ts              # Zod schemas + types (history, search, settings, folders, save progress)
 │   ├── routes.ts              # Typed API route definitions
+│   ├── clock.ts               # clock(): seconds as "6:09" or "1:44:39", for the page and the server
 │   ├── filename.ts            # safeFileName(): download names Windows accepts
 │   ├── name-noise.ts          # What videos and copies add to a name ("(Official Video)", "HQ"…), taken out
 │   ├── song-name.ts           # A song's artist and title: downloads' "Artist - Title", Sanitize's tidy tags
@@ -180,7 +181,12 @@ What each file does, and the function and constant names to look for. This was C
   claimed with `wx` too (`claimNewName()`), so saves finishing together never take the same name and
   none waits for another — never replacing a file (`Song (1).mp3`); streams JSON-line progress
   (`saveEventSchema`). Before naming the finished file it checks its content (`file-kind.ts`): not
-  audio fails the save, another kind of audio gets that kind's extension
+  audio fails the save, another kind of audio gets that kind's extension. A stream that stalls (no
+  audio for 60 s), breaks off or ends well short of the video's length is tried again at once, from
+  the start (`saveRetry`: two tries in all), then fails saying why. The `.part` files being written
+  are noted in `data/unfinished-saves.json` (`UNFINISHED_SAVES_FILE`; `markBeingSaved()`), and
+  `removeLeftoverSaves()` deletes the listed ones when the app starts (`registerRoutes()`): saves
+  the app was closed in the middle of
 - `server/file-kind.ts` — what a file really is from its first bytes (`sniffFile()`, `sniffBytes()`:
   past any ID3 tag, MP3/AAC frame headers, `ftyp`, `fLaC`, `OggS`, RIFF/WAVE, EBML, ASF…; programs,
   archives, PDFs, pictures and web pages by their own starts; anything else can't be told), and
@@ -424,7 +430,8 @@ What each file does, and the function and constant names to look for. This was C
   `https://api.soundcloud.com/tracks/<digits>`, from that or the URL-encoded URN form yt-dlp lists —
   exact text matching, nothing else) and `audioLinkOf()` (what a download or save may fetch: a
   YouTube video's canonical watch link or a SoundCloud track's — the only links that reach yt-dlp);
-  `shared/filename.ts` has
+  `shared/clock.ts` has `clock()` (seconds as "6:09" or "1:44:39", for the page and the server's
+  messages); `shared/filename.ts` has
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
   default name of any download found from Spotify); `shared/name-noise.ts` has `withoutNameNoise()`
@@ -651,7 +658,7 @@ The install details CLAUDE.md summarises.
 - No setup beyond `npm install` (Node 24 LTS; no Python on any system). `.env` is optional (`PORT`,
   `HOST`, `ALLOWED_HOSTS`, `HISTORY_FILE`, `SETTINGS_FILE`, `SOURCE_HEALTH_FILE`, `FFMPEG_BIN`,
   `PLAYER_CACHE_DIR`, `DETAILS_LOG_FILE`, `DETAILS_NOT_FOUND_FILE`, `SPOTIFY_CLIENT_ID`,
-  `SPOTIFY_SIGN_IN_FILE`); shell variables override it. Delete `data/history.json` to clear the history.
+  `SPOTIFY_SIGN_IN_FILE`, `UNFINISHED_SAVES_FILE`); shell variables override it. Delete `data/history.json` to clear the history.
 - The API tests point `HISTORY_FILE`/`SETTINGS_FILE`/`SOURCE_HEALTH_FILE` at a temp folder, and the
   Playwright config starts its own server on port 5099 with a temp history, settings and health
   file, so tests never touch the real ones (a unit test that records source health does the same:
@@ -763,9 +770,9 @@ Spotify's audio is DRM-protected and can't be downloaded, but finding the same r
 1. `parseSpotifyLink()` accepts `open.spotify.com/track/<22-character id>` (also with `/intl-xx/` or `/embed/`, and with `?si=` share parameters) and `spotify:track:<id>`. Albums, playlists, artists and podcasts get a `400` explaining what to paste instead. A `spotify.link` short link is opened first: see [Spotify short links](#spotify-short-links). The id is validated before it goes into the embed URL, so the server can only ever fetch that one Spotify page.
 2. `fetchSpotifyTrack()` fetches the embed page (10 s timeout), and keeps what it read for 10 minutes (`spotifyTrackCache`). A deleted song gives `404`. When the page can't be had for any other reason — a `429`, a `5xx`, a timeout, a page that can't be read — it asks Spotify's oEmbed endpoint at once instead (title and cover only: see [docs/sources.md](docs/sources.md)); only when both fail is it a `502` with a plain message.
 3. `spotifySearchQuery()` searches YouTube for "main artist + title + audio" ("audio" brings the artist's "Official Audio" uploads up) — and SoundCloud, when it's asked, for "main artist + title" — with release notes stripped from the title ("Bohemian Rhapsody - Remastered 2011" → "Bohemian Rhapsody", "(feat. …)" removed). Notes that mean a different recording ("- Live", "- Acoustic") are kept.
-4. The results are ranked as usual plus the song's length: uploads within 5 seconds of the Spotify length (`SAME_LENGTH_SECONDS` in `shared/schema.ts`) that match the search move to the top — "Official Audio" and label uploads of the same master match to within a few seconds, while music videos add intros and radio edits or extended mixes differ by much more. So a Spotify link to the 6-minute album version of a song finds the album version, not the 4-minute radio edit.
+4. The results are ranked as usual plus the song's length: uploads within 5 seconds of the Spotify length (`SAME_LENGTH_SECONDS` in `shared/schema.ts`) that match the search move to the top — "Official Audio" and label uploads of the same master match to within a few seconds, while music videos add intros and radio edits or extended mixes differ by much more. So a Spotify link to the 6-minute album version of a song finds the album version, not the 4-minute radio edit. Uploads of another length altogether — more than half the song's length or two minutes away from it (`otherLength()` in `shared/schema.ts`): full sets, mixes, albums, previews — go after all the others, however official (the owner's 7-minute "Incoming Signal" had been matched to a 1:44:39 festival set).
 
-The response adds `spotify: { id, url, title, artists, duration, thumbnail }`; the page shows it above the matches, marks same-length uploads, and picks the best match straight away.
+The response adds `spotify: { id, url, title, artists, duration, thumbnail }`; the page shows it above the matches, marks same-length uploads (and "Not the song's length" ones), and picks the best match straight away — unless even that is another length altogether, when nothing is picked and the page says so.
 
 ### Spotify short links
 
@@ -818,7 +825,8 @@ Browsers always put downloads in their own downloads folder, and a web page can'
 2. **Choosing the folder:** browsers can't show a folder picker that tells the page a real path, so **Choose folder** opens the app's own folder browser (`client/src/components/folder-picker.tsx`, a native `<dialog>`). `GET /api/folders?path=…` lists a folder's subfolders (hidden and system ones left out) plus quick links — Music, Downloads, Desktop, Documents, Home and, on Windows, each drive (`server/folders.ts`). On Windows the quick links come from the registry (`User Shell Folders`), so a Music folder moved to another drive or into OneDrive is found where it really is. You can click through folders, type or paste a path (Explorer's **Copy as path** quotes are fine), or make a **New folder** (`POST /api/folders`). **Use** sends `PUT /api/settings`, which checks the folder by writing a tiny file there and deleting it — on Windows the permission check alone misses folders only an administrator can change, like `C:\` or Program Files.
 3. **Saving:** download clicks are intercepted (`startDownload()` in `client/src/pages/Home.tsx`, for the preview card and Recent Extractions alike): instead of following the link, the page calls `POST /api/video/save` with `{ url, format, name }` (`saveOnServer()` in `client/src/lib/save-to-folder.ts`). The server (`server/save.ts`) runs the same yt-dlp → ffmpeg pipeline as a download (`startAudioPipeline()` in `server/audio.ts`), but into `<name>.<ext>.part` in the folder — created with the `wx` flag, so the system itself refuses to open an existing file. When both processes have exited cleanly, it's renamed to `<name>.<ext>` — or `<name> (1).<ext>` and so on; an existing file is never replaced — and added to the history. The name is claimed first by creating it empty with `wx` too (`claimNewName()`), then the `.part` file is renamed over it, so saves finishing at the same moment never take the same name, without any of them waiting for another.
 4. **Progress:** once the first audio arrives, the reply is a stream of JSON lines (`application/x-ndjson`, `saveEventSchema` in `shared/schema.ts`): `{"type":"progress","bytes":…}` every quarter-second, then `{"type":"done","fileName","folder","path","bytes"}` or `{"type":"error","message"}`. Problems found before that — no folder chosen (`409`), the folder is gone (`404`) or off-limits (`403`), YouTube refused the video or SoundCloud only previews the track (`502`) — are a normal JSON error. A save YouTube refused offers **Find on SoundCloud**, which searches SoundCloud alone for the song. The page reads the stream with `getReader()` (Safari can't loop over it with `for await`) and shows the size on the button.
-5. **Cancel** aborts the `fetch`. The server sees the connection close, kills `yt-dlp`/`ffmpeg`, deletes the `.part` file and records nothing — the same as a cancelled browser download. Leaving or reloading the page does the same, so while a save is running the page asks first (`beforeunload`).
+5. **When the stream goes wrong:** a stream that stalls (no audio for 60 s while yt-dlp is still running), breaks off part-way, or ends well short of the video's length (read from the finished file's header) is tried again at once from the start, into a new `.part` file — the audio is converted as it arrives, so it can't pick up where it stopped — and after a second try the save fails with the reason ("YouTube stopped sending the audio (nothing for 60 s) (tried 2 times)", "it stopped at 0:44 of 7:50"). A refusal is never retried: it's answered at once, as above. If the app itself is closed during a save (Start.cmd's window shut, the PC turned off), the `.part` file is deleted the next time it starts: saves note theirs in `data/unfinished-saves.json`.
+6. **Cancel** aborts the `fetch`. The server sees the connection close, kills `yt-dlp`/`ffmpeg`, deletes the `.part` file and records nothing — the same as a cancelled browser download. Leaving or reloading the page does the same, so while a save is running the page asks first (`beforeunload`).
 
 **Only a browser on this computer can use it** (`server/local-only.ts`). The folder routes (`PUT /api/settings`, `/api/folders`, `/api/video/save`) answer only requests from a loopback address with no proxy headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`), and only from the app's own page: another website's request is labelled `Sec-Fetch-Site: cross-site` (or carries a different `Origin`) and gets a `403`, and changes must be sent as JSON, which a plain HTML form on another site can't do (`415`). With `HOST=0.0.0.0`, a phone on your Wi-Fi gets `canSaveToFolder: false`: the setting is replaced by a note, and its downloads go to the phone as usual.
 

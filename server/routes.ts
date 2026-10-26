@@ -45,7 +45,7 @@ import {
   listFolders,
   placesToSave,
 } from "./folders";
-import { saveIntoFolder } from "./save";
+import { removeLeftoverSaves, saveIntoFolder } from "./save";
 import { YouTubePlaylistError, fetchYouTubePlaylist } from "./youtube-playlist";
 import {
   CALLBACK_PATH,
@@ -153,6 +153,10 @@ function validationError(error: z.ZodError) {
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  // Saves the app was in the middle of when it was last closed never finish:
+  // their .part files go before anything else starts.
+  await removeLeftoverSaves();
+
   // --- "Save to" folder ------------------------------------------------------
   // The page can't reach the disk, so the app does the saving: these routes
   // pick the folder and write downloads into it. Only a browser on this

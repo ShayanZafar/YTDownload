@@ -17,7 +17,7 @@
  * same way.
  */
 import type { AudioSource, SearchResult } from "@shared/schema";
-import { SAME_LENGTH_SECONDS } from "@shared/schema";
+import { SAME_LENGTH_SECONDS, otherLength } from "@shared/schema";
 import { runYtDlpJson, ytDlpErrorLine } from "./audio";
 import { looksLikePreview, recordSoundCloud, soundCloudResult } from "./soundcloud";
 import type { SourceHealthStore } from "./source-health";
@@ -190,7 +190,9 @@ export type RankOptions = {
  * Turn raw search entries into results, best first: official uploads of the
  * song searched for up; results missing part of the search (another artist's
  * song with the same name) and live/cover/remix-style versions (unless asked
- * for) down; otherwise the source's own order. Entries `toResult` leaves out
+ * for) down; otherwise the source's own order. With the song's length known,
+ * uploads of another length altogether (`otherLength()`: full sets, mixes,
+ * albums) go after all the others. Entries `toResult` leaves out
  * (live streams, anything that isn't a single video or track) are dropped,
  * and those `last` picks out go after everything else.
  */
@@ -201,7 +203,13 @@ export function rankResults(
 ): SearchResult[] {
   const q = normalize(query);
   const seen = new Set<string>();
-  const scored: { last: boolean; score: number; index: number; result: SearchResult }[] = [];
+  const scored: {
+    last: boolean;
+    other: boolean;
+    score: number;
+    index: number;
+    result: SearchResult;
+  }[] = [];
 
   entries.forEach((entry, index) => {
     const result = toResult(entry, query);
@@ -216,6 +224,11 @@ export function rankResults(
       Math.abs(entry.duration - targetDuration) <= SAME_LENGTH_SECONDS;
     scored.push({
       last: last?.(entry) ?? false,
+      // A full set, a mix or an album rather than the song (or a preview): after the rest.
+      other:
+        targetDuration != null &&
+        typeof entry.duration === "number" &&
+        otherLength(entry.duration, targetDuration),
       index,
       score:
         (result.official && matches ? 2 : 0) +
@@ -226,7 +239,13 @@ export function rankResults(
     });
   });
 
-  scored.sort((a, b) => Number(a.last) - Number(b.last) || b.score - a.score || a.index - b.index);
+  scored.sort(
+    (a, b) =>
+      Number(a.last) - Number(b.last) ||
+      Number(a.other) - Number(b.other) ||
+      b.score - a.score ||
+      a.index - b.index,
+  );
   return scored.slice(0, limit).map((s) => s.result);
 }
 

@@ -105,6 +105,7 @@ beforeAll(async () => {
   folder = path.join(root, "Music");
   await fs.mkdir(folder, { recursive: true });
   process.env.TRASH_DIR = path.join(root, "trash");
+  process.env.UNFINISHED_SAVES_FILE = path.join(root, "unfinished-saves.json");
   cover = path.join(root, "cover.jpg");
   await ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=32x32", "-frames:v", "1", cover]);
   opus20 = path.join(root, "youtube-20.webm");
@@ -119,6 +120,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.TRASH_DIR;
+  delete process.env.UNFINISHED_SAVES_FILE;
   await fs.rm(root, { recursive: true, force: true });
 });
 

@@ -42,6 +42,8 @@ const files: Record<string, AudioFile> = {};
 
 beforeAll(async () => {
   folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-housekeeping-"));
+  // Where a save's .part file is noted (save.ts): not the app's own data folder.
+  process.env.UNFINISHED_SAVES_FILE = path.join(os.tmpdir(), `${path.basename(folder)}.json`);
   const at = (name: string) => path.join(folder, name);
   await tone(at("Good.mp3"), 20, ["-c:a", "libmp3lame", "-b:a", "192k"]);
   await tone(at("Low.mp3"), 20, ["-c:a", "libmp3lame", "-b:a", "64k"]);
@@ -69,6 +71,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await fs.rm(folder, { recursive: true, force: true });
+  await fs.rm(process.env.UNFINISHED_SAVES_FILE!, { force: true });
+  delete process.env.UNFINISHED_SAVES_FILE;
 });
 
 describe("checkSong", () => {

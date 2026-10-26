@@ -14,6 +14,12 @@ import { sourceHealth } from "../../server/source-health";
 import { spotifyTrackCache } from "../../server/spotify";
 import { FFMPEG_PATH } from "../../server/audio";
 import { readDetailsLog } from "../../server/details-log";
+import {
+  markBeingSaved,
+  removeLeftoverSaves,
+  saveRetry,
+  unfinishedSavesFile,
+} from "../../server/save";
 import { errorSchemas } from "../../shared/routes";
 import { sourceHealthReportSchema } from "../../shared/schema";
 import { verifyMp3File } from "../utils/mp3";
@@ -205,6 +211,22 @@ const playing =
       ],
       { windowsHide: true },
     );
+/** yt-dlp when the source stops sending part-way, without hanging up: a burst, then nothing. */
+const stalling = (file: string) => () =>
+  spawn(
+    process.execPath,
+    [
+      "-e",
+      `process.stdout.write(require("fs").readFileSync(process.argv[1]).subarray(0, 64 * 1024)); setInterval(() => {}, 1000);`,
+      file,
+    ],
+    { windowsHide: true },
+  );
+/** Plays each of these stand-ins in turn, one per stream started. */
+const inTurn =
+  (...sources: (() => ChildProcessWithoutNullStreams)[]) =>
+  () =>
+    sources.shift()!();
 /** yt-dlp when YouTube refuses the stream: its error line, no audio, exit code 1. */
 const refusing = (line: string) => () =>
   spawn(
@@ -230,6 +252,7 @@ function ffmpeg(args: string[]): Promise<void> {
 }
 
 let app: express.Express;
+let registerRoutes: typeof import("../../server/routes").registerRoutes;
 let dir: string;
 let folder: string;
 let tone: string;
@@ -256,7 +279,7 @@ beforeAll(async () => {
     tone,
   ]);
 
-  const { registerRoutes } = await import("../../server/routes");
+  ({ registerRoutes } = await import("../../server/routes"));
   app = express();
   app.use(express.json());
   await registerRoutes(createServer(app), app);
@@ -839,6 +862,110 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await pipelineGone();
     expect(await folderEmptied()).toEqual([]);
     expect(await historyOf(VIDEO)).toHaveLength(before);
+  });
+});
+
+describe("a save whose stream stalls, breaks off or comes up short", () => {
+  beforeEach(() => {
+    saveRetry.stallMs = 1_000;
+  });
+  afterEach(() => {
+    saveRetry.stallMs = 60_000;
+  });
+
+  it("is tried again at once, and the whole song is saved, with no .part file left", async () => {
+    await useFolder();
+    fake.source = inTurn(stalling(tone), playing(tone));
+    const lines = await saveLines({ url: VIDEO, name: "Stalled once" });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Stalled once.mp3" });
+    expect(fake.sources).toHaveLength(2);
+    const file = path.join(folder, "Stalled once.mp3");
+    expect((await verifyMp3File(file)).isValid).toBe(true);
+    expect(await fs.readdir(folder)).toEqual(["Stalled once.mp3"]);
+    await fs.rm(file);
+  });
+
+  it("fails saying the source stopped sending, once it has stalled every time", async () => {
+    await useFolder();
+    const before = (await historyOf(VIDEO)).length;
+    fake.source = inTurn(stalling(tone), stalling(tone));
+    const lines = await saveLines({ url: VIDEO, name: "Stalled" });
+    expect(lines.at(-1)).toEqual({
+      type: "error",
+      message:
+        "Couldn't download the audio: YouTube stopped sending the audio (nothing for 1 s) (tried 2 times)",
+    });
+    expect(fake.sources).toHaveLength(2);
+    await pipelineGone();
+    expect(await folderEmptied()).toEqual([]);
+    expect(await historyOf(VIDEO)).toHaveLength(before);
+  });
+
+  it("fails saying where it stopped, when the audio comes up short of the video every time", async () => {
+    await useFolder();
+    // The video is a minute long; what arrives is the 20-second tone.
+    fake.audioInfo.mockResolvedValue({
+      title: "Tone",
+      artist: "Test",
+      formatId: "251",
+      acodec: "opus",
+      duration: 60,
+    });
+    fake.source = inTurn(playing(tone), playing(tone));
+    const lines = await saveLines({ url: VIDEO, name: "Short" });
+    expect(lines.at(-1)).toEqual({
+      type: "error",
+      message: "Couldn't download the audio: it stopped at 0:20 of 1:00 (tried 2 times)",
+    });
+    expect(await folderEmptied()).toEqual([]);
+  });
+
+  it("a song that doesn't stall or come up short is fetched once", async () => {
+    await useFolder();
+    fake.audioInfo.mockResolvedValue({
+      title: "Tone",
+      artist: "Test",
+      formatId: "251",
+      acodec: "opus",
+      duration: 20,
+    });
+    fake.source = playing(tone, { steady: true });
+    const lines = await saveLines({ url: VIDEO, name: "Whole" });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Whole.mp3" });
+    expect(fake.sources).toHaveLength(1);
+    await fs.rm(path.join(folder, "Whole.mp3"));
+  });
+});
+
+describe("saves an app closed part-way left behind", () => {
+  it("a save in progress is noted, until it's done with", async () => {
+    const part = path.join(folder, "Noted.mp3.part");
+    const noted = async () =>
+      JSON.parse(await fs.readFile(unfinishedSavesFile(), "utf8").catch(() => "[]")) as string[];
+    const done = markBeingSaved(part);
+    await expect.poll(noted).toEqual([part]);
+    done();
+    await expect.poll(noted).toEqual([]);
+  });
+
+  it("their .part files are deleted when the app starts again, and nothing else", async () => {
+    const left = path.join(folder, "Left behind.mp3.part");
+    const notOurs = path.join(folder, "A browser's download.mp3.part");
+    await fs.writeFile(left, "half a song");
+    await fs.writeFile(notOurs, "someone else's");
+    await fs.writeFile(
+      unfinishedSavesFile(),
+      JSON.stringify([left, path.join(folder, "Already gone.mp3.part")]),
+    );
+    // The app starting again.
+    const restarted = express();
+    await registerRoutes(createServer(restarted), restarted);
+    expect(await fs.readdir(folder)).toEqual(["A browser's download.mp3.part"]);
+    expect(JSON.parse(await fs.readFile(unfinishedSavesFile(), "utf8"))).toEqual([]);
+    // Nothing noted (or a damaged note): nothing to remove.
+    await fs.writeFile(unfinishedSavesFile(), "not json");
+    await expect(removeLeftoverSaves()).resolves.toEqual([]);
+    await fs.rm(notOurs);
   });
 });
 

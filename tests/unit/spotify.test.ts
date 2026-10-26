@@ -29,6 +29,7 @@ import {
   webApiRefusal,
 } from "../../server/spotify";
 import { rankResults, type RawSearchEntry } from "../../server/search";
+import { otherLength } from "../../shared/schema";
 import { sourceHealth } from "../../server/source-health";
 import { cpuCores } from "../../server/cpu-cores";
 
@@ -1051,6 +1052,40 @@ describe("rankResults with a known length (from Spotify)", () => {
       (r) => r.id,
     );
     expect(ids.slice(0, 2)).toEqual(["5NV6Rdv1a3I", "hhhhhhhhhh1"]);
+  });
+
+  it("puts a full set, a mix or an album of another length altogether after every other upload", () => {
+    // The owner's "Incoming Signal - Original mix" (about 7 minutes) was matched to the artist's
+    // own 1:44:39 festival set: official, and every word of the search in its title.
+    const song = "Ace Ventura Ritmo Volcano Incoming Signal Original mix";
+    const found = [
+      entry("CiPbJ0XBu4k", {
+        title:
+          "Ace Ventura, Ritmo, Volcano - Incoming Signal (Original mix) | Ozora Festival Full Set",
+        channel: "Ace Ventura",
+        channel_is_verified: true,
+        duration: 6279,
+      }),
+      entry("iiiiiiiiii1", {
+        title: "Ace Ventura & Ritmo & Volcano - Incoming Signal",
+        channel: "Psytrance Uploads",
+        duration: 431,
+      }),
+      entry("iiiiiiiiii2", {
+        title: "Incoming Signal (Original Mix)",
+        channel: "Ace Ventura - Topic",
+        duration: 22,
+      }),
+    ];
+    const ids = rankResults(song, found, { targetDuration: 425 }).map((r) => r.id);
+    expect(ids).toEqual(["iiiiiiiiii1", "CiPbJ0XBu4k", "iiiiiiiiii2"]);
+    expect(otherLength(6279, 425)).toBe(true);
+    expect(otherLength(22, 425)).toBe(true);
+    // An extended or radio edit is still near enough to be the song.
+    expect(otherLength(425 + 200, 425)).toBe(false);
+    expect(otherLength(180 + 120, 180)).toBe(false);
+    // Without the song's length, nothing moves.
+    expect(rankResults(song, found).map((r) => r.id)[0]).toBe("CiPbJ0XBu4k");
   });
 });
 

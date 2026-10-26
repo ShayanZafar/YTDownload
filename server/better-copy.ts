@@ -21,6 +21,7 @@ import { randomBytes } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
 import { extensionOf, songNameOf } from "@shared/audio-types";
+import { clock } from "@shared/clock";
 import {
   SAME_LENGTH_SECONDS,
   type BetterCopy,
@@ -79,12 +80,6 @@ export function codecName(acodec: string | undefined): string | null {
   if (acodec.startsWith("vorbis")) return "Vorbis";
   return acodec;
 }
-
-/** Seconds as a clock: 369 → "6:09". */
-const clock = (seconds: number) => {
-  const total = Math.round(seconds);
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-};
 
 /** What's known about a folder song before looking for a better copy of it. */
 type OwnAudio = SongName & { seconds: number | null; kbps: number | null; lossless: boolean };

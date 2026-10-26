@@ -1,6 +1,7 @@
-import { BadgeCheck, Check, Cloud, Play, Timer, X } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Check, Cloud, Play, Timer, X } from "lucide-react";
 import {
   SAME_LENGTH_SECONDS,
+  otherLength,
   type AudioSource,
   type SearchResult,
   type SpotifyTrack,
@@ -59,6 +60,13 @@ export function SearchResults({
   // failed or found nothing — YouTube may be limiting this computer).
   const fromSoundCloud =
     source === "soundcloud" || (results?.some((result) => result.source === "soundcloud") ?? false);
+  // An upload of another length altogether than the Spotify song (a full set, a mix…).
+  const isOtherLength = (result: SearchResult) =>
+    spotify?.duration != null &&
+    result.duration != null &&
+    otherLength(result.duration, spotify.duration);
+  // Even the best match is one: the page didn't pick it (Home.tsx).
+  const onlyOtherLengths = results?.[0] !== undefined && isOtherLength(results[0]);
   return (
     <section aria-label="Search results" className="max-w-3xl mx-auto w-full space-y-4">
       <div className="flex items-center justify-between gap-4 px-2">
@@ -125,6 +133,12 @@ export function SearchResults({
               {spotify.artists.join(", ")}
               {spotify.duration != null && ` · ${formatDuration(spotify.duration)}`}
             </p>
+            {onlyOtherLengths && (
+              <p role="status" className="mt-1 text-xs font-medium text-destructive">
+                No upload found is near the song's length, so none was picked: each is a full set, a
+                mix or another recording. Pick one only if you want that.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -149,6 +163,7 @@ export function SearchResults({
               spotify?.duration != null &&
               result.duration != null &&
               Math.abs(result.duration - spotify.duration) <= SAME_LENGTH_SECONDS;
+            const notTheSong = isOtherLength(result);
             const videoId = extractVideoId(result.url);
             const isPreviewing = videoId !== null && previewing === result.id;
             return (
@@ -218,6 +233,7 @@ export function SearchResults({
                       result.official && "official upload",
                       result.source === "soundcloud" && "on SoundCloud",
                       sameLength && "same length as the Spotify song",
+                      notTheSong && "not the Spotify song's length",
                       result.duration != null && formatDuration(result.duration),
                     ]
                       .filter(Boolean)
@@ -255,6 +271,15 @@ export function SearchResults({
                           >
                             <Timer className="w-3 h-3" />
                             Same length
+                          </span>
+                        )}
+                        {notTheSong && (
+                          <span
+                            title="Nowhere near the Spotify song's length: a full set, a mix or another recording"
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] font-semibold text-destructive"
+                          >
+                            <AlertTriangle className="w-3 h-3" />
+                            Not the song's length
                           </span>
                         )}
                       </div>

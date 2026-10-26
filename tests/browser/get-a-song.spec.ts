@@ -297,6 +297,109 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     await expect(historyRows(page, /bohemian rhapsody/i)).toHaveCount(1, { timeout: 20_000 });
   });
 
+  test("a Spotify song whose only matches are a full set or a mix of another length: none is picked, and the page says why", async ({
+    page,
+    front,
+  }) => {
+    const SONG = "7deQKNLOrwQj2NernulnyW";
+    await page.route("**/api/search?*", async (route) => {
+      await route.fulfill({
+        json: {
+          results: [
+            {
+              id: "CiPbJ0XBu4k",
+              url: "https://www.youtube.com/watch?v=CiPbJ0XBu4k",
+              title: "Ace Ventura | Ozora Festival 2026 | Full Set",
+              channel: "Ace Ventura",
+              duration: 6279,
+              thumbnail: THUMBNAIL,
+              official: true,
+              source: "youtube",
+            },
+          ],
+          source: "youtube",
+          spotify: {
+            id: SONG,
+            url: `https://open.spotify.com/track/${SONG}`,
+            title: "Incoming Signal - Original mix",
+            artists: ["Ace Ventura", "Ritmo", "Volcano"],
+            duration: 425,
+            thumbnail: null,
+          },
+        },
+      });
+    });
+    await answerHistory(page, () => []);
+
+    await page.goto(front.url);
+    await page.locator('input[type="url"]').fill(`https://open.spotify.com/track/${SONG}`);
+    await page.locator('button[type="submit"]').click();
+    const results = page.getByRole("region", { name: /search results/i });
+    await expect(results.getByText(/from spotify/i)).toBeVisible();
+    await expect(results.getByRole("status")).toHaveText(
+      /no upload found is near the song's length/i,
+    );
+    const set = results.getByRole("button", { name: /^ace ventura \| ozora festival/i });
+    await expect(set).toHaveAccessibleName(/not the spotify song's length/i);
+    await expect(results.getByText("Not the song's length", { exact: true })).toBeVisible();
+    // Nothing is picked, so nothing is ready to download…
+    await expect(set).toHaveAttribute("aria-pressed", "false");
+    await expect(downloadLink(page)).toHaveCount(0);
+    // …until you pick it yourself.
+    await set.click();
+    await expect(set).toHaveAttribute("aria-pressed", "true");
+    await expect(downloadLink(page)).toBeVisible();
+  });
+
+  test("Save to: a save the source stops part-way through says why it failed, and can be tried again", async ({
+    page,
+    front,
+  }) => {
+    const folder = await deletedAfterTest("yt-audio-e2e-save-fails-");
+    expect((await page.request.put("/api/settings", { data: { saveFolder: folder } })).ok()).toBe(
+      true,
+    );
+    await answerVideoInfo(page, "Me at the zoo");
+    await answerHistory(page, () => []);
+    const saves: unknown[] = [];
+    await page.route("**/api/video/save", async (route) => {
+      saves.push(route.request().postDataJSON());
+      await route.fulfill({
+        contentType: "application/x-ndjson",
+        body: [
+          { type: "progress", bytes: 65_536 },
+          {
+            type: "error",
+            message:
+              "Couldn't download the audio: YouTube stopped sending the audio (nothing for 60 s) (tried 2 times)",
+          },
+        ]
+          .map((line) => `${JSON.stringify(line)}\n`)
+          .join(""),
+      });
+    });
+
+    try {
+      await page.goto(front.url);
+      await page.locator('input[type="url"]').fill(VIDEO);
+      await page.getByRole("button", { name: /extract/i }).click();
+      await downloadLink(page).click();
+      await expect(page.getByText(/couldn't save the audio/i).first()).toBeVisible();
+      await expect(
+        page
+          .getByText(/youtube stopped sending the audio \(nothing for 60 s\) \(tried 2 times\)/i)
+          .first(),
+      ).toBeVisible();
+      // Nothing was left in the folder by the page, and the song can be saved again.
+      await expect(downloadLink(page)).toBeVisible();
+      await downloadLink(page).click();
+      await expect.poll(() => saves.length).toBe(2);
+      expect(await fs.readdir(folder)).toEqual([]);
+    } finally {
+      await page.request.put("/api/settings", { data: { saveFolder: null } });
+    }
+  });
+
   test("Save to: downloads go into the folder picked in the app's folder browser; Cancel stops one", async ({
     page,
     front,
