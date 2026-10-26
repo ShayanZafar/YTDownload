@@ -1058,6 +1058,7 @@ describe("GET /api/health/sources", () => {
     expect(Object.keys(report.sources).sort()).toEqual([
       "soundcloud",
       "spotify",
+      "spotify-account",
       "spotify-oembed",
       "spotify-web-api",
       "youtube",

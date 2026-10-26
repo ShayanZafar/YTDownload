@@ -28,6 +28,8 @@ export const SOURCES = {
   "spotify-oembed": { role: "fallback", for: "song details", name: "Spotify oEmbed" },
   // Nothing stands in for it: songs past a playlist's first 100 wait for it.
   "spotify-web-api": { role: "primary", for: "playlist songs past 100", name: "Spotify Web API" },
+  // Signed in with Spotify (spotify-sign-in.ts): your own playlists, whole.
+  "spotify-account": { role: "primary", for: "your own playlists", name: "Spotify (signed in)" },
 } as const satisfies Record<string, { role: "primary" | "fallback"; for: string; name: string }>;
 
 export type SourceName = keyof typeof SOURCES;

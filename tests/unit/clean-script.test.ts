@@ -37,7 +37,7 @@ const playwrightNames = [
 describe("npm run clean", () => {
   it("finds the names the tests use", () => {
     expect(mkdtempPrefixes.length).toBeGreaterThan(10);
-    expect(playwrightNames).toHaveLength(8);
+    expect(playwrightNames).toHaveLength(9);
   });
 
   it("recognises every temp folder a test makes", () => {
@@ -49,7 +49,7 @@ describe("npm run clean", () => {
     }
   });
 
-  it("recognises the Playwright test server's history, settings, health report, player cache, bin, trim backups, details log and Not found marks", () => {
+  it("recognises the Playwright test server's history, settings, health report, player cache, bin, trim backups, details log, Not found marks and Spotify sign-in", () => {
     expect(playwrightNames).toEqual([
       "yt-audio-e2e-history-13128.json",
       "yt-audio-e2e-settings-13128.json",
@@ -59,6 +59,7 @@ describe("npm run clean", () => {
       "yt-audio-e2e-backups-13128",
       "yt-audio-e2e-details-13128.log",
       "yt-audio-e2e-notfound-13128.json",
+      "yt-audio-e2e-spotify-13128.json",
     ]);
     for (const name of playwrightNames) expect(isTestLeftover(name)).toBe(true);
   });
