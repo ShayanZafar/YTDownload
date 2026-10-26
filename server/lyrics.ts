@@ -8,6 +8,7 @@
  * memory, so a song is looked up once per run of the app.
  */
 import type { LyricLine, Lyrics } from "@shared/schema";
+import { withoutNameNoise } from "@shared/name-noise";
 import { cleanTrackTitle } from "@shared/spotify-names";
 
 const LRCLIB_SEARCH = "https://lrclib.net/api/search";
@@ -54,13 +55,9 @@ export function parseLrc(text: string): LyricLine[] {
   return lines.sort((a, b) => a.time - b.time);
 }
 
-// What YouTube titles add that isn't part of the song's name.
-const VIDEO_NOISE_RE =
-  /\s*[([](?:official\b[^)\]]*|[^)\]]*\b(?:video|audio|visuali[sz]er|lyrics?|lyric video|hd|hq|4k|remaster(?:ed)?(?: \d{4})?)\b[^)\]]*)[)\]]/gi;
-
 /** A song title as LRCLIB names it: without "(Official Video)", "(feat. …)", "- Remastered". */
 export function cleanSongTitle(title: string): string {
-  return cleanTrackTitle(title.replace(VIDEO_NOISE_RE, "")).replace(/\s+/g, " ").trim();
+  return cleanTrackTitle(withoutNameNoise(title)).replace(/\s+/g, " ").trim();
 }
 
 /** An artist as LRCLIB names them: the first one, without "VEVO" or " - Topic". */
@@ -80,8 +77,8 @@ export function cleanArtist(artist: string): string {
 export function searchesFor({ title, artist }: SongToLookUp): { track: string; artist: string }[] {
   const searches: { track: string; artist: string }[] = [];
   const clean = cleanSongTitle(title);
-  // "Artist - Song", with a hyphen or a dash.
-  const halves = /^(.+?)\s[-–—]\s(.+)$/.exec(clean);
+  // "Artist - Song", with a hyphen or a dash (and "Artist- Song", as file names have it).
+  const halves = /^(.+?)\s*[-–—]\s+(.+)$/.exec(clean);
   if (halves) searches.push({ artist: halves[1].trim(), track: halves[2].trim() });
   if (artist?.trim()) searches.push({ track: clean, artist: cleanArtist(artist) });
   else if (!halves) searches.push({ track: clean, artist: "" });

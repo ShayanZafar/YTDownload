@@ -23,6 +23,7 @@ import { forgetTags, parseFile, readTags, type AudioFile } from "./library";
 import { spawnFfmpeg } from "./audio";
 import { runFfmpeg } from "./music";
 import { retryWhenBusy } from "./retry-when-busy";
+import { withFramesFrom } from "./id3-frames";
 import { ffmetadataValue, flacPictureBlock } from "./tags";
 
 /** Something about writing a song's details to tell the person (a 4xx, not the app failing). */
@@ -236,6 +237,36 @@ function tagCounts({ native }: Pick<IAudioMetadata, "native">): Map<string, numb
   return counts;
 }
 
+/** The tags ("ID3v2.3:WOAS") `before` has more of than `after`. */
+function lostTags(before: IAudioMetadata, after: IAudioMetadata): string[] {
+  const has = tagCounts(after);
+  return Array.from(tagCounts(before))
+    .filter(([key, count]) => (has.get(key) ?? 0) < count)
+    .map(([key]) => key);
+}
+
+/**
+ * The ID3v2 frames ffmpeg dropped from an MP3's copy (it can't copy web
+ * addresses, play counts, ratings…), put back into the copy from the
+ * original. Returns the copy's tags afterwards.
+ */
+async function putBackFrames(
+  original: string,
+  copy: string,
+  before: IAudioMetadata,
+  after: IAudioMetadata,
+) {
+  const has = tagCounts(after);
+  const ids = lostTags(before, after)
+    .filter((key) => !has.has(key))
+    .flatMap((key) => /^ID3v2\.[34]:([A-Z0-9]{4})$/.exec(key)?.[1] ?? []);
+  if (ids.length === 0) return after;
+  const fixed = withFramesFrom(await fs.readFile(original), await fs.readFile(copy), ids);
+  if (!fixed) return after;
+  await fs.writeFile(copy, fixed);
+  return parseFile(copy, { duration: false, skipCovers: false }).catch(() => undefined);
+}
+
 /**
  * Is `after` the same song as `before`, with every tag it had and the new
  * details? Undefined if so, or what's wrong.
@@ -255,10 +286,8 @@ export function rewriteProblem(
       return "the song came out a different length";
     }
   }
-  const had = tagCounts(before);
-  const has = tagCounts(after);
-  const lost = Array.from(had).filter(([key, count]) => (has.get(key) ?? 0) < count);
-  if (lost.length > 0) return `it would lose some of its tags (${lost[0][0]})`;
+  const lost = lostTags(before, after);
+  if (lost.length > 0) return `it would lose some of its tags (${lost[0]})`;
   const present = detailsPresent({ common });
   const notAdded = added.filter((field) => !present[field]);
   if (notAdded.length > 0) return `the ${notAdded[0]} didn't go in`;
@@ -415,9 +444,10 @@ export async function writeSongDetails(
       );
     }
 
-    const after = await parseFile(output, { duration: false, skipCovers: false }).catch(
+    let after = await parseFile(output, { duration: false, skipCovers: false }).catch(
       () => undefined,
     );
+    if (after && ext === ".mp3") after = await putBackFrames(file.absolute, output, before, after);
     const problem = after ? rewriteProblem(before, after, added) : "the copy couldn't be read";
     if (problem) {
       throw new SongDetailsError(422, `The song was left as it was: ${problem}.`);

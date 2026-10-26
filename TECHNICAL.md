@@ -269,6 +269,9 @@ What each file does, and the function and constant names to look for. This was C
 - `server/tags.ts` — the MP3's ID3v2.3 tag, written by the app (`id3v2Tag()`: title, artist, album,
   genre, year, track, `TXXX:spotify_id`, front cover) since ffmpeg can't stream one with a cover; the Ogg
   cover block (`flacPictureBlock()`), `jpegSize()`. Pure, unit-tested
+- `server/id3-frames.ts` — an MP3's ID3v2.3/2.4 frames, byte for byte (`readId3Frames()`), and
+  `withFramesFrom()`, which puts frames ffmpeg drops (web addresses, play counts, ratings) back into
+  a copy's tag. Unit-tested
 - `server/cover.ts` — download covers: Spotify's album cover (validated `i.scdn.co` /
   `image-cdn-xx.spotifycdn.com` URL), else the video's thumbnail (`i.ytimg.com`, built from the video
   id, looked for alongside the look-up) or a SoundCloud track's artwork (`sndcdn.com`, 500×500, from
@@ -278,8 +281,11 @@ What each file does, and the function and constant names to look for. This was C
   Search API (`itunes.apple.com/search`), else Deezer's API (`api.deezer.com`: search, then the song
   and album for track number, year and genre) — both free, no key; only title, artist and length
   sent. `pickMatch()` takes only the same title by the same artist (or, without an artist, the same
-  length), best the same length on the artist's own album; a catalogue that refuses (iTunes `403`/
-  `429`, Deezer error 4) is skipped at once until its time is up; covers only from
+  length) — or a title that differs only in brackets, the same length — best the same title and
+  length on the artist's own album; each is asked no faster than its published limit
+  (`CATALOGUE_LIMITS`: iTunes 20 a minute, Deezer 50 in 5 s; past it Deezer answers "nothing" for
+  songs it has), and one that refuses (iTunes `403`/`429`, Deezer error 4) or whose limit is used up
+  is skipped at once until its time is up; covers only from
   `isCatalogueCoverUrl()` hosts (`mzstatic.com`, `dzcdn.net`); answers cached in memory. Pure parts
   unit-tested
 - `server/details-log.ts` — the details log, `data/details.log` (`DETAILS_LOG_FILE`): a plain-text
@@ -298,7 +304,8 @@ What each file does, and the function and constant names to look for. This was C
   `lookUpDetails()` (what a folder song lacks — `detailsPresent()` — and the catalogue's values for
   just that) and `writeSongDetails()`: ffmpeg copies the file's streams and tags as they are
   (`-c copy`, `detailsArgs()`) with the new tags from an ffmetadata file, into a temp folder; the
-  copy is checked (`rewriteProblem()`: same audio and length, every tag it had, the new ones there)
+  copy is checked (`rewriteProblem()`: same audio and length, every tag it had, the new ones there;
+  an MP3's frames ffmpeg can't copy, like WOAS, are put back first: `server/id3-frames.ts`)
   and written over the song in place, its dates put back. `.mp3`, `.m4a`, `.flac`, `.ogg`/`.oga`,
   `.opus` only; an Ogg file's cover is carried over in its comment. What a file really holds is
   asked of ffmpeg first (`probeFile()`, `parseProbe()`): a file whose contents aren't what its name
@@ -320,7 +327,9 @@ What each file does, and the function and constant names to look for. This was C
   `shared/filename.ts` has
   `safeFileName()`, used by the server to name downloads and by the page to show that name;
   `shared/spotify-names.ts` has `cleanTrackTitle()` and `spotifyFileName()` ("Artists - Title", the
-  default name of any download found from Spotify); `shared/audio-types.ts` has `AUDIO_TYPES` (the
+  default name of any download found from Spotify); `shared/name-noise.ts` has `withoutNameNoise()`
+  (a name without "(Official Video)", "HQ", "Lyrics Video", "(1998)", a copy's "(1)", and
+  `decodeEntities()` for "&#39"), used before the catalogues and LRCLIB are searched; `shared/audio-types.ts` has `AUDIO_TYPES` (the
   audio files the app knows: MIME type, and what to ask `canPlayType()`)
 - `client/src/pages/Home.tsx` — the page: its state and what each action does (open a link, search,
   open a playlist, Paste, download or save), laid out from components — `find-box.tsx` (the Link /
