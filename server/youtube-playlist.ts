@@ -5,7 +5,7 @@
  */
 import type { SpotifyPlaylist, SpotifyPlaylistTrack } from "@shared/schema";
 import { extractPlaylistId } from "@shared/youtube-link";
-import { runYtDlpJson } from "./audio";
+import { runYtDlpJson, signInArgs } from "./audio";
 import { YouTubeRefused, playlistCacheKey, youtubeGuard } from "./youtube-limits";
 
 /** The most videos listed: more takes YouTube many seconds, and is more than anyone picks from. */
@@ -165,8 +165,14 @@ export async function fetchYouTubePlaylist(link: string): Promise<SpotifyPlaylis
     // Parsed inside, so the cache holds the playlist as sent, not yt-dlp's whole listing.
     return await youtubeGuard.run({
       key: playlistCacheKey(id),
-      attempt: async () =>
-        parsePlaylistJson(await runYtDlpJson(ytDlpPlaylistArgs(id), PLAYLIST_TIMEOUT_MS), id),
+      attempt: async (signIn) =>
+        parsePlaylistJson(
+          await runYtDlpJson(
+            [...signInArgs(signIn), ...ytDlpPlaylistArgs(id)],
+            PLAYLIST_TIMEOUT_MS,
+          ),
+          id,
+        ),
     });
   } catch (err) {
     if (err instanceof YouTubeRefused) throw err;

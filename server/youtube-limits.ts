@@ -23,6 +23,12 @@
  *     old yt-dlp earns more often), yt-dlp is updated in the background
  *     (yt-dlp-update.ts: once an hour at most). Nobody waits for it: the
  *     request that failed fails at once, and later ones use the new yt-dlp;
+ *   - when YouTube asks for a sign-in ("confirm you're not a bot") and the
+ *     owner has turned on "Use my Firefox YouTube sign-in" (settings.ts:
+ *     `youtubeSignIn`, off by default), the call is made again at once with
+ *     Firefox's YouTube cookies (`--cookies-from-browser firefox`), and for
+ *     the next 10 minutes calls and audio streams use them straight away
+ *     (`signInNow()`). With the setting off, no call ever carries a sign-in;
  *   - every attempt is recorded for the source-health report (source-health.ts).
  *
  * The pieces take the time as an argument, so they're unit-tested with a fake
@@ -30,7 +36,8 @@
  */
 import type { Response } from "express";
 import type { LimitedError } from "@shared/routes";
-import { ytDlpFailure } from "./audio";
+import { ytDlpFailure, type YtDlpSignIn } from "./audio";
+import { settings } from "./settings";
 import { sourceHealth, type FailureKind, type SourceHealthStore } from "./source-health";
 import { YtDlpUpdater } from "./yt-dlp-update";
 
@@ -90,7 +97,10 @@ export const HEDGE_FOR_MS = 10 * 60_000;
  * happened, and what to do instead.
  */
 export const REFUSED_MESSAGE =
-  "YouTube is refusing this computer right now (it limits computers that ask it a lot), and only YouTube has this. Search for the song by name and pick a result marked SoundCloud: while YouTube refuses, searches look on SoundCloud too.";
+  "YouTube is refusing this computer right now (it limits computers that ask it a lot), and only YouTube has this. Search for the song by name and pick a result marked SoundCloud: while YouTube refuses, searches look on SoundCloud too. If YouTube keeps asking to confirm you're not a bot, turn on “Use my Firefox YouTube sign-in” under the search box.";
+
+// yt-dlp couldn't read the browser's cookies: no Firefox, no profile, or none signed in.
+const COOKIES_UNREADABLE_RE = /cookies database|failed to load cookies|could not find .*cookies/i;
 
 /** YouTube refused this request: it's limiting this computer (throttled, or a bot check). */
 export class YouTubeRefused extends Error {
@@ -183,13 +193,21 @@ export type GuardOptions = {
   /** The error line of a failed call (yt-dlp's own, when there is one). */
   failureText?: (err: unknown) => string;
   log?: (line: string) => void;
+  /** The browser whose YouTube sign-in calls may use, or undefined when that's off (the setting). */
+  signIn?: () => Promise<YtDlpSignIn | undefined>;
 };
+
+/** The owner's setting: Firefox's YouTube sign-in, or none (the default). */
+async function signInSetting(): Promise<YtDlpSignIn | undefined> {
+  return (await settings.get()).youtubeSignIn === "firefox" ? "firefox" : undefined;
+}
 
 /** A yt-dlp call to YouTube. */
 export type GuardedCall<T> = {
   /** Cached under this key, if given. */
   key?: string;
-  attempt: () => Promise<T>;
+  /** Makes the call, signed in to YouTube with this browser's cookies when given. */
+  attempt: (signIn?: YtDlpSignIn) => Promise<T>;
 };
 
 /** The cache, the self-update and the health records around yt-dlp's calls to YouTube. */
@@ -200,8 +218,11 @@ export class YouTubeGuard {
   private readonly now: () => number;
   private readonly failureText: (err: unknown) => string;
   private readonly log: (line: string) => void;
+  private readonly signIn: () => Promise<YtDlpSignIn | undefined>;
   /** When YouTube last refused a call (ms since the epoch). */
   private lastRefusedAt: number | undefined;
+  /** The sign-in that got past YouTube's bot check, used straight away until `signedInUntil`. */
+  private signedIn: { browser: YtDlpSignIn; until: number } | undefined;
 
   constructor({
     health = sourceHealth,
@@ -210,6 +231,7 @@ export class YouTubeGuard {
     updater = new YtDlpUpdater(),
     failureText = ytDlpFailure,
     log = console.warn,
+    signIn = signInSetting,
   }: GuardOptions = {}) {
     this.health = health;
     this.now = now;
@@ -217,6 +239,22 @@ export class YouTubeGuard {
     this.updater = updater;
     this.failureText = failureText;
     this.log = log;
+    this.signIn = signIn;
+  }
+
+  /**
+   * The sign-in calls and audio streams use right now: the browser's, for 10
+   * minutes after a signed-in call got past a bot check; else none.
+   */
+  signInNow(): YtDlpSignIn | undefined {
+    if (this.signedIn && this.now() < this.signedIn.until) return this.signedIn.browser;
+    this.signedIn = undefined;
+    return undefined;
+  }
+
+  /** Stops using a sign-in at once (the setting was turned off). */
+  forgetSignIn(): void {
+    this.signedIn = undefined;
   }
 
   /**
@@ -238,11 +276,19 @@ export class YouTubeGuard {
       const cached = this.cache.get(key, this.now()) as T | undefined;
       if (cached !== undefined) return cached;
     }
+    const signedIn = this.signInNow();
     let result: T;
     try {
-      result = await attempt();
+      result = await attempt(signedIn);
     } catch (error) {
-      throw this.failed(error, this.failureText(error));
+      const failure = this.failed(error, this.failureText(error));
+      // A bot check: made again at once, signed in — if the owner allows it.
+      if (signedIn || !(failure instanceof YouTubeRefused) || failure.kind !== "bot-check") {
+        throw failure;
+      }
+      const browser = await this.signIn();
+      if (!browser) throw failure;
+      result = await this.attemptSignedIn(attempt, browser, failure);
     }
     this.health.record("youtube", true);
     if (key !== undefined) this.cache.set(key, result, this.now());
@@ -261,6 +307,33 @@ export class YouTubeGuard {
     }
     const failure = this.failed(new Error(reason), reason);
     return failure instanceof YouTubeRefused ? failure : undefined;
+  }
+
+  /**
+   * The call again, signed in with `browser`'s YouTube cookies. When that
+   * works, calls use the sign-in straight away for the next 10 minutes. When
+   * the cookies can't be read, the bot check (`refused`) is the answer.
+   */
+  private async attemptSignedIn<T>(
+    attempt: GuardedCall<T>["attempt"],
+    browser: YtDlpSignIn,
+    refused: YouTubeRefused,
+  ): Promise<T> {
+    try {
+      const result = await attempt(browser);
+      this.signedIn = { browser, until: this.now() + HEDGE_FOR_MS };
+      this.log(
+        `YouTube asked for a sign-in: using ${browser}'s YouTube sign-in for the next ${HEDGE_FOR_MS / 60_000} minutes.`,
+      );
+      return result;
+    } catch (error) {
+      const text = this.failureText(error);
+      if (COOKIES_UNREADABLE_RE.test(text)) {
+        this.log(`Couldn't use ${browser}'s YouTube sign-in ("${text}").`);
+        throw refused;
+      }
+      throw this.failed(error, text);
+    }
   }
 
   /** Records a failure, starts a background update if it calls for one, and says what to throw. */
@@ -282,6 +355,7 @@ export class YouTubeGuard {
   /** Forgets the last refusal, the cache and the last update (tests). */
   reset(): void {
     this.lastRefusedAt = undefined;
+    this.signedIn = undefined;
     this.cache.clear();
     this.updater.forget();
   }

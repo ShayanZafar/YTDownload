@@ -101,6 +101,7 @@ export function registerDownloadRoutes(app: Express) {
         info.formatId,
         output.ffmpegArgs,
         output.prefix,
+        { signIn: info.signIn },
       );
       stopPipeline = pipeline.stop;
       pipeline.audio.pipe(res, { end: false });

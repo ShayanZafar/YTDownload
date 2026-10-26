@@ -5,6 +5,7 @@ import {
   MP3_BITRATE,
   audioOutput,
   ffmpegMp3Args,
+  signInArgs,
   ytDlpAudioArgs,
   ytDlpErrorLine,
   ytDlpFailure,
@@ -28,6 +29,23 @@ describe("ytDlpAudioArgs", () => {
   it("can be pinned to a specific stream", () => {
     const pinned = ytDlpAudioArgs("https://www.youtube.com/watch?v=jNQXAC9IVRw", "251");
     expect(pinned[pinned.indexOf("--format") + 1]).toBe("251");
+  });
+
+  it("signs in with Firefox's YouTube cookies only when told to", () => {
+    expect(args).not.toContain("--cookies-from-browser");
+    const signedIn = ytDlpAudioArgs(
+      "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+      "251",
+      "firefox",
+    );
+    expect(signedIn[signedIn.indexOf("--cookies-from-browser") + 1]).toBe("firefox");
+  });
+});
+
+describe("signInArgs", () => {
+  it('is nothing without a sign-in, and goes before a search\'s "--" with one', () => {
+    expect(signInArgs()).toEqual([]);
+    expect(signInArgs("firefox")).toEqual(["--cookies-from-browser", "firefox"]);
   });
 });
 

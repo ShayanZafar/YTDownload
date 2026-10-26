@@ -26,6 +26,10 @@ paths:
   cache, the refusal memory that makes searches hedge, and the background yt-dlp self-update (at
   most once an hour: `yt-dlp -U` asks GitHub's API, which allows 60 unauthenticated requests an
   hour); `data/source-health.json` says how the sources have been answering.
+- YouTube sign-in is opt-in only (owner, 2026-10-26): `attempt(signIn)` gets a browser only after
+  a bot check with `youtubeSignIn: "firefox"` set, or within 10 minutes of a signed-in call that
+  worked (`signInNow()`). Pass `signIn` on to yt-dlp (`signInFlags()`/`signInArgs()`, before any
+  `--`) and to the audio stream (`AudioInfo.signIn`); never sign in otherwise.
 - `docs/sources.md` is the register to update when a source or fallback changes.
 - Search spawns yt-dlp directly (no shell) with the query after `--` (`ytsearch12:`/`scsearch12:`);
   keep it that way so search text can't become a command or a yt-dlp option. Results carry their own

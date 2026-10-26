@@ -32,6 +32,8 @@ const fake = vi.hoisted(() => ({
   /** Every stand-in started, the link each was given, and how each pipeline ended. */
   sources: [] as ChildProcessWithoutNullStreams[],
   links: [] as string[],
+  /** The YouTube sign-in each stream was started with. */
+  signIns: [] as (string | undefined)[],
   pipelines: [] as Promise<{ ok: boolean; reason: string }>[],
 }));
 
@@ -47,12 +49,15 @@ vi.mock("../../server/audio", async (importOriginal) => {
       formatId: string | undefined,
       args: string[],
       prefix?: Buffer,
+      options: { signIn?: "firefox" } = {},
     ) => {
       const pipeline = real.startAudioPipeline(url, formatId, args, prefix, {
-        spawnSource: (link) => {
+        ...options,
+        spawnSource: (link, _format, signIn) => {
           const child = fake.source!(link);
           fake.sources.push(child);
           fake.links.push(link);
+          fake.signIns.push(signIn);
           return child;
         },
       });
@@ -299,6 +304,7 @@ afterEach(() => {
   fake.runJson.mockReset();
   fake.sources.length = 0;
   fake.links.length = 0;
+  fake.signIns.length = 0;
   fake.pipelines.length = 0;
 });
 
@@ -508,6 +514,55 @@ describe("when YouTube refuses (it's limiting this computer)", () => {
     await pipelineGone();
     expect(await folderEmptied()).toEqual([]);
     expect(await historyOf(VIDEO)).toEqual([]);
+  });
+});
+
+describe("when YouTube asks for a sign-in and Firefox's may be used", () => {
+  /** yt-dlp's look-up: YouTube's bot check unless it's signed in. */
+  const botCheckUnlessSignedIn = async (_url: string, signIn?: string) => {
+    if (!signIn) throw new Error(BOT_CHECK);
+    return { title: "Tone", artist: "Test", formatId: "251", acodec: "opus", signIn };
+  };
+  const setSignIn = (youtubeSignIn: string) =>
+    request(app).put("/api/settings").send({ youtubeSignIn });
+
+  afterEach(async () => {
+    expect((await setSignIn("off")).status).toBe(200);
+  });
+
+  it("is off until it's turned on, and only this computer can turn it on", async () => {
+    expect((await request(app).get("/api/settings")).body.youtubeSignIn).toBe("off");
+    const on = await setSignIn("firefox");
+    expect(on.status).toBe(200);
+    expect(on.body.youtubeSignIn).toBe("firefox");
+    expect((await request(app).get("/api/settings")).body.youtubeSignIn).toBe("firefox");
+    expect((await setSignIn("chrome")).status).toBe(400);
+  });
+
+  it("a download asks again at once, signed in, and its stream is signed in too", async () => {
+    await setSignIn("firefox");
+    fake.audioInfo.mockImplementation(botCheckUnlessSignedIn);
+    const res = await request(app).get("/api/video/download").query({ url: VIDEO });
+    expect(res.status).toBe(200);
+    expect(fake.audioInfo.mock.calls.map(([, signIn]) => signIn)).toEqual([undefined, "firefox"]);
+    expect(fake.signIns).toEqual(["firefox"]);
+    expect(youtubeGuard.signInNow()).toBe("firefox");
+  });
+
+  it("with the setting off, nothing is signed in: the bot check is the answer", async () => {
+    fake.audioInfo.mockImplementation(botCheckUnlessSignedIn);
+    expectRefused(await request(app).get("/api/video/download").query({ url: VIDEO }));
+    expect(fake.audioInfo).toHaveBeenCalledTimes(1);
+    expect(fake.sources).toHaveLength(0);
+  });
+
+  it("turning it off stops signed-in calls at once", async () => {
+    await setSignIn("firefox");
+    fake.audioInfo.mockImplementation(botCheckUnlessSignedIn);
+    expect((await request(app).get("/api/video/download").query({ url: VIDEO })).status).toBe(200);
+    await setSignIn("off");
+    expect(youtubeGuard.signInNow()).toBeUndefined();
+    expectRefused(await request(app).get("/api/video/download").query({ url: VIDEO }));
   });
 });
 

@@ -40,7 +40,7 @@ export function registerSearchRoutes(app: Express) {
 
       const video = await youtubeGuard.run({
         key: videoCacheKey(videoId),
-        attempt: () => fetchVideoInfo(canonical),
+        attempt: (signIn) => fetchVideoInfo(canonical, signIn),
       });
 
       res.status(200).json({ ...video, url: input.url });
