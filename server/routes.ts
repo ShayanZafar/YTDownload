@@ -50,6 +50,7 @@ import {
   convertedForBrowser,
   deleteMusicFile,
   findMusicFile,
+  historyInFolder,
   listMusic,
   readCover,
   toMusicTrack,
@@ -404,6 +405,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // Which downloads in the history are in the "Save to" folder still, to play
+  // from it: only on this computer, and only ever the chosen folder.
+  app.get(api.downloads.inFolder.path, localOnly(), async (_req, res) => {
+    try {
+      const { saveFolder } = await settings.get();
+      if (!saveFolder) {
+        return res.status(409).json({ message: "Choose a folder to save into first." });
+      }
+      res.json(await historyInFolder(saveFolder, await storage.getDownloads()));
+    } catch (err) {
+      sendFolderError(res, err, "Couldn't look through the folder");
+    }
+  });
+
   // Managing the history (Recent Extractions): any device using the app may,
   // as long as it's the app's own page asking. The downloaded files stay.
   app.delete(api.downloads.remove.path, sameOriginOnly(), async (req, res) => {
@@ -662,7 +677,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Saved as the name chosen on the page, or the video's title. res.attachment
       // writes both a plain filename and a UTF-8 one (filename*), so accents and
       // non-Latin titles survive.
-      res.attachment(`${safeFileName(name || info.title)}.${output.ext}`);
+      const fileName = `${safeFileName(name || info.title)}.${output.ext}`;
+      res.attachment(fileName);
       res.header("Content-Type", output.contentType);
 
       // yt-dlp is pinned to the stream the metadata pass picked, so the container
@@ -703,7 +719,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.once("finish", () => {
         if (!ok || clientGone) return;
         storage
-          .createDownload({ url, title: info.title, spotifyId, source: link.source })
+          .createDownload({ url, title: info.title, spotifyId, source: link.source, fileName })
           .catch((err) => console.error("Failed to save download history", err));
       });
       res.end();

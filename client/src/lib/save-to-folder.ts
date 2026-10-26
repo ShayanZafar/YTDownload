@@ -9,12 +9,14 @@ import { api, errorSchemas, type DownloadFormat } from "@shared/routes";
 import {
   folderEntrySchema,
   folderListingSchema,
+  historyInFolderSchema,
   saveEventSchema,
   saveSettingsSchema,
   savedPlaylistFileSchema,
   songsInFolderSchema,
   type FolderEntry,
   type FolderListing,
+  type HistoryInFolder,
   type PlaylistFileSong,
   type SaveEvent,
   type SaveSettings,
@@ -91,6 +93,11 @@ export function createFolder(parent: string, name: string): Promise<FolderEntry>
     method: api.folders.create.method,
     json: { parent, name },
   });
+}
+
+/** Which downloads in the history are in the "Save to" folder still (see server/library.ts). */
+export function findHistoryInFolder(signal?: AbortSignal): Promise<HistoryInFolder> {
+  return requestJson(historyInFolderSchema, api.downloads.inFolder.path, { signal });
 }
 
 /**

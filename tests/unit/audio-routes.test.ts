@@ -672,6 +672,37 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await fs.rm(path.join(folder, "Saved tone.mp3"));
   });
 
+  it("a saved download is found in the folder from the history, and isn't once it's gone", async () => {
+    await useFolder();
+    const lines = await saveLines({ url: VIDEO, name: "Found again" });
+    expect(lines.at(-1)).toMatchObject({ type: "done", fileName: "Found again.mp3" });
+    const [entry] = await historyOf(VIDEO);
+    expect(entry).toMatchObject({ fileName: "Found again.mp3" });
+    const id = (entry as unknown as { id: number }).id;
+
+    // Moved into a subfolder, it's still found, as the song the player lists.
+    await fs.mkdir(path.join(folder, "Sorted"));
+    await fs.rename(
+      path.join(folder, "Found again.mp3"),
+      path.join(folder, "Sorted", "Found again.mp3"),
+    );
+    const found = await request(app).get("/api/downloads/in-folder");
+    expect(found.status).toBe(200);
+    expect(found.body).toMatchObject({ folder, complete: true });
+    const song = found.body.found[id];
+    expect(song).toMatchObject({ file: path.join("Sorted", "Found again.mp3"), by: "file" });
+    const music = await request(app).get("/api/music");
+    expect(music.body.tracks.find((t: { id: string }) => t.id === song.song)).toMatchObject({
+      path: path.join("Sorted", "Found again.mp3"),
+    });
+    expect((await request(app).get(`/api/music/${song.song}`)).status).toBe(200);
+
+    // Gone from the folder: no longer found.
+    await fs.rm(path.join(folder, "Sorted"), { recursive: true });
+    const gone = await request(app).get("/api/downloads/in-folder");
+    expect(gone.body.found[id]).toBeUndefined();
+  });
+
   it("a save cancelled part-way stops both processes and leaves no .part file", async () => {
     await useFolder();
     const before = (await historyOf(VIDEO)).length;
