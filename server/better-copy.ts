@@ -19,7 +19,6 @@
  */
 import { randomBytes } from "crypto";
 import { promises as fs } from "fs";
-import path from "path";
 import { extensionOf, songNameOf } from "@shared/audio-types";
 import {
   SAME_LENGTH_SECONDS,
@@ -32,14 +31,12 @@ import { folderArtistsOf, tidiedSong, type SongName } from "@shared/song-name";
 import { spawnYtDlpAudio, startAudioPipeline, type AudioInfo } from "./audio";
 import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { mapAtOnce } from "./cpu-cores";
-import { FolderError } from "./folders";
 import { decodeThrough, kbpsOf, songCheckOf } from "./housekeeping";
 import { parseFile, readTags, type AudioFile } from "./library";
-import { retryWhenBusy } from "./retry-when-busy";
 import { markBeingSaved } from "./save";
 import { sameSongAs, searchSongs, type SongSearchAnswer, type SongSearchOptions } from "./search";
-import { binName, moveToTrash } from "./trash";
-import { ENCODINGS, whileBusy } from "./trim";
+import { binAndSwapIn, PartKeptError, whileBusy } from "./song-file";
+import { ENCODINGS } from "./trim";
 
 /** A request the app can't carry out, with the status to answer with. */
 export class BetterCopyError extends Error {
@@ -311,19 +308,10 @@ export async function replaceWithBetterCopy(
       const check = await checkCopy(part, own);
 
       // The old song to the bin (none: NoBinError, nothing changed), then the copy in its place.
-      const times = await fs.stat(file.absolute);
-      await moveToTrash(file.absolute);
-      try {
-        await retryWhenBusy(() => fs.rename(part, file.absolute));
-      } catch (err) {
-        keepPart = true;
-        throw new FolderError(
-          500,
-          `The old song went to the ${binName()}, but its copy couldn't take its name (${(err as Error).message}): it's “${path.basename(part)}” in the same folder.`,
-        );
-      }
-      // Its dates, as the old song's.
-      await fs.utimes(file.absolute, times.atime, times.mtime).catch(() => {});
+      await binAndSwapIn(part, file.absolute).catch((err: unknown) => {
+        keepPart = err instanceof PartKeptError;
+        throw err;
+      });
       return check;
     } finally {
       if (!keepPart) await fs.rm(part, { force: true }).catch(() => {});

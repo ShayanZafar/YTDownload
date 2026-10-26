@@ -64,6 +64,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── playlist-file.ts       # "Save playlist file": a playlist's songs in the folder, as an .m3u8 there
 │   ├── music.ts               # The music player: the folder's songs by id, FLAC conversions, covers
 │   ├── trim.ts                # Trimming a folder song: its waveform and dead air, cutting a part out, Undo
+│   ├── song-file.ts           # Changing a folder song's file: one change at a time, and the swap that never leaves half a song
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
 │   ├── audio.ts               # yt-dlp / ffmpeg: arguments, metadata pass, the download pipeline
 │   ├── tags.ts                # The MP3's ID3v2.3 tag (with the cover), written by the app; the Ogg cover block
@@ -226,6 +227,13 @@ What each file does, and the function and constant names to look for. This was C
   (`SHFileOperation` with undo, run by PowerShell, no dialogs; a network or removable drive is
   refused with `NoBinError`), macOS's Trash (Finder, else `~/.Trash`), the freedesktop.org trash
   elsewhere (with its `.trashinfo`); `TRASH_DIR` replaces it in tests. Unit-tested
+- `server/song-file.ts` — every change to a folder song's file goes through it: `whileBusy()` lets
+  one change at a time at a song (Fill in details, Rename and Fix name, Trim and its Undo, better
+  copies; a second gets 409 "That song is being changed already."), and the finished new version
+  takes the song's place one of three ways: `writeOver()` (written into the same file, dates put
+  back: tags), `swapIn()` (a `.part` renamed over it, else copied over when Windows holds the file:
+  Trim) or `binAndSwapIn()` (the old one to the bin first: better copies; `PartKeptError` when the
+  copy can't take its name). Unit-tested on plain files
 - `server/trim.ts` — trimming a folder song (local-only): `readWaveform()` (ffmpeg decodes it to
   8 kHz mono; the loudest sample per 50 ms gives the bars and `silencesIn()` the dead air: below
   −45 dBFS for a second or more), and `trimSong()`: ffmpeg re-encodes the song minus the cut
@@ -385,13 +393,13 @@ What each file does, and the function and constant names to look for. This was C
   the same song at its length (`sameSongAs()` in `search.ts`), looks the best-ranked `CANDIDATES`
   (3) up at once for the bitrate of their audio (yt-dlp's `abr`), and offers the highest only when
   it's above the song's own — else says why not (lossless already, no same length, no better
-  bitrate). `replaceWithBetterCopy()` (one change to a song at a time: trim.ts' `whileBusy()`)
+  bitrate). `replaceWithBetterCopy()` (one change to a song at a time: song-file.ts' `whileBusy()`)
   runs the usual pipeline into a `.part` next to the song, in the song's own file type
   (`betterCopyArgs()`: the stream copied as it is when it's that kind of audio, else encoded at
   `BETTER_KBPS`, 320, with trim.ts' `ENCODINGS`), the old file's tags and cover mapped across; reads
   it all the way through (`decodeThrough()`: it must play through and be the song's length within
   `SAME_LENGTH_SECONDS`); then the old song goes to the bin (`moveToTrash()`; none: `NoBinError`,
-  nothing changed) and the copy takes its name and its modified date. Unit-tested on ffmpeg-made
+  nothing changed) and the copy takes its name and its modified date (song-file.ts' `binAndSwapIn()`). Unit-tested on ffmpeg-made
   songs, yt-dlp played by stand-ins
 - `server/details-log.ts` — the details log, `data/details.log` (`DETAILS_LOG_FILE`): a plain-text
   line per song Fill in details looks up (`lookupEntry()`: found and what, not found with each
@@ -1481,6 +1489,7 @@ tests/
 │   ├── playlist-file.test.ts    # the .m3u8 text and name; writing it, updating its own file, never another
 │   ├── music.test.ts            # the player's server side: song ids, Ogg lengths, covers, FLAC conversion + cache
 │   ├── trim.test.ts             # trimming: dead air found, the ffmpeg filter and formats, tags and cover kept, Undo, the window's times
+│   ├── song-file.test.ts        # one change to a song at a time; written over in place, swapped in, or the old one binned first
 │   ├── trim-routes.test.ts      # the trim routes on a real song: waveform, cut, Undo, refusals, local-only
 │   ├── housekeeping.test.ts     # Housekeeping on ffmpeg-made songs: cut short, damaged, not audio, bitrate; the quality bar; other files
 │   ├── housekeeping-routes.test.ts # the Housekeeping routes: a song checked, other files listed and deleted, the bar kept, local-only

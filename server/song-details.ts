@@ -26,6 +26,7 @@ import { forgetTags, parseFile, readTags, type AudioFile } from "./library";
 import { ffmpeg, runFfmpeg } from "./ffmpeg";
 import { retryWhenBusy } from "./retry-when-busy";
 import { withFramesFrom } from "./id3-frames";
+import { whileBusy, writeOver } from "./song-file";
 import { ffmetadataValue, flacPictureBlock } from "./tags";
 
 /** Something about writing a song's details to tell the person (a 4xx, not the app failing). */
@@ -414,28 +415,25 @@ export function detailsArgs({
   return args;
 }
 
-/** Writes `data` over `file` in place (so it keeps its creation date), then puts its times back. */
-async function overwrite(file: string, data: Buffer, times: { atimeMs: number; mtimeMs: number }) {
-  const handle = await retryWhenBusy(() => fs.open(file, "r+"));
-  try {
-    await handle.writeFile(data);
-    await handle.truncate(data.length);
-  } finally {
-    await handle.close();
-  }
-  await fs.utimes(file, times.atimeMs / 1000, times.mtimeMs / 1000);
-}
-
 /**
  * Writes the details the song still lacks into its file, from `details`;
  * tags it has already stay as they are. The cover is fetched from the
  * catalogue's address (only theirs: see cover.ts). Returns what was added —
  * nothing, if the song has all of those already.
  */
-export async function writeSongDetails(
+export function writeSongDetails(
   file: AudioFile,
   details: SongDetails,
-  { replace = {} }: { replace?: Partial<Record<"title" | "artist", string>> } = {},
+  options: { replace?: Partial<Record<"title" | "artist", string>> } = {},
+): Promise<SongDetailField[]> {
+  // One change to a song at a time: not while it's trimmed, replaced or renamed.
+  return whileBusy(file.absolute, () => writeDetailsNow(file, details, options));
+}
+
+async function writeDetailsNow(
+  file: AudioFile,
+  details: SongDetails,
+  { replace = {} }: { replace?: Partial<Record<"title" | "artist", string>> },
 ): Promise<SongDetailField[]> {
   const ext = extensionOf(file.relative);
   if (!canWriteDetails(file.relative)) {
@@ -535,11 +533,11 @@ export async function writeSongDetails(
 
     const data = await fs.readFile(output);
     try {
-      await overwrite(file.absolute, data, stat);
+      await writeOver(file.absolute, data, stat);
     } catch {
       // Once more (a moment's lock); if that fails too, the finished copy stays for the person.
       try {
-        await overwrite(file.absolute, data, stat);
+        await writeOver(file.absolute, data, stat);
       } catch (err) {
         keepCopy = true;
         throw new SongDetailsError(

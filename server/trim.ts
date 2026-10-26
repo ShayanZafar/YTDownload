@@ -22,7 +22,7 @@ import { ffmpeg, ffmpegFailure, runFfmpeg } from "./ffmpeg";
 import { FolderError } from "./folders";
 import { parseFile, type AudioFile } from "./library";
 import { musicTrackId } from "./music";
-import { retryWhenBusy } from "./retry-when-busy";
+import { swapIn, whileBusy } from "./song-file";
 
 // --- The waveform, and the song's quiet stretches -------------------------------------
 
@@ -283,35 +283,6 @@ export async function pruneTrimBackups(dir = trimBackupDir(), now = Date.now()):
   );
 }
 
-// Songs being trimmed, put back or replaced now (better-copy.ts), so two changes can't overlap.
-const busy = new Set<string>();
-
-/** Runs `work` on a song no other change is making now; a 409 if one is. */
-export async function whileBusy<T>(file: string, work: () => Promise<T>): Promise<T> {
-  if (busy.has(file)) throw new FolderError(409, "That song is being changed already.");
-  busy.add(file);
-  try {
-    return await work();
-  } finally {
-    busy.delete(file);
-  }
-}
-
-/**
- * Puts `part` in `target`'s place. If Windows won't let the file be replaced
- * (the player or another program still has it open), it's written over
- * instead: the app opens files so that others may write to them.
- */
-async function replaceFile(part: string, target: string): Promise<void> {
-  try {
-    await retryWhenBusy(() => fs.rename(part, target));
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES") throw err;
-    await fs.copyFile(part, target);
-  }
-}
-
 /** The song's audio details, to encode it the same way. */
 async function sourceAudioOf(file: string): Promise<SourceAudio> {
   const { format } = await parseFile(file, { duration: true, skipCovers: true });
@@ -332,7 +303,7 @@ async function cutInPlace(
   try {
     await runFfmpeg(ffmpegTrimArgs(file.absolute, part, cut, source, extensionOf(file.relative)));
     const after = await sourceAudioOf(part).catch((): SourceAudio => ({}));
-    await replaceFile(part, file.absolute);
+    await swapIn(part, file.absolute);
     const stat = await fs.stat(file.absolute);
     return { duration: round3(after.duration ?? 0), stat };
   } finally {
@@ -426,7 +397,7 @@ export async function undoTrim(folder: string, undo: string) {
     try {
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.copyFile(original, part);
-      await replaceFile(part, target);
+      await swapIn(part, target);
     } catch (err) {
       await fs.rm(part, { force: true }).catch(() => {});
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
