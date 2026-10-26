@@ -26,6 +26,11 @@ export const downloadSchema = z.object({
   spotifyId: z.string().optional(),
   /** Where the audio came from, when it wasn't YouTube. */
   source: z.enum(audioSources).optional(),
+  /**
+   * The file it became: its name in the "Save to" folder (a save), or the name
+   * the browser was given (a download). Older entries don't have it.
+   */
+  fileName: z.string().max(1000).optional(),
 });
 
 export type Download = z.infer<typeof downloadSchema>;
@@ -94,7 +99,7 @@ export const spotifyTrackSchema = z.object({
 });
 
 export type SpotifyTrack = z.infer<typeof spotifyTrackSchema>;
-export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId" | "source">;
+export type InsertDownload = Pick<Download, "url" | "title" | "spotifyId" | "source" | "fileName">;
 
 /** One song in a Spotify playlist or album, as the playlist panel lists it. */
 /** A YouTube video id: 11 letters, digits, - and _. */
@@ -304,6 +309,27 @@ export const musicLibrarySchema = z.object({
 });
 
 export type MusicLibrary = z.infer<typeof musicLibrarySchema>;
+
+/**
+ * How a download in the history was recognised in the folder: by the file
+ * name it was saved under (or, for an older entry, its title as a file name),
+ * by the Spotify song in the file's tags, or by its title and artist.
+ */
+export const historyFoundByValues = ["file", "spotify", "title-artist", "title"] as const;
+
+/** Which downloads in the history are (still) in the "Save to" folder. */
+export const historyInFolderSchema = z.object({
+  folder: z.string(),
+  /** False if the folder has more files than the app looks at (see MAX_SONG_FILES). */
+  complete: z.boolean(),
+  /** History entry id → the song in the folder (its id for the player, and its path). */
+  found: z.record(
+    z.string(),
+    z.object({ song: z.string(), file: z.string(), by: z.enum(historyFoundByValues) }),
+  ),
+});
+
+export type HistoryInFolder = z.infer<typeof historyInFolderSchema>;
 
 /** The details "Fill in details" can add to a song that lacks them. */
 export const songDetailFields = [

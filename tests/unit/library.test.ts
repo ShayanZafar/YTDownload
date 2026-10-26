@@ -6,9 +6,12 @@ import path from "path";
 import {
   MAX_SONG_FILES,
   artistWords,
+  fileNameKey,
   findAudioFiles,
+  findDownloads,
   findSongs,
   readSongFiles,
+  songOfVideoTitle,
   songsInFolder,
   spotifyIdsInTags,
   tagsFrom,
@@ -396,5 +399,98 @@ describe("findAudioFiles", () => {
     const some = await findAudioFiles(dir, { maxFiles: 2 });
     expect(some.files.map((f) => f.relative)).toEqual(["a.mp3", "b.mp3"]);
     expect(some.complete).toBe(false);
+  });
+});
+
+describe("findDownloads (the history's downloads in the folder)", () => {
+  const file = (relative: string, tags: Partial<SongFile> = {}): SongFile => ({
+    path: relative,
+    spotifyIds: [],
+    ...tags,
+  });
+  const entry = (
+    id: number,
+    title: string,
+    more: { fileName?: string; spotifyId?: string } = {},
+  ) => ({
+    id,
+    title,
+    ...more,
+  });
+
+  it("finds a download by the file it was saved as: moved, a second copy, or another case", () => {
+    const files = [
+      file(path.join("Rock", "Neon Harbour.mp3")),
+      file("Paper Lanterns (1).m4a"),
+      file("GLASS ORCHARD.MP3"),
+    ];
+    expect(
+      findDownloads(
+        [
+          entry(1, "Neon Harbour (Official Video)", { fileName: "Neon Harbour.mp3" }),
+          entry(2, "Paper Lanterns", { fileName: "Paper Lanterns.m4a" }),
+          entry(3, "whatever YouTube called it", { fileName: "Glass Orchard.mp3" }),
+        ],
+        files,
+      ),
+    ).toEqual({
+      1: { file: path.join("Rock", "Neon Harbour.mp3"), by: "file" },
+      2: { file: "Paper Lanterns (1).m4a", by: "file" },
+      3: { file: "GLASS ORCHARD.MP3", by: "file" },
+    });
+  });
+
+  it("finds an older download by its title as the app names files, its Spotify song, or Artist - Title", () => {
+    const files = [
+      file("Velvet Static - Night Bus - Live.opus"),
+      file("Renamed by hand.mp3", { spotifyIds: [ids.getLucky] }),
+      file(path.join("The Quiet Hours", "Lantern Song.mp3"), {
+        title: "Lantern Song",
+        artist: "The Quiet Hours",
+      }),
+    ];
+    expect(
+      findDownloads(
+        [
+          entry(1, "Velvet Static - Night Bus | Live"),
+          entry(2, "Get Lucky (Official Audio)", { spotifyId: ids.getLucky }),
+          entry(3, "The Quiet Hours - Lantern Song (Official Music Video)"),
+        ],
+        files,
+      ),
+    ).toEqual({
+      1: { file: "Velvet Static - Night Bus - Live.opus", by: "file" },
+      2: { file: "Renamed by hand.mp3", by: "spotify" },
+      3: { file: path.join("The Quiet Hours", "Lantern Song.mp3"), by: "title-artist" },
+    });
+  });
+
+  it("leaves out a download that isn't there, or is someone else's song of the same name", () => {
+    const files = [
+      file("Lantern Song.mp3", { title: "Lantern Song", artist: "Somebody Else" }),
+      file("Other.mp3"),
+    ];
+    expect(
+      findDownloads(
+        [
+          entry(1, "The Quiet Hours - Lantern Song", {
+            fileName: "The Quiet Hours - Lantern Song.mp3",
+          }),
+          entry(2, "Gone Song", { fileName: "Gone Song.mp3" }),
+        ],
+        files,
+      ),
+    ).toEqual({});
+  });
+
+  it("compares file names without folders, audio extension or a copy's number", () => {
+    expect(fileNameKey(path.join("Shy's Tunes", "Get Lucky (1).MP3"))).toBe("get lucky");
+    expect(fileNameKey("Mr. Blue Sky.flac")).toBe("mr. blue sky");
+    expect(fileNameKey("Mr. Blue Sky")).toBe("mr. blue sky");
+    expect(songOfVideoTitle("Daft Punk - Get Lucky (Official Video)")).toEqual({
+      artists: "Daft Punk",
+      title: "Get Lucky (Official Video)",
+    });
+    expect(songOfVideoTitle("Untitled jam")).toEqual({ artists: "", title: "Untitled jam" });
   });
 });

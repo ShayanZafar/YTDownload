@@ -76,7 +76,15 @@ type MusicLibraryProps = {
   /** The Save to folder, when this browser can play from it (null otherwise). */
   folder: string | null;
   onChooseFolder: () => void;
+  /**
+   * A folder song to find in the list (from Recent Extractions): it's shown,
+   * scrolled to and picked out. A new object each time it's asked for.
+   */
+  locate?: { id: string } | null;
 };
+
+// How long a song found from Recent Extractions stays picked out.
+const LOCATED_MS = 4000;
 
 // Songs listed at first, and how many more each "Show more" adds.
 const PAGE = 100;
@@ -111,6 +119,8 @@ type SongRowProps = {
   number: number;
   isCurrent: boolean;
   isPlaying: boolean;
+  /** Picked out: just found from Recent Extractions. */
+  located: boolean;
   /** Can this browser play it? */
   ok: boolean;
   onPlay: (track: PlayerTrack) => void;
@@ -129,6 +139,7 @@ const SongRow = memo(function SongRow({
   number,
   isCurrent,
   isPlaying,
+  located,
   ok,
   onPlay,
   onEnqueue,
@@ -149,7 +160,15 @@ const SongRow = memo(function SongRow({
     </button>
   );
   return (
-    <li className={cn("flex items-center", isCurrent && "bg-primary/5")}>
+    <li
+      data-song-key={track.key}
+      data-located={located ? "true" : undefined}
+      className={cn(
+        "flex items-center transition-colors",
+        isCurrent && "bg-primary/5",
+        located && "bg-primary/10 ring-2 ring-inset ring-primary",
+      )}
+    >
       <button
         type="button"
         onClick={() => onPlay(track)}
@@ -281,7 +300,7 @@ const SongRow = memo(function SongRow({
  * songs stored on the device can be picked to play; they never leave it.
  * Click a song to play the list from there.
  */
-export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryProps) {
+export function MusicLibrary({ settings, folder, onChooseFolder, locate }: MusicLibraryProps) {
   const player = usePlayer();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -380,6 +399,42 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
   useEffect(() => refresh(folderTracks), [refresh, folderTracks]);
   // A different list starts from the top.
   useEffect(() => setLimit(PAGE), [source, filter, activeFacets, sort, folder]);
+
+  // A song asked for from Recent Extractions: the folder's list is shown, and
+  // the filters cleared if they hide it; then it's listed, scrolled to and
+  // picked out for a few seconds, its button focused.
+  const [located, setLocated] = useState<string | null>(null);
+  const shownNow = useRef(shown);
+  shownNow.current = shown;
+  useEffect(() => {
+    if (!locate) return;
+    const key = `folder:${locate.id}`;
+    setSource("folder");
+    if (source !== "folder" || !shownNow.current.some((t) => t.key === key)) {
+      setFilter("");
+      setFacets({});
+    }
+    setLocated(key);
+    const timer = setTimeout(() => setLocated(null), LOCATED_MS);
+    return () => clearTimeout(timer);
+    // Only a new request moves the list.
+  }, [locate]);
+  const scrolledTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (!located) {
+      scrolledTo.current = null;
+      return;
+    }
+    const index = shown.findIndex((t) => t.key === located);
+    if (index < 0) return;
+    if (index >= limit) return setLimit(Math.ceil((index + 1) / PAGE) * PAGE);
+    if (scrolledTo.current === located) return;
+    const row = document.querySelector<HTMLElement>(`[data-song-key="${CSS.escape(located)}"]`);
+    if (!row) return;
+    scrolledTo.current = located;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.querySelector("button")?.focus({ preventScroll: true });
+  }, [located, shown, limit]);
 
   const playFrom = (track: PlayerTrack) => {
     if (player.current?.key === track.key) return player.toggle();
@@ -789,6 +844,7 @@ export function MusicLibrary({ settings, folder, onChooseFolder }: MusicLibraryP
                   number={index + 1}
                   isCurrent={isCurrent}
                   isPlaying={isCurrent && player.status === "playing"}
+                  located={located === track.key}
                   ok={canPlayHere(track)}
                   onPlay={onPlay}
                   onEnqueue={onEnqueue}

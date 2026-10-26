@@ -21,7 +21,14 @@ import { promises as fs, type Dirent } from "fs";
 import path from "path";
 import type { IAudioMetadata, IOptions } from "music-metadata";
 import { AUDIO_TYPES, genresOf } from "@shared/audio-types";
-import { foundByValues, type SongToFind, type SongsInFolder } from "@shared/schema";
+import { safeFileName } from "@shared/filename";
+import {
+  foundByValues,
+  historyFoundByValues,
+  type Download,
+  type SongToFind,
+  type SongsInFolder,
+} from "@shared/schema";
 import { cleanTrackTitle } from "@shared/spotify-names";
 import { mapAtOnce } from "./cpu-cores";
 import { kindProblem, sniffFile } from "./file-kind";
@@ -38,6 +45,7 @@ const MAX_DEPTH = 6;
 const MAX_ENTRIES = 50_000;
 
 export type FoundBy = (typeof foundByValues)[number];
+export type HistoryFoundBy = (typeof historyFoundByValues)[number];
 
 /** An audio file in the folder, with what its tags say. */
 export type SongFile = {
@@ -449,4 +457,76 @@ export function findSongs(
 export async function songsInFolder(folder: string, songs: SongToFind[]): Promise<SongsInFolder> {
   const { files, complete } = await readSongFiles(folder);
   return { folder, files: files.length, complete, found: findSongs(songs, files) };
+}
+
+// --- Finding downloads from the history ----------------------------------------------
+
+/**
+ * A file name as it's compared: no folders, no audio extension, no " (1)"
+ * a second copy got, and any case. "Shy's Tunes\Get Lucky (1).MP3" → "get lucky".
+ */
+export function fileNameKey(name: string): string {
+  const base = name.split(/[\\/]+/).pop() ?? "";
+  const ext = path.extname(base).toLowerCase();
+  const stem = AUDIO_EXTENSIONS.has(ext) ? base.slice(0, -ext.length) : base;
+  return stem
+    .replace(/\s\(\d+\)$/, "")
+    .normalize("NFC")
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * A video's title as a song: "Daft Punk - Get Lucky (Official Video)" → the
+ * title "Get Lucky (Official Video)" by "Daft Punk". Without " - ", the whole
+ * title, by no one known.
+ */
+export function songOfVideoTitle(title: string): { title: string; artists: string } {
+  const dash = /\s[-–—]\s/.exec(title);
+  if (!dash) return { title, artists: "" };
+  return {
+    artists: title.slice(0, dash.index).trim(),
+    title: title.slice(dash.index + dash[0].length).trim(),
+  };
+}
+
+/**
+ * For each download in the history that's in the folder: the file that is it,
+ * and how it was recognised. In order:
+ * 1. a file named as it was saved (`fileName`; for an older entry, its title
+ *    made a file name, as the app names files), anywhere in the folder, as a
+ *    second copy ("Song (1).mp3") or with another audio extension too;
+ * 2. a file with its Spotify song in the tags;
+ * 3. its title and artist, read from the video's "Artist - Title" — as a
+ *    playlist's songs are found (`findSongs()`).
+ */
+export function findDownloads(
+  entries: Pick<Download, "id" | "title" | "spotifyId" | "fileName">[],
+  files: SongFile[],
+): Record<string, { file: string; by: HistoryFoundBy }> {
+  // The first file by each name: the folder itself is looked through first.
+  const byName = new Map<string, string>();
+  for (const file of files) {
+    const key = fileNameKey(file.path);
+    if (key && !byName.has(key)) byName.set(key, file.path);
+  }
+  const songs: SongToFind[] = [];
+  const found: Record<string, { file: string; by: HistoryFoundBy }> = {};
+  for (const entry of entries) {
+    const named = byName.get(fileNameKey(entry.fileName ?? `${safeFileName(entry.title)}.mp3`));
+    if (named) {
+      found[entry.id] = { file: named, by: "file" };
+      continue;
+    }
+    const song = songOfVideoTitle(entry.title);
+    // The id only matters to a file whose tags name a Spotify song.
+    songs.push({ id: entry.spotifyId ?? `history-${entry.id}`, ...song });
+  }
+  const bySong = findSongs(songs, files);
+  for (const entry of entries) {
+    if (found[entry.id]) continue;
+    const match = bySong[entry.spotifyId ?? `history-${entry.id}`];
+    if (match) found[entry.id] = match;
+  }
+  return found;
 }

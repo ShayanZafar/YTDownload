@@ -21,10 +21,11 @@ import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { songNameOf } from "@shared/audio-types";
-import type { MusicLibrary, MusicTrack } from "@shared/schema";
+import type { Download, HistoryInFolder, MusicLibrary, MusicTrack } from "@shared/schema";
 import { spawnFfmpeg } from "./audio";
 import {
   findAudioFiles,
+  findDownloads,
   forgetTags,
   parseFile,
   readFolderTags,
@@ -74,6 +75,35 @@ export async function listMusic(folder: string): Promise<MusicLibrary> {
   const { files, complete } = await readFolderTags(folder);
   remember(folder, files);
   return { folder, complete, tracks: files.map((file) => toMusicTrack(folder, file, file.tags)) };
+}
+
+/**
+ * Which of the history's downloads are in `folder` still (see
+ * `findDownloads()`), each as the song the player knows it by.
+ */
+export async function historyInFolder(
+  folder: string,
+  entries: Download[],
+): Promise<HistoryInFolder> {
+  const { files, complete } = await readFolderTags(folder);
+  remember(folder, files);
+  // A file that isn't audio (whatever its name) isn't the download.
+  const found = findDownloads(
+    entries,
+    files
+      .filter((file) => !file.tags.notAudio)
+      .map((file) => ({ path: file.relative, ...file.tags })),
+  );
+  return {
+    folder,
+    complete,
+    found: Object.fromEntries(
+      Object.entries(found).map(([entry, { file, by }]) => [
+        entry,
+        { song: musicTrackId(folder, file), file, by },
+      ]),
+    ),
+  };
 }
 
 /**

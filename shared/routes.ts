@@ -8,6 +8,7 @@ import {
   lyricsSchema,
   folderListingSchema,
   musicLibrarySchema,
+  historyInFolderSchema,
   songDetailsSchema,
   songDetailsWrittenSchema,
   songLookupSchema,
@@ -87,6 +88,15 @@ export const api = {
       method: "DELETE" as const,
       path: "/api/downloads" as const,
       responses: { 200: z.array(downloadSchema) },
+    },
+    /**
+     * Which downloads are in the "Save to" folder still, to play them from it
+     * (on the computer running the app only).
+     */
+    inFolder: {
+      method: "GET" as const,
+      path: "/api/downloads/in-folder" as const,
+      responses: { 200: historyInFolderSchema },
     },
     /** Puts removed entries back (Undo), in date order; entries still there are skipped. */
     restore: {

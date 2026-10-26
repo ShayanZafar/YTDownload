@@ -184,6 +184,8 @@ export default function Home() {
   const [previewing, setPreviewing] = useState<string | null>(null);
   useEffect(() => setPreviewing(null), [searchData]);
   const player = usePlayer();
+  // A download's song to find in Your music (In folder, in Recent Extractions).
+  const [locating, setLocating] = useState<{ id: string } | null>(null);
   const spotify = searchData?.spotify;
   const isBusy = isFetchingInfo || isSearching || isOpeningShortLink;
   // A copied link, suggested while the box is empty — unless it's already open.
@@ -743,6 +745,7 @@ export default function Home() {
         settings={saveTo.settings}
         folder={saveTo.folder}
         onChooseFolder={() => setChoosingFolder(true)}
+        locate={locating}
       />
 
       <RecentExtractions
@@ -752,6 +755,7 @@ export default function Home() {
         folder={saveTo.folder}
         saves={saves}
         onDownload={startDownload}
+        onLocate={(id) => setLocating({ id })}
       />
     </Layout>
   );

@@ -180,7 +180,13 @@ export async function saveIntoFolder(req: Request, res: Response) {
     );
     part = undefined;
     await storage
-      .createDownload({ url, title: info.title, spotifyId, source: link.source })
+      .createDownload({
+        url,
+        title: info.title,
+        spotifyId,
+        source: link.source,
+        fileName: path.basename(saved),
+      })
       .catch((err) => console.error("Failed to save download history", err));
     send(res, { type: "done", fileName: path.basename(saved), folder, path: saved, bytes });
     res.end();

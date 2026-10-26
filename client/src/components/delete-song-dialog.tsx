@@ -5,6 +5,7 @@ import { AlertCircle, Loader2, Trash2, X } from "lucide-react";
 import type { MusicLibrary } from "@shared/schema";
 import { MUSIC_KEY } from "@/hooks/use-folder-music";
 import { usePlayer } from "@/hooks/use-player";
+import { HISTORY_IN_FOLDER_KEY } from "@/hooks/use-history-in-folder";
 import { SONGS_IN_FOLDER_KEY } from "@/hooks/use-songs-in-folder";
 import { useToast } from "@/hooks/use-toast";
 import { binNameHere, deleteFolderSong, type PlayerTrack } from "@/lib/music";
@@ -72,6 +73,7 @@ export function DeleteSongDialog({ track, onClose }: DeleteSongDialogProps) {
       );
       void queryClient.invalidateQueries({ queryKey: MUSIC_KEY });
       void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });
+      void queryClient.invalidateQueries({ queryKey: HISTORY_IN_FOLDER_KEY });
       toast({
         title: outcome.trashed ? `Moved to the ${outcome.bin}` : "Deleted for good",
         description: outcome.trashed

@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
-import { Download, FileAudio, History, Loader2, Trash2, X } from "lucide-react";
+import { Download, FileAudio, History, Loader2, Pause, Play, Trash2, X } from "lucide-react";
 import { buildDownloadUrl, type DownloadFormat } from "@shared/routes";
 import type { Download as HistoryEntry } from "@shared/schema";
 import { Highlight, HistorySearch } from "@/components/history-search";
+import { useFolderMusic } from "@/hooks/use-folder-music";
 import { useHistoryActions } from "@/hooks/use-history-actions";
+import { useHistoryInFolder } from "@/hooks/use-history-in-folder";
+import { usePlayer } from "@/hooks/use-player";
 import { formatBytes, timeAgo, validDate } from "@/lib/format";
 import {
   filterHistory,
@@ -14,11 +17,16 @@ import {
   historyRanges,
   type HistoryRange,
 } from "@/lib/history-filter";
+import { folderTrack, playlistQueue } from "@/lib/music";
 import { folderName, type ActiveSave, type SaveRequest } from "@/lib/save-to-folder";
 import { cn } from "@/lib/utils";
 
 // Recent Extractions shows this many at first, and this many more per "Show more".
 const HISTORY_PAGE = 25;
+
+// With a "Save to" folder: every download, or only those in it, or those not.
+const folderViews = ["all", "in", "missing"] as const;
+type FolderView = (typeof folderViews)[number];
 
 type RecentExtractionsProps = {
   /** The download history, newest first. */
@@ -32,12 +40,18 @@ type RecentExtractionsProps = {
   saves: Record<string, ActiveSave>;
   /** A Redownload link was clicked: false when the page handles it (a save into the folder). */
   onDownload: (event: React.MouseEvent, href: string, request: SaveRequest) => boolean;
+  /** Finds a download's song (its id in the player) in Your music. */
+  onLocate: (song: string) => void;
 };
 
 /**
  * Recent Extractions: the download history with Redownload links, searched
  * and filtered in the browser (lib/history-filter.ts), 25 at a time. A song
  * can be taken out of it (×), or the whole list cleared, with Undo after.
+ * With a "Save to" folder (on the computer running the app), each download
+ * says whether it's in the folder still, finds it in Your music (In folder)
+ * and plays from there; the list can
+ * show only the downloads in it, or only those that aren't.
  */
 export function RecentExtractions({
   history: allHistory,
@@ -46,6 +60,7 @@ export function RecentExtractions({
   folder,
   saves,
   onDownload,
+  onLocate,
 }: RecentExtractionsProps) {
   const isOriginal = format === "original";
   const historyActions = useHistoryActions();
@@ -67,13 +82,45 @@ export function RecentExtractions({
         : filterHistory(historyInRange, historyQuery, "all"),
     [historyInRange, historyQuery, historyExact],
   );
-  const shownHistory = matchingHistory.slice(0, historyLimit);
-  const isFilteringHistory = historyQuery.trim() !== "" || historyRange !== "all";
+  // Which downloads are in the folder, and the folder's songs, to play them.
+  const player = usePlayer();
+  const inFolder = useHistoryInFolder(folder, allHistory);
+  const folderMusic = useFolderMusic(folder);
+  const found = inFolder.data?.found;
+  const [folderView, setFolderView] = useState<FolderView>("all");
+  const view = found ? folderView : "all";
+  const listedHistory = useMemo(
+    () =>
+      view === "all" || !found
+        ? matchingHistory
+        : matchingHistory.filter((item) => (found[item.id] !== undefined) === (view === "in")),
+    [matchingHistory, found, view],
+  );
+  // The listed downloads in the folder, as the player's songs, newest first.
+  const folderQueue = useMemo(
+    () =>
+      found
+        ? playlistQueue(
+            listedHistory.map((item) => ({ id: String(item.id) })),
+            found,
+            (folderMusic.data?.tracks ?? []).map(folderTrack),
+          )
+        : [],
+    [listedHistory, found, folderMusic.data],
+  );
+  const shownHistory = listedHistory.slice(0, historyLimit);
+  const isFilteringHistory = historyQuery.trim() !== "" || historyRange !== "all" || view !== "all";
   const clearHistoryFilters = () => {
     setHistoryQuery("");
     setHistoryExact(false);
     setHistoryRange("all");
+    setFolderView("all");
     setHistoryLimit(HISTORY_PAGE);
+  };
+  const folderViewLabels: Record<FolderView, string> = {
+    all: "All",
+    in: "In folder",
+    missing: "Not in folder",
   };
 
   return (
@@ -84,7 +131,7 @@ export function RecentExtractions({
         {allHistory.length > 0 && (
           <span className="ml-auto text-sm text-muted-foreground tabular-nums" aria-live="polite">
             {isFilteringHistory
-              ? `${matchingHistory.length} of ${allHistory.length}`
+              ? `${listedHistory.length} of ${allHistory.length}`
               : `${allHistory.length} ${allHistory.length === 1 ? "download" : "downloads"}`}
           </span>
         )}
@@ -169,6 +216,40 @@ export function RecentExtractions({
               ))}
             </div>
           </div>
+          {folder && found && (
+            <div
+              role="group"
+              aria-label={`Downloads in “${folderName(folder)}”`}
+              className="inline-flex rounded-full border border-border bg-secondary/60 p-1"
+            >
+              {folderViews.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={view === option}
+                  onClick={() => {
+                    setFolderView(option);
+                    setHistoryLimit(HISTORY_PAGE);
+                  }}
+                  title={
+                    option === "all"
+                      ? "Every download"
+                      : option === "in"
+                        ? `Only the downloads that are in “${folderName(folder)}”`
+                        : `Only the downloads that aren't in “${folderName(folder)}” (moved, renamed, deleted, or saved elsewhere)`
+                  }
+                  className={cn(
+                    "rounded-full px-3 py-1.5 text-xs font-medium transition-colors",
+                    view === option
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {folderViewLabels[option]}
+                </button>
+              ))}
+            </div>
+          )}
           {historyExact && (
             <p className="px-2 text-xs text-muted-foreground">
               Showing only “{historyQuery}”.{" "}
@@ -205,6 +286,10 @@ export function RecentExtractions({
             {shownHistory.map((item) => {
               const href = buildDownloadUrl(item.url, format, { spotifyId: item.spotifyId });
               const save = saves[href];
+              const inThere = found?.[item.id];
+              const track = inThere && folderQueue.find((t) => t.fileName === inThere.file);
+              const isCurrent = !!track && player.current?.key === track.key;
+              const isPlaying = isCurrent && player.status !== "paused";
               return (
                 <li
                   key={item.id}
@@ -223,8 +308,50 @@ export function RecentExtractions({
                     >
                       {timeAgo(item.downloadedAt)}
                       {item.source === "soundcloud" && " · from SoundCloud"}
+                      {folder && found && (
+                        <span>
+                          {" · "}
+                          {inThere ? (
+                            <button
+                              type="button"
+                              onClick={() => onLocate(inThere.song)}
+                              aria-label={`Show ${item.title} in Your music`}
+                              title={`Show “${inThere.file}” in Your music`}
+                              className="font-medium text-primary underline-offset-2 hover:underline"
+                            >
+                              In folder
+                            </button>
+                          ) : (
+                            <span
+                              title={
+                                inFolder.data?.complete === false
+                                  ? `Not among the songs looked at in “${folderName(folder)}” (it has more than the app looks through)`
+                                  : `Not in “${folderName(folder)}”: moved, renamed, deleted, or saved elsewhere`
+                              }
+                            >
+                              Not in folder
+                            </span>
+                          )}
+                        </span>
+                      )}
                     </p>
                   </div>
+                  {inThere && (
+                    <button
+                      type="button"
+                      disabled={!track}
+                      onClick={() => {
+                        if (!track) return;
+                        if (isCurrent) return player.toggle();
+                        player.play(folderQueue, folderQueue.indexOf(track), { shuffle: false });
+                      }}
+                      aria-label={`${isPlaying ? "Pause" : "Play"} ${item.title} from the folder`}
+                      title={`${isPlaying ? "Pause" : "Play"} “${inThere.file}” from “${folderName(folder ?? "")}”`}
+                      className="shrink-0 rounded-lg p-1.5 text-primary hover:bg-secondary transition-colors disabled:opacity-40"
+                    >
+                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                    </button>
+                  )}
                   {save ? (
                     <button
                       type="button"
@@ -277,13 +404,13 @@ export function RecentExtractions({
               );
             })}
           </ul>
-          {matchingHistory.length > shownHistory.length && (
+          {listedHistory.length > shownHistory.length && (
             <button
               type="button"
               onClick={() => setHistoryLimit((n) => n + HISTORY_PAGE)}
               className="w-full rounded-xl border border-border py-2.5 text-sm font-medium text-foreground hover:bg-secondary transition-colors"
             >
-              Show more ({matchingHistory.length - shownHistory.length} more)
+              Show more ({listedHistory.length - shownHistory.length} more)
             </button>
           )}
         </>
@@ -294,6 +421,8 @@ export function RecentExtractions({
             No extractions{" "}
             {[
               historyRangePhrases[historyRange],
+              view === "in" && folder && `in “${folderName(folder)}”`,
+              view === "missing" && folder && `missing from “${folderName(folder)}”`,
               historyQuery.trim() && `match “${historyQuery.trim()}”`,
             ]
               .filter(Boolean)
