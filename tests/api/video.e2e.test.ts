@@ -594,9 +594,10 @@ describe("Save to folder (API)", () => {
       });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ folder: saveDir, files: audioFiles.length, complete: true });
-    // The file saved for the Spotify song above carries it in its tags (whatever it's called)…
+    // The file saved for the Spotify song above carries it in its tags (whatever it's called:
+    // "Artist - Title" of the video, as no name was given)…
     expect(res.body.found["4u7EnebtmKWzUH433cf5Qv"]).toEqual({
-      file: expect.stringMatching(/^Me at the zoo.*\.(opus|m4a|mka)$/),
+      file: expect.stringMatching(/^jawed - Me at the zoo.*\.(opus|m4a|mka)$/),
       by: "spotify",
     });
     // …the other downloads are tagged with the video's title and uploader…
