@@ -15,6 +15,7 @@ import {
   pickMatch,
   pickVersion,
   musicBrainzArtistGenre,
+  genreOfArtistNamed,
   resetCatalogues,
   CATALOGUE_LIMITS,
   type CatalogueSong,
@@ -806,6 +807,59 @@ describe("lookUpSong", () => {
     expect(asked).toEqual(["/ws/2/recording", `/ws/2/artist/${artist}`]);
     expect(musicBrainzArtistGenre({ tags: [{ name: "psy-trance", count: 1 }] })).toBe("Psy-Trance");
     expect(musicBrainzArtistGenre({})).toBe(undefined);
+  });
+
+  it("finds the genre iTunes files an artist under, else MusicBrainz's, passing over a busy one", async () => {
+    const asked: string[] = [];
+    const artist = "0383dadf-2a4e-4d10-a46a-e9e041da8eb3";
+    let itunesBusy = false;
+    vi.stubGlobal("fetch", async (url: string) => {
+      const { hostname, pathname, searchParams } = new URL(url);
+      asked.push(`${hostname}${pathname}`);
+      if (hostname === "itunes.apple.com") {
+        if (itunesBusy) return new Response("", { status: 403 });
+        expect(searchParams.get("entity")).toBe("musicArtist");
+        return json({
+          results: [
+            { wrapperType: "artist", artistName: "Darren Styles", primaryGenreName: "Dance" },
+            { wrapperType: "artist", artistName: "Darren Tate", primaryGenreName: "Electronic" },
+          ],
+        });
+      }
+      if (pathname === `/ws/2/artist/${artist}`) {
+        return json({ genres: [{ name: "trance", count: 4 }] });
+      }
+      expect(searchParams.get("query")).toBe('artist:"Darren Tate"');
+      return json({
+        artists: [
+          { id: "11111111-2222-3333-4444-555555555555", name: "Darren Styles", score: 100 },
+          { id: artist, name: "Darren Tate", score: 100 },
+        ],
+      });
+    });
+    expect(await genreOfArtistNamed("Darren Tate")).toEqual({
+      genre: "Electronic",
+      source: "itunes",
+    });
+    // Asked again: from memory.
+    expect(await genreOfArtistNamed("darren tate")).toEqual({
+      genre: "Electronic",
+      source: "itunes",
+    });
+    expect(asked).toEqual(["itunes.apple.com/search"]);
+
+    resetCatalogues();
+    asked.length = 0;
+    itunesBusy = true;
+    expect(await genreOfArtistNamed("Darren Tate")).toEqual({
+      genre: "Trance",
+      source: "musicbrainz",
+    });
+    expect(asked).toEqual([
+      "itunes.apple.com/search",
+      "musicbrainz.org/ws/2/artist",
+      `musicbrainz.org/ws/2/artist/${artist}`,
+    ]);
   });
 
   it("says when neither catalogue can be reached", async () => {

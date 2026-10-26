@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PassThrough } from "stream";
 import { prepareAudioOutput, withPrefix } from "../../server/audio";
 import type { CatalogueMatch } from "../../server/catalogues";
+import { downloadEntry } from "../../server/details-log";
 import { catalogueTagsFor, lateDetails, lookUpDownload } from "../../server/download-details";
 
 // A download's details from the music catalogues (server/download-details.ts),
@@ -84,6 +85,32 @@ describe("lookUpDownload and lateDetails", () => {
     const none = await lookUpDownload(tags, 3, { lookUp: async () => null });
     expect(none).toEqual({ tags: {}, why: "not found in iTunes, Deezer or MusicBrainz" });
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("gives a song no catalogue has a genre for its artist's, as a guess, for the details log", async () => {
+    const guess = vi.fn(async () => ({
+      genre: "Electronic",
+      why: "another song of Sine Wave's here is Electronic",
+    }));
+    const folderSongs = async () => [{ artist: "Sine Wave", genres: ["Electronic"] }];
+    const tags = { title: "Low Tone", artist: "Sine Wave" };
+    const found = await lookUpDownload(tags, 3, { lookUp: async () => null, guess, folderSongs });
+    expect(found).toEqual({
+      tags: { genre: "Electronic" },
+      guess: "another song of Sine Wave's here is Electronic",
+      why: "not found in iTunes, Deezer or MusicBrainz",
+    });
+    expect(guess).toHaveBeenCalledWith("Sine Wave", folderSongs);
+    const late = await lateDetails(Promise.resolve(found), true);
+    expect(downloadEntry("Sine Wave - Low Tone", late).details).toEqual([
+      "genre Electronic (a guess: another song of Sine Wave's here is Electronic)",
+    ]);
+    // Not for a song with a genre of its own or from the catalogue, nor one without an artist.
+    guess.mockClear();
+    await lookUpDownload({ ...tags, genre: "Ambient" }, 3, { lookUp: async () => null, guess });
+    await lookUpDownload(tags, 3, { lookUp: async () => FOUND, guess });
+    await lookUpDownload({ title: "Low Tone" }, 3, { lookUp: async () => null, guess });
+    expect(guess).not.toHaveBeenCalled();
   });
 
   it("fetches the catalogue's cover only for a download without one, keeping the tags if it fails", async () => {

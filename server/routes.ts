@@ -54,6 +54,7 @@ import {
   convertedForBrowser,
   deleteMusicFile,
   findMusicFile,
+  folderArtistSongs,
   assertNameFree,
   fixSongName,
   renameSong,
@@ -334,7 +335,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const file = await songFor(req, res);
       if (!file) return;
       try {
-        const lookup = await lookUpDetails(file);
+        const { saveFolder } = await settings.get();
+        const lookup = await lookUpDetails(file, () => folderArtistSongs(saveFolder!));
         void logDetails(lookupEntry(file.relative, lookup));
         res.json(lookup);
       } catch (err) {

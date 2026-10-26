@@ -254,6 +254,37 @@ describe("Fill in details (API)", () => {
     }
   });
 
+  it("guesses a genre no catalogue has from the artist's other songs in the folder, saying so", async () => {
+    // Test Tone, by Sine Wave, is Electronic (written above); no catalogue has Low Tone.
+    const file = path.join(folder, "Low Tone.mp3");
+    await tone(file, [
+      ...["-c:a", "libmp3lame", "-b:a", "128k", "-id3v2_version", "3"],
+      ...["-metadata", "title=Low Tone", "-metadata", "artist=Sine Wave"],
+    ]);
+    try {
+      const { id } = (await songs())["Low Tone.mp3"];
+      const lookup = songLookupSchema.parse(
+        (await request(app).get(`/api/music/${id}/details`).expect(200)).body,
+      );
+      expect(lookup).toMatchObject({
+        found: { genre: "Electronic" },
+        match: null,
+        source: "artist",
+        guess: "another song of Sine Wave's here is Electronic",
+        notFound: true,
+      });
+      expect(Object.keys(lookup.found!)).toEqual(["genre"]);
+      await request(app).post(`/api/music/${id}/details`).send(lookup.found).expect(200);
+      expect((await songs())["Low Tone.mp3"].genres).toEqual(["Electronic"]);
+      const log = (await request(app).get("/api/details-log").expect(200)).text;
+      expect(log).toContain(
+        "no catalogue has it; genre Electronic; genre guessed from the artist (another song of Sine Wave's here is Electronic)",
+      );
+    } finally {
+      await fs.rm(file, { force: true });
+    }
+  });
+
   it("takes only details that make sense, as JSON, by a song's id", async () => {
     const { id } = (await songs())["Rock Song.mp3"];
     await request(app).post(`/api/music/${id}/details`).send({ year: 12 }).expect(400);

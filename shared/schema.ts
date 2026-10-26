@@ -395,9 +395,16 @@ export const songLookupSchema = z.object({
     .nullable(),
   /**
    * The catalogue that answered — or "name" for a song with no title or
-   * artist tags that no catalogue has: its "Artist - Song" file name's two halves.
+   * artist tags that no catalogue has: its "Artist - Song" file name's two halves
+   * — or "artist" for a genre guessed from the artist alone (`guess`).
    */
-  source: z.enum(["itunes", "deezer", "musicbrainz", "name"]).nullable(),
+  source: z.enum(["itunes", "deezer", "musicbrainz", "name", "artist"]).nullable(),
+  /**
+   * The genre found is a guess from the song's artist (no catalogue has one for the
+   * song itself), and why: "3 of Linkin Park's other songs here are Rock". `source`
+   * is "artist" when that's all that was found.
+   */
+  guess: z.string().nullable().default(null),
   /** Every catalogue answered and none has it (nor does its name say): marked Not found. */
   notFound: z.boolean().default(false),
 });

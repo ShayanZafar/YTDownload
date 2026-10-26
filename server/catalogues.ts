@@ -910,6 +910,78 @@ export async function lookUpSongNoted(
   return answer;
 }
 
+// --- An artist's genre ----------------------------------------------------------
+
+/** The genre iTunes files an artist under, from its artist search's answer ("Hip-Hop/Rap"). */
+export function itunesArtistGenre(answer: unknown, artist: string): string | undefined {
+  const results = (answer as { results?: unknown })?.results;
+  if (!Array.isArray(results)) return undefined;
+  const found = (results as { artistName?: unknown; primaryGenreName?: unknown }[]).find(
+    (r) => str(r?.artistName) && str(r?.primaryGenreName) && sameArtist(artist, str(r.artistName)!),
+  );
+  return found ? str(found.primaryGenreName) : undefined;
+}
+
+/** The MusicBrainz artist named so, from its artist search's answer: their id. */
+export function musicBrainzArtistId(answer: unknown, artist: string): string | undefined {
+  const artists = (answer as { artists?: unknown })?.artists;
+  if (!Array.isArray(artists)) return undefined;
+  const found = (artists as { id?: unknown; name?: unknown; score?: unknown }[]).find(
+    (a) => str(a?.id) && str(a?.name) && Number(a.score) >= 90 && sameArtist(artist, str(a.name)!),
+  );
+  return found ? str(found.id) : undefined;
+}
+
+const artistGenres = new Map<string, { genre: string; source: CatalogueSource } | null>();
+
+/**
+ * The genre a catalogue files an artist under — iTunes', else MusicBrainz's
+ * (their genre counted most) — for a song no catalogue has: a guess at the
+ * song's. A catalogue that's busy or can't be reached is passed over at once.
+ * Remembered for the artist once both answered.
+ */
+export async function genreOfArtistNamed(
+  artist: string,
+): Promise<{ genre: string; source: CatalogueSource } | undefined> {
+  const key = plain(cleanArtist(artist));
+  if (!key) return undefined;
+  if (artistGenres.has(key)) return artistGenres.get(key) ?? undefined;
+  let answered = 0;
+  const ask = async (source: CatalogueSource, find: () => Promise<string | undefined>) => {
+    try {
+      const genre = await find();
+      answered++;
+      return genre ? { genre, source } : undefined;
+    } catch (err) {
+      if (err instanceof Refused || err instanceof CatalogueError) return undefined;
+      throw err;
+    }
+  };
+  const found =
+    (await ask("itunes", async () => {
+      const params = new URLSearchParams({
+        term: artist,
+        media: "music",
+        entity: "musicArtist",
+        limit: "10",
+      });
+      return itunesArtistGenre(await getJson("itunes", `${ITUNES_SEARCH}?${params}`), artist);
+    })) ??
+    (await ask("musicbrainz", async () => {
+      const params = new URLSearchParams({ query: `artist:${phrase(artist)}`, fmt: "json" });
+      const id = musicBrainzArtistId(
+        await getJson("musicbrainz", `${MUSICBRAINZ_ARTIST}?${params}`),
+        artist,
+      );
+      return id ? genreOfArtist(id) : undefined;
+    }));
+  if (found || answered === 2) {
+    artistGenres.set(key, found ?? null);
+    if (artistGenres.size > CACHE_SIZE) artistGenres.delete(artistGenres.keys().next().value!);
+  }
+  return found;
+}
+
 function remember(key: string, answer: CatalogueAnswer) {
   cache.set(key, answer);
   if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!);
@@ -918,6 +990,7 @@ function remember(key: string, answer: CatalogueAnswer) {
 /** Forgets the answers and refusals (for tests). */
 export function resetCatalogues() {
   cache.clear();
+  artistGenres.clear();
   refusedUntil.itunes = 0;
   refusedUntil.deezer = 0;
   refusedUntil.musicbrainz = 0;

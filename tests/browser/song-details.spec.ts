@@ -228,3 +228,64 @@ test("songs no catalogue has are shown as Not found, and left out of Fill in det
   await expect(panel.getByText(/wasn't found|weren't found/)).toBeVisible();
   expect(lookedUp).toHaveLength(2);
 });
+
+test("a genre no catalogue has is guessed from the artist, and the review says it's a guess", async ({
+  page,
+  request,
+}) => {
+  await stayOffline(page);
+  const file = path.join(folder, "Low Tone.mp3");
+  await song(file, { title: "Low Tone", artist: "Sine Wave" });
+  // No catalogue has Low Tone: its artist's other songs here are Electronic.
+  await page.route("**/api/music/*/details", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const tracks = (await (await request.get("/api/music")).json()).tracks as {
+      id: string;
+      title: string;
+    }[];
+    const track = tracks.find((t) => route.request().url().includes(`/${t.id}/`))!;
+    const low = track.title === "Low Tone";
+    await route.fulfill({
+      json: {
+        missing: low ? ["album", "genre", "year", "track", "cover"] : ["year"],
+        writable: true,
+        found: low ? { genre: "Electronic" } : null,
+        match: null,
+        source: low ? "artist" : null,
+        guess: low ? "another song of Sine Wave's here is Electronic" : null,
+        notFound: true,
+      },
+    });
+  });
+
+  await request.put("/api/settings", { data: { saveFolder: folder } });
+  await page.goto("/");
+  const library = page.getByRole("region", { name: "Your music" });
+  const rows = library.locator("ol > li");
+  await expect(rows.filter({ hasText: "Low Tone" })).toHaveCount(1);
+  await library.getByRole("button", { name: "Fill in details" }).click();
+  const panel = library.getByRole("region", { name: "Fill in details" });
+  await panel.getByRole("button", { name: /^Look up \d+ songs$/ }).click();
+  const each = panel.getByRole("log", { name: "Each song" });
+  await expect(each.getByRole("listitem").filter({ hasText: "“Low Tone”" })).toContainText(
+    "guessed from the artist: Genre: Electronic",
+  );
+  await expect(panel.getByText("Found details for 1 song.")).toBeVisible();
+  await expect(panel.getByText("Adds Genre: Electronic")).toBeVisible();
+  await expect(
+    panel.getByText(
+      "The genre is a guess from the artist: another song of Sine Wave's here is Electronic.",
+    ),
+  ).toBeVisible();
+  await expect(panel.getByRole("checkbox", { name: "Add details to “Low Tone”" })).toBeChecked();
+  await panel.getByRole("button", { name: "Add details to 1 song" }).click();
+  await expect(panel.getByText("Added details to 1 song.")).toBeVisible();
+  await panel.getByRole("button", { name: "Close", exact: true }).click();
+  // Written into the file: the list has it.
+  const tracks = (await (await request.get("/api/music")).json()).tracks as {
+    title: string;
+    genres: string[];
+  }[];
+  expect(tracks.find((t) => t.title === "Low Tone")?.genres).toEqual(["Electronic"]);
+  await fs.rm(file, { force: true });
+});
