@@ -49,8 +49,11 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   request,
 }) => {
   await stayOffline(page);
-  // What the catalogues have: Bare Tone's genre and album; the others, nothing.
+  // What the catalogues have: Bare Tone's genre and album; Rock One, nothing (its
+  // answer held back until the test lets it go); Jazz One can't be looked up.
   const lookedUp: string[] = [];
+  let releaseRock!: () => void;
+  const rockReleased = new Promise<void>((resolve) => (releaseRock = resolve));
   await page.route("**/api/music/*/details", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     const tracks = (await (await request.get("/api/music")).json()).tracks as {
@@ -59,6 +62,13 @@ test("songs can be shown by genre, and missing details filled in after a look", 
     }[];
     const track = tracks.find((t) => route.request().url().includes(`/${t.id}/`))!;
     lookedUp.push(track.title);
+    if (track.title === "Jazz One") {
+      return route.fulfill({
+        status: 502,
+        json: { message: "Couldn't reach the music catalogues (iTunes: no connection)." },
+      });
+    }
+    if (track.title === "Rock One") await rockReleased;
     const bare = track.title === "Bare Tone";
     await route.fulfill({
       json: {
@@ -92,12 +102,28 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await library.getByRole("button", { name: "Fill in details" }).click();
   const panel = library.getByRole("region", { name: "Fill in details" });
   await panel.getByRole("button", { name: "Look up 3 songs" }).click();
+  // Each song's outcome shows the moment it's done, while the others are still being looked up.
+  const each = panel.getByRole("log", { name: "Each song" });
+  await expect(each.getByRole("listitem").filter({ hasText: "“Bare Tone”" })).toContainText(
+    "found on iTunes: Genre: Electronic · Album: Pure Tones",
+  );
+  await expect(each.getByRole("listitem").filter({ hasText: "“Jazz One”" })).toContainText(
+    "couldn't be looked up: Couldn't reach the music catalogues (iTunes: no connection).",
+  );
+  await expect(panel.getByRole("progressbar", { name: "Looking up songs" })).toHaveAttribute(
+    "aria-valuenow",
+    "2",
+  );
+  releaseRock();
   await expect(panel.getByText("Found details for 1 song.")).toBeVisible();
   expect(lookedUp.sort()).toEqual(["Bare Tone", "Jazz One", "Rock One"]);
-  await expect(panel.getByText("2 songs weren't found")).toBeVisible();
+  await expect(each.getByRole("listitem").filter({ hasText: "“Rock One”" })).toContainText(
+    "not found in iTunes or Deezer",
+  );
+  await expect(panel.getByText("1 song wasn't found")).toBeVisible();
   const tick = panel.getByRole("checkbox", { name: "Add details to “Bare Tone”" });
   await expect(tick).toBeChecked();
-  await expect(panel.getByText("Genre: Electronic · Album: Pure Tones")).toBeVisible();
+  await expect(panel.getByText("Adds Genre: Electronic · Album: Pure Tones")).toBeVisible();
   await expect(
     panel.getByText(/Matched “Bare Tone” by Sine Wave, on Pure Tones \(iTunes\)/),
   ).toBeVisible();
@@ -108,13 +134,14 @@ test("songs can be shown by genre, and missing details filled in after a look", 
   await tick.check();
   await panel.getByRole("button", { name: "Add details to 1 song" }).click();
   await expect(panel.getByText("Added details to 1 song.")).toBeVisible();
+  await expect(each.getByRole("listitem")).toHaveText(["“Bare Tone” details added"]);
 
   // The file has them now: the list shows its new genre.
   await expect(genre.locator("option", { hasText: "Electronic (1)" })).toHaveCount(1);
   await expect(genre.locator("option", { hasText: "No genre" })).toHaveCount(0);
-  await expect(rows.filter({ hasText: "Bare Tone" })).toContainText("Pure Tones");
   await panel.getByRole("button", { name: "Close", exact: true }).click();
   await expect(panel).toBeHidden();
+  await expect(rows.filter({ hasText: "Bare Tone" })).toContainText("Pure Tones");
 
   // Filled in, its album can be filtered on too, with the genre.
   await library.getByRole("combobox", { name: "Show songs of album" }).selectOption({

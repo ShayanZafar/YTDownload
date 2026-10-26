@@ -29,6 +29,7 @@ import {
 } from "./audio";
 import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
+import { lateDetails, lookUpDownload } from "./download-details";
 import { settings } from "./settings";
 import { cpuCores } from "./cpu-cores";
 import { isLocalRequest, localOnly, sameOriginOnly } from "./local-only";
@@ -648,6 +649,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // is answered at once with a 502 that says so.)
       const info = await lookUpAudio(link);
       const tags = { ...info, ...(await songTags), spotifyId };
+      // Its genre (and for a song without an album, its album) from the music
+      // catalogues, looked up meanwhile. It never fails or holds the download up.
+      const lookedUp = lookUpDownload(tags, info.duration);
 
       // Cancelled while we were looking up the video: don't start any work.
       if (clientGone) return;
@@ -657,7 +661,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const cover =
         videoCover ??
         coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
-      output = await prepareAudioOutput(format, tags, info.acodec, await cover);
+      const ownCover = await cover;
+      output = await prepareAudioOutput(
+        format,
+        tags,
+        info.acodec,
+        ownCover,
+        lateDetails(lookedUp, ownCover !== undefined),
+      );
       if (clientGone) return;
       // Saved as the name chosen on the page, or the video's title. res.attachment
       // writes both a plain filename and a UTF-8 one (filename*), so accents and
