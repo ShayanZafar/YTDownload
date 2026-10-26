@@ -38,6 +38,7 @@ import {
 import { FolderError, nameTaken } from "./folders";
 import { runFfmpeg } from "./ffmpeg";
 import { retryWhenBusy } from "./retry-when-busy";
+import { whileBusy } from "./song-file";
 import { moveToTrash } from "./trash";
 
 // --- Songs, and finding one by its id -------------------------------------------
@@ -204,7 +205,16 @@ export async function assertNameFree(file: AudioFile, fileName: string): Promise
  * never replaced, nor is a number added. A change of case only ("song.mp3" →
  * "Song.mp3") is made as it is. Returns its new place.
  */
-export async function renameSong(
+export function renameSong(
+  folder: string,
+  file: AudioFile,
+  fileName: string,
+): Promise<{ id: string; path: string }> {
+  // One change to a song at a time: not while it's trimmed, replaced or retagged.
+  return whileBusy(file.absolute, () => renameNow(folder, file, fileName));
+}
+
+async function renameNow(
   folder: string,
   file: AudioFile,
   fileName: string,

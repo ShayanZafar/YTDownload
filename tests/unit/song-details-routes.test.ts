@@ -8,6 +8,7 @@ import os from "os";
 import path from "path";
 import { FFMPEG_PATH } from "../../server/audio";
 import { resetCatalogues } from "../../server/catalogues";
+import { SONG_BUSY, whileBusy } from "../../server/song-file";
 import { facetChoicesOf, facetCounts, folderTrack, matchChoices } from "../../client/src/lib/music";
 import {
   musicLibrarySchema,
@@ -185,6 +186,39 @@ describe("Fill in details (API)", () => {
     const log = (await request(app).get("/api/details-log").expect(200)).text;
     expect(log).toContain("no catalogue has it: from its file name; title Rare Tone");
     await fs.rm(path.join(folder, "Sine Wave - Rare Tone.mp3"));
+  });
+
+  it("won't write a song's details or rename it while another change is making it", async () => {
+    const absolute = path.join(folder, "Busy Song.mp3");
+    await tone(absolute, ["-c:a", "libmp3lame", "-b:a", "128k", "-metadata", "title=Busy Song"]);
+    const song = (await songs())["Busy Song.mp3"];
+    const before = await fs.readFile(absolute);
+    let finish!: () => void;
+    const trimming = whileBusy(absolute, () => new Promise<void>((done) => (finish = done)));
+    try {
+      for (const [route, body] of [
+        ["details", { album: "Rocks" }],
+        ["rename", { title: "Busy Song (Live)" }],
+        ["rename", { name: "Still Busy" }],
+        ["fix-name", {}],
+      ] as const) {
+        const res = await request(app).post(`/api/music/${song.id}/${route}`).send(body);
+        // Fix name answers first that the name is right; the others wait their turn.
+        if (route === "fix-name") expect(res.status).toBe(409);
+        else expect(res.body).toEqual({ message: SONG_BUSY });
+        expect(res.status).toBe(409);
+      }
+      expect((await fs.readFile(absolute)).equals(before)).toBe(true);
+      expect((await fs.readdir(folder)).filter((name) => /Busy/.test(name))).toEqual([
+        "Busy Song.mp3",
+      ]);
+    } finally {
+      finish();
+      await trimming;
+    }
+    // Free once that change is done.
+    await request(app).post(`/api/music/${song.id}/details`).send({ album: "Rocks" }).expect(200);
+    await fs.rm(absolute);
   });
 
   it("says a file that can't hold tags can't be changed", async () => {
