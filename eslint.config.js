@@ -12,6 +12,7 @@ export default tseslint.config(
       ".cache/**",
       ".git/**",
       ".claude/**",
+      "data/**", // the app's own files (git-ignored), not code
       "client/src/components/ui/**",
       "playwright-report/**",
       "test-results/**",

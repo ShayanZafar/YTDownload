@@ -1,4 +1,4 @@
-import { Cloud, Download, Loader2, Music } from "lucide-react";
+import { CheckCircle2, Cloud, Download, Loader2, Music } from "lucide-react";
 import type { DownloadFormat } from "@shared/routes";
 import { sanitizedFileName } from "@shared/name-noise";
 import type { AudioSource } from "@shared/schema";
@@ -39,6 +39,8 @@ type PreviewCardProps = {
   href: string;
   /** Its save into the "Save to" folder, while one runs. */
   save?: ActiveSave;
+  /** Downloaded already (it's in the history): the button says so, and downloads it again. */
+  done?: boolean;
   onDownload: (event: React.MouseEvent) => void;
   onClear: () => void;
 };
@@ -66,6 +68,7 @@ export function PreviewCard({
   onFormatChange,
   href,
   save,
+  done = false,
   onDownload,
   onClear,
 }: PreviewCardProps) {
@@ -165,9 +168,21 @@ export function PreviewCard({
               onClick={onDownload}
               className="w-full flex items-center justify-center gap-2 h-14 rounded-xl bg-foreground text-background font-semibold hover-elevate active-elevate-2 transition-all shadow-xl shadow-foreground/20"
             >
-              <Download className="w-5 h-5" />
-              Download Audio
-              <span className="font-normal opacity-60">· {isOriginal ? "Original" : "MP3"}</span>
+              {done ? (
+                <>
+                  <CheckCircle2 className="w-5 h-5 shrink-0" />
+                  Download Complete
+                  <span className="font-normal opacity-60 truncate">· Download audio again</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-5 h-5" />
+                  Download Audio
+                  <span className="font-normal opacity-60">
+                    · {isOriginal ? "Original" : "MP3"}
+                  </span>
+                </>
+              )}
             </a>
           )}
 

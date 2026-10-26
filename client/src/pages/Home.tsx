@@ -6,10 +6,11 @@ import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { Layout } from "@/components/layout";
 import { FindBox, inputModes, type InputMode } from "@/components/find-box";
-import { PreviewCard, type Selected } from "@/components/preview-card";
+import { PreviewCard, defaultNameOf, type Selected } from "@/components/preview-card";
 import { SearchResults } from "@/components/search-results";
 import { RecentExtractions } from "@/components/recent-extractions";
 import { SaveToSetting } from "@/components/save-to-setting";
+import { ActiveSaves } from "@/components/active-saves";
 import { FolderPicker } from "@/components/folder-picker";
 import { RecentPlaylists } from "@/components/recent-playlists";
 import { SpotifyAccount } from "@/components/spotify-account";
@@ -159,7 +160,8 @@ export default function Home() {
       }),
   });
   const { reset: resetDownloadAll } = downloadAll;
-  // Another playlist (or none): the last run's marks no longer apply.
+  // Another playlist (or none): the last run's marks no longer apply. A run
+  // still going isn't stopped by it — only by its Stop button.
   useEffect(() => resetDownloadAll(), [playlistLink, resetDownloadAll]);
 
   const {
@@ -458,11 +460,12 @@ export default function Home() {
     href: string,
     request: SaveRequest,
     folder: string,
+    title: string,
     soundCloudQuery?: string,
   ) => {
     const controller = new AbortController();
     const cancel = () => controller.abort();
-    setSaves((current) => ({ ...current, [href]: { bytes: 0, folder, cancel } }));
+    setSaves((current) => ({ ...current, [href]: { title, bytes: 0, folder, cancel } }));
     try {
       const saved = await saveOnServer(request, {
         signal: controller.signal,
@@ -506,15 +509,17 @@ export default function Home() {
 
   // Every download link goes through here: with a "Save to" folder the app
   // saves the file itself; otherwise the browser downloads it as usual.
+  // `title`: what the song is called while it's saved.
   const startDownload = (
     event: React.MouseEvent,
     href: string,
     request: SaveRequest,
+    title: string,
     soundCloudQuery?: string,
   ) => {
     if (saveTo.folder) {
       event.preventDefault();
-      if (!saves[href]) void saveIntoFolder(href, request, saveTo.folder, soundCloudQuery);
+      if (!saves[href]) void saveIntoFolder(href, request, saveTo.folder, title, soundCloudQuery);
       return false;
     }
     watchForDownload(request.url);
@@ -536,7 +541,8 @@ export default function Home() {
         : selected.spotifyId
           ? `https://open.spotify.com/track/${selected.spotifyId}`
           : selected.title;
-    if (!startDownload(event, selectedHref, request, soundCloudQuery)) return;
+    const title = request.name ?? defaultNameOf(selected);
+    if (!startDownload(event, selectedHref, request, title, soundCloudQuery)) return;
 
     toast({
       title: "Download Started",
@@ -553,6 +559,16 @@ export default function Home() {
       })
     : "";
   const selectedSave = saves[selectedHref];
+  // The selected song is in the history already: its button says so, and downloads it again.
+  const selectedId = selected && extractVideoId(selected.url);
+  const selectedDone =
+    !!selected &&
+    allHistory.some(
+      (d) =>
+        d.url === selected.url ||
+        (!!selected.spotifyId && d.spotifyId === selected.spotifyId) ||
+        (!!selectedId && extractVideoId(d.url) === selectedId),
+    );
 
   return (
     <Layout>
@@ -621,6 +637,9 @@ export default function Home() {
           <FolderPicker onChoose={chooseFolder} onClose={() => setChoosingFolder(false)} />
         )}
       </section>
+
+      {/* Saves into the folder still running that the preview card doesn't show */}
+      <ActiveSaves saves={saves} shownHref={selected ? selectedHref : undefined} />
 
       {/* Playlist panel: open while a playlist or album is loaded */}
       {playlistLink !== null && (
@@ -701,6 +720,7 @@ export default function Home() {
               onFormatChange={setFormat}
               href={selectedHref}
               save={selectedSave}
+              done={selectedDone}
               onDownload={handleDownload}
               onClear={clear}
             />

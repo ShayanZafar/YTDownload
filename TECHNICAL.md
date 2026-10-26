@@ -449,7 +449,9 @@ What each file does, and the function and constant names to look for. This was C
 - `client/src/pages/Home.tsx` — the page: its state and what each action does (open a link, search,
   open a playlist, Paste, download or save), laid out from components — `find-box.tsx` (the Link /
   Search / Playlist switch, the box, Paste, the copied-link suggestion), `preview-card.tsx` (the
-  chosen video, Download Audio, Original audio), `search-results.tsx` (with the inline video
+  chosen video, Download Audio — Download Complete once it's in the history, still downloading it
+  again — Original audio), `active-saves.tsx` (saves into the folder still running that the card
+  doesn't show, after another song is picked, each with Cancel), `search-results.tsx` (with the inline video
   preview; a SoundCloud mark on SoundCloud's results, and **Search SoundCloud** over YouTube's) and
   `recent-extractions.tsx` (the history, its search and filters; removing a song and Clear history,
   with Undo in the note — `hooks/use-history-actions.tsx`; with a Save to folder, In folder / Not in

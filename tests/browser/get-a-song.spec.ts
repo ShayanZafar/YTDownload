@@ -399,6 +399,107 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     await expect(page.getByText(/your browser's downloads folder/i)).toBeVisible();
   });
 
+  test("Save to: a save keeps going while another song is searched for and picked, and its button then says Download Complete", async ({
+    page,
+    front,
+    request,
+  }) => {
+    const folder = await deletedAfterTest("yt-audio-e2e-keep-saving-");
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    const ZOO = { id: VIDEO_ID, title: "Me at the zoo", channel: "jawed", duration: 19 };
+    const RICK = {
+      id: "dQw4w9WgXcQ",
+      title: "Never Gonna Give You Up",
+      channel: "Rick",
+      duration: 213,
+    };
+    const resultOf = (v: typeof ZOO) => ({
+      ...v,
+      url: `https://www.youtube.com/watch?v=${v.id}`,
+      thumbnail: THUMBNAIL,
+      official: false,
+    });
+    await page.route("**/api/search?*", (route) =>
+      route.fulfill({
+        json: {
+          results: [resultOf(queryOf(route).get("q")?.includes("rick") ? RICK : ZOO)],
+          source: "youtube",
+        },
+      }),
+    );
+    const history: { url: string; title: string }[] = [];
+    await answerHistory(page, () => history);
+    // The save is held until another song has been searched for and picked.
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let calledOff = false;
+    let saveCalls = 0;
+    page.on("requestfailed", (r) => {
+      if (r.url().endsWith("/api/video/save")) calledOff = true;
+    });
+    await page.route("**/api/video/save", async (route) => {
+      const body = route.request().postDataJSON() as { url: string };
+      saveCalls++;
+      await released;
+      await route.fulfill({
+        contentType: "application/x-ndjson",
+        body: [
+          { type: "progress", bytes: 65_536 },
+          {
+            type: "done",
+            fileName: "jawed - Me at the zoo.mp3",
+            folder,
+            path: path.join(folder, "jawed - Me at the zoo.mp3"),
+            bytes: 98_304,
+          },
+        ]
+          .map((line) => `${JSON.stringify(line)}\n`)
+          .join(""),
+      });
+      history.push({ url: body.url, title: ZOO.title });
+    });
+
+    await page.goto(front.url);
+    await page.getByRole("button", { name: "Search by song" }).click();
+    const box = page.getByLabel("Song search", { exact: true });
+    const results = page.getByRole("region", { name: "Search results" });
+    await box.fill("me at the zoo");
+    await box.press("Enter");
+    await results.getByRole("button", { name: /^me at the zoo, by jawed/i }).click();
+    await page.locator('a[href^="/api/video/download"]').click();
+    const saving = page.getByRole("status").filter({ hasText: /^saving to/i });
+    await expect(saving).toBeVisible();
+
+    // Another song searched for and picked: the first save goes on, listed with its Cancel.
+    await box.fill("rick astley");
+    await box.press("Enter");
+    await results.getByRole("button", { name: /^never gonna give you up/i }).click();
+    await expect(downloadLink(page)).toBeVisible();
+    const still = page.getByRole("region", { name: "Still downloading" });
+    await expect(still.getByText("jawed - Me at the zoo")).toBeVisible();
+    await expect(
+      still.getByRole("button", { name: "Cancel saving jawed - Me at the zoo" }),
+    ).toBeVisible();
+
+    release();
+    await expect(page.getByText(/saved to/i).first()).toBeVisible();
+    await expect(still).toHaveCount(0);
+    expect(calledOff).toBe(false);
+    await expect(historyRows(page, /me at the zoo/i)).toHaveCount(1, { timeout: 20_000 });
+    await expect(page.getByText(/download cancelled/i)).toHaveCount(0);
+
+    // The saved song, opened again: its button says it's done, and still downloads it again.
+    await box.fill("me at the zoo");
+    await box.press("Enter");
+    await results.getByRole("button", { name: /^me at the zoo, by jawed/i }).click();
+    const again = page.locator('a[href^="/api/video/download"]', { hasText: /download complete/i });
+    await expect(again).toHaveText(/download complete.*download audio again/i);
+    await again.click();
+    await expect.poll(() => saveCalls).toBe(2);
+    await expect.poll(() => history.length).toBe(2);
+    await expect(again).toBeVisible();
+  });
+
   test("when YouTube can't answer a search, SoundCloud's tracks are offered and download the same way", async ({
     page,
     front,

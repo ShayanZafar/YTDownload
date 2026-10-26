@@ -3,6 +3,7 @@ import {
   checkReason,
   confidentMatch,
   downloadSongs,
+  marksWhere,
   uniqueSongs,
   type DownloadAllCalls,
   type SongStatus,
@@ -19,6 +20,24 @@ const result = (id: string, duration: number | null): SearchResult => ({
   duration,
   thumbnail: "",
   official: true,
+});
+
+describe("marksWhere", () => {
+  // Opening another playlist forgets the last run's marks, but a run still
+  // going keeps going, with the marks of the songs it's working on.
+  it("keeps the songs still being downloaded, or only the ones done with", () => {
+    const statuses: Record<string, SongStatus> = {
+      a: { state: "waiting" },
+      b: { state: "finding" },
+      c: { state: "saving", bytes: 10 },
+      d: { state: "saved", file: "d.mp3" },
+      e: { state: "check", reason: "?" },
+      f: { state: "failed", reason: "!" },
+    };
+    expect(Object.keys(marksWhere(statuses, true))).toEqual(["a", "b", "c"]);
+    expect(Object.keys(marksWhere(statuses, false))).toEqual(["d", "e", "f"]);
+    expect(marksWhere(statuses, true).c).toEqual({ state: "saving", bytes: 10 });
+  });
 });
 
 describe("confidentMatch", () => {

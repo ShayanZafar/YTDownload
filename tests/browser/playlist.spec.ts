@@ -301,6 +301,100 @@ test.describe("a YouTube playlist", () => {
     await expect(tick("Me at the zoo")).not.toBeChecked();
   });
 
+  test("Download keeps going through a new search and another playlist opened; only Stop cancels it", async ({
+    page,
+    request,
+  }) => {
+    folder = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-yt-playlist-"));
+    await request.put("/api/settings", { data: { saveFolder: folder } });
+    const OTHER_LIST = "PLaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER_LINK = `https://www.youtube.com/playlist?list=${OTHER_LIST}`;
+    await page.route("**/api/youtube/playlist?*", (route) =>
+      route.fulfill({
+        json: route.request().url().includes(OTHER_LIST)
+          ? {
+              ...PLAYLIST,
+              id: OTHER_LIST,
+              url: OTHER_LINK,
+              name: "Encores",
+              tracks: [
+                {
+                  ...PLAYLIST.tracks[0],
+                  id: "9bZkp7q19f0",
+                  url: "https://www.youtube.com/watch?v=9bZkp7q19f0",
+                  title: "Gangnam Style",
+                },
+              ],
+            }
+          : PLAYLIST,
+      }),
+    );
+    await page.route("**/api/search?*", (route) =>
+      route.fulfill({ json: { results: [], source: "youtube" } }),
+    );
+    // The saves are held until the search and the other playlist are open.
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const saved: string[] = [];
+    const aborted: string[] = [];
+    await page.route("**/api/video/save", async (route) => {
+      const body = route.request().postDataJSON() as { url: string };
+      await held;
+      const video = videos.find(([id]) => body.url.endsWith(id));
+      const fileName = `${video?.[1]}.mp3`;
+      try {
+        await route.fulfill({
+          contentType: "application/x-ndjson",
+          body: [
+            JSON.stringify({ type: "done", fileName, folder, path: fileName, bytes: 2048 }),
+            "",
+          ].join("\n"),
+        });
+        saved.push(body.url);
+      } catch {
+        aborted.push(body.url); // the page cancelled it
+      }
+    });
+    page.on("requestfailed", (req) => {
+      if (req.url().includes("/api/video/save")) aborted.push(req.url());
+    });
+
+    await page.goto("/");
+    await page.getByRole("button", { name: "Playlist", exact: true }).click();
+    const box = page.getByRole("textbox", { name: /playlist link/i });
+    await box.fill(LINK);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+    const panel = page.getByRole("region", { name: /youtube playlist/i });
+    await panel.getByRole("button", { name: "Download 3 songs" }).click({ timeout: 30_000 });
+    await expect(panel.getByText("Downloading: 0 of 3 done…")).toBeVisible();
+
+    // A new search, then another playlist: the download goes on, Stop still at hand.
+    await page.getByRole("button", { name: "Search by song" }).click();
+    const search = page.getByLabel("Song search", { exact: true });
+    await search.fill("some other song");
+    await search.press("Enter");
+    await expect(page.getByText("No songs found")).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.getByRole("button", { name: "Playlist", exact: true }).click();
+    await box.fill(OTHER_LINK);
+    await page.getByRole("button", { name: /open playlist/i }).click();
+    await expect(panel.getByRole("heading", { name: "Encores" })).toBeVisible({ timeout: 30_000 });
+    await expect(panel.getByText("Downloading: 0 of 3 done…")).toBeVisible();
+
+    release();
+    await expect(page.getByText("Saved 3 songs to", { exact: false }).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(saved.sort()).toEqual([
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "https://www.youtube.com/watch?v=fJ9rUzIMcZQ",
+      "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+    ]);
+    expect(aborted).toEqual([]);
+    await expect(page.getByText("Downloads stopped")).toHaveCount(0);
+  });
+
   test("with a Save to folder, plays the songs in it in the playlist's order, and saves a playlist file", async ({
     page,
     request,

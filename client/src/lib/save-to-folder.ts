@@ -170,7 +170,7 @@ export type SaveRequest = {
 };
 
 /** A download being saved into the "Save to" folder (the page keys them by download link). */
-export type ActiveSave = { bytes: number; folder: string; cancel: () => void };
+export type ActiveSave = { title: string; bytes: number; folder: string; cancel: () => void };
 
 export async function saveOnServer(
   request: SaveRequest,
