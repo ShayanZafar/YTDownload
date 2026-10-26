@@ -881,9 +881,13 @@ export function MusicLibrary({ settings, folder, onChooseFolder, locate }: Music
             tracks={shown.filter(
               (t): t is Extract<PlayerTrack, { source: "folder" }> => t.source === "folder",
             )}
+            folderTracks={folderTracks.filter(
+              (t): t is Extract<PlayerTrack, { source: "folder" }> => t.source === "folder",
+            )}
             playingKey={player.current?.key ?? null}
             atOnce={settings?.cpuCores ?? 1}
             onSongRenamed={showRenamed}
+            onDelete={setDeleting}
             onRenamed={() => {
               void folderMusic.refetch();
               void queryClient.invalidateQueries({ queryKey: SONGS_IN_FOLDER_KEY });

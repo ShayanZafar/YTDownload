@@ -249,7 +249,7 @@ export function numberedName(fileName: string, n: number): string {
  * name? EEXIST says so — but for a folder of that name Windows may answer
  * "access denied" instead, so then look.
  */
-async function nameTaken(err: unknown, candidate: string): Promise<boolean> {
+export async function nameTaken(err: unknown, candidate: string): Promise<boolean> {
   const code = (err as NodeJS.ErrnoException).code;
   if (code === "EEXIST") return true;
   if (code !== "EPERM" && code !== "EACCES" && code !== "EISDIR") return false;

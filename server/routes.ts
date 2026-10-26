@@ -53,6 +53,7 @@ import {
   convertedForBrowser,
   deleteMusicFile,
   findMusicFile,
+  assertNameFree,
   fixSongName,
   renameSong,
   historyInFolder,
@@ -495,6 +496,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!renaming && !retagging) {
         return res.status(409).json({ message: "It has that name already." });
       }
+      // A name that's taken is refused before anything is changed.
+      if (renaming) await assertNameFree(file, fileName);
       let changed = false;
       if (retagging) {
         changed = (await writeSongDetails(file, {}, { replace: { title, artist } })).length > 0;

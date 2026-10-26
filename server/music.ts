@@ -33,7 +33,7 @@ import {
   type AudioFile,
   type FileTags,
 } from "./library";
-import { claimNewName } from "./folders";
+import { FolderError, nameTaken } from "./folders";
 import { retryWhenBusy } from "./retry-when-busy";
 import { moveToTrash } from "./trash";
 
@@ -138,8 +138,8 @@ export async function deleteMusicFile(
 
 /**
  * Renames a song to the extension its content says it should have
- * (`realType`, from its tags): "Song.mp3" → "Song.m4a", or "Song (1).m4a" if
- * that's taken — an existing file is never replaced. Returns its new place.
+ * (`realType`, from its tags): "Song.mp3" → "Song.m4a". Refused (NameTakenError)
+ * if that's taken: an existing file is never replaced. Returns its new place.
  */
 export function fixSongName(
   folder: string,
@@ -161,10 +161,31 @@ async function sameFile(a: string, b: string): Promise<boolean> {
 }
 
 /**
- * Renames a song, in its own folder, to `fileName` (made safe already), or
- * "Name (1).mp3" if another file has that name — an existing file is never
- * replaced. A change of case only ("song.mp3" → "Song.mp3") is made as it
- * is. Returns its new place.
+ * Another file in the folder has the name a song was to be renamed to: likely
+ * the same song twice (a copy's "Song (1).mp3" beside "Song.mp3"). Nothing is
+ * renamed — no "(1)", "(2)" of our own — so the person can delete one.
+ */
+export class NameTakenError extends FolderError {
+  constructor(readonly fileName: string) {
+    super(
+      409,
+      `“${fileName}” is in the folder already — if it's the same song, delete one of them.`,
+    );
+  }
+}
+
+/** Throws NameTakenError if a file other than `file` has the name `fileName` in its folder. */
+export async function assertNameFree(file: AudioFile, fileName: string): Promise<void> {
+  if (!(await sameFile(file.absolute, path.join(path.dirname(file.absolute), fileName)))) {
+    throw new NameTakenError(fileName);
+  }
+}
+
+/**
+ * Renames a song, in its own folder, to `fileName` (made safe already).
+ * Refused (NameTakenError) if another file has that name: an existing file is
+ * never replaced, nor is a number added. A change of case only ("song.mp3" →
+ * "Song.mp3") is made as it is. Returns its new place.
  */
 export async function renameSong(
   folder: string,
@@ -177,7 +198,16 @@ export async function renameSong(
   const sameName =
     fileName.toLowerCase() === path.basename(file.absolute).toLowerCase() &&
     (await sameFile(file.absolute, path.join(dir, fileName)));
-  const target = sameName ? path.join(dir, fileName) : await claimNewName(dir, fileName);
+  const target = path.join(dir, fileName);
+  // Claimed first ("wx": the system refuses a name that's taken), then renamed over.
+  if (!sameName) {
+    await fs.open(target, "wx").then(
+      (handle) => handle.close(),
+      async (err: unknown) => {
+        throw (await nameTaken(err, target)) ? new NameTakenError(fileName) : err;
+      },
+    );
+  }
   try {
     await retryWhenBusy(() => fs.rename(file.absolute, target));
   } catch (err) {
