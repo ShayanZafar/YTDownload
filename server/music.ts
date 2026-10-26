@@ -25,11 +25,13 @@ import type { MusicLibrary, MusicTrack } from "@shared/schema";
 import { spawnFfmpeg } from "./audio";
 import {
   findAudioFiles,
+  forgetTags,
   parseFile,
   readFolderTags,
   type AudioFile,
   type FileTags,
 } from "./library";
+import { claimNewName } from "./folders";
 import { retryWhenBusy } from "./retry-when-busy";
 import { moveToTrash } from "./trash";
 
@@ -53,6 +55,8 @@ export function toMusicTrack(folder: string, file: AudioFile, tags: FileTags): M
     duration: tags.duration ?? null,
     addedAt: new Date(file.addedMs).toISOString(),
     size: file.size,
+    realType: tags.realType ?? null,
+    notAudio: tags.notAudio ?? null,
   };
 }
 
@@ -98,6 +102,34 @@ export async function deleteMusicFile(
   if (permanently) await retryWhenBusy(() => fs.rm(file.absolute));
   else await moveToTrash(file.absolute);
   if (known) known.files.delete(musicTrackId(known.folder, file.relative));
+}
+
+/**
+ * Renames a song to the extension its content says it should have
+ * (`realType`, from its tags): "Song.mp3" → "Song.m4a", or "Song (1).m4a" if
+ * that's taken — an existing file is never replaced. Returns its new place.
+ */
+export async function fixSongName(
+  folder: string,
+  file: AudioFile,
+  realType: string,
+): Promise<{ id: string; path: string }> {
+  const dir = path.dirname(file.absolute);
+  const name = path.basename(file.absolute);
+  const target = await claimNewName(
+    dir,
+    `${name.slice(0, name.length - path.extname(name).length)}${realType}`,
+  );
+  try {
+    await retryWhenBusy(() => fs.rename(file.absolute, target));
+  } catch (err) {
+    await fs.rm(target, { force: true }).catch(() => {}); // the empty name it had claimed
+    throw err;
+  }
+  forgetTags(file.absolute);
+  if (known) known.files.delete(musicTrackId(known.folder, file.relative));
+  const relative = path.relative(folder, target);
+  return { id: musicTrackId(folder, relative), path: relative };
 }
 
 // --- Cover pictures ---------------------------------------------------------------

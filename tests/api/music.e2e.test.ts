@@ -287,6 +287,66 @@ describe("Music player (API)", () => {
     ]);
   });
 
+  it("spots a song that's another kind of audio than its name says, and a file that isn't audio", async () => {
+    // An M4A named .mp3 (the kind of file that plays wrong), and a program named .mp3.
+    await tone(path.join(folder, "Really M4A.mp3"), 2, ["-c:a", "aac", "-f", "mp4"]);
+    await fs.writeFile(
+      path.join(folder, "Not A Song.mp3"),
+      Buffer.concat([Buffer.from("MZ"), Buffer.alloc(4000)]),
+    );
+    const listed = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    const m4a = listed.find((track) => track.path === "Really M4A.mp3")!;
+    const program = listed.find((track) => track.path === "Not A Song.mp3")!;
+    expect(m4a).toMatchObject({ realType: ".m4a", notAudio: null });
+    expect(program).toMatchObject({ realType: null, notAudio: "a Windows program" });
+    expect(tracks[path.join("Sine Wave", "Test Tone.mp3")]).toMatchObject({
+      realType: null,
+      notAudio: null,
+    });
+
+    // The M4A is sent as what it is; the program isn't sent, converted or read at all.
+    const played = await get(`/api/music/${m4a.id}`);
+    expect(played.status).toBe(200);
+    expect(played.headers["content-type"]).toBe("audio/mp4");
+    for (const url of [
+      `/api/music/${program.id}`,
+      `/api/music/${program.id}/flac`,
+      `/api/music/${program.id}/cover`,
+    ]) {
+      const res = await request(app).get(url);
+      expect(res.status).toBe(415);
+      expect(res.body.message).toMatch(/a Windows program/);
+    }
+    expect((await request(app).post(`/api/music/${program.id}/fix-name`).send({})).status).toBe(
+      415,
+    );
+
+    // Fix name: the M4A gets its own extension — and only from this computer's page.
+    const otherDevice = await request(app)
+      .post(`/api/music/${m4a.id}/fix-name`)
+      .set("X-Forwarded-For", "192.168.1.20")
+      .send({});
+    expect(otherDevice.status).toBe(403);
+    const fixed = await request(app).post(`/api/music/${m4a.id}/fix-name`).send({});
+    expect(fixed.status).toBe(200);
+    expect(fixed.body.path).toBe("Really M4A.m4a");
+    await expect(fs.stat(path.join(folder, "Really M4A.mp3"))).rejects.toThrow();
+    const after = musicLibrarySchema.parse((await request(app).get("/api/music")).body).tracks;
+    expect(after.find((track) => track.id === fixed.body.id)).toMatchObject({
+      path: "Really M4A.m4a",
+      realType: null,
+    });
+    const again = await request(app).post(`/api/music/${fixed.body.id}/fix-name`).send({});
+    expect(again.status).toBe(409);
+
+    // The program can still be deleted.
+    expect(
+      (await request(app).delete(`/api/music/${program.id}`).send({ permanently: true })).status,
+    ).toBe(200);
+    await expect(fs.stat(path.join(folder, "Not A Song.mp3"))).rejects.toThrow();
+    await fs.rm(path.join(folder, "Really M4A.m4a"));
+  });
+
   it("forgets the old folder's songs when the Save to folder changes", async () => {
     const song = tracks[path.join("Sine Wave", "Test Tone.mp3")];
     const other = path.join(dir, "Other");

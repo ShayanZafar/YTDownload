@@ -8,6 +8,7 @@ import { audioLinkOf } from "@shared/soundcloud-link";
 import { prepareAudioOutput, startAudioPipeline, type PreparedOutput } from "./audio";
 import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
 import { coverFor } from "./cover";
+import { kindProblem, sniffFile } from "./file-kind";
 import {
   FolderError,
   assertWritableFolder,
@@ -154,8 +155,20 @@ export async function saveIntoFolder(req: Request, res: Response) {
       );
     }
 
-    // Complete: give it its real name, and add it to the history.
-    const saved = await claimName(part.path, folder, fileName);
+    // Complete: check it's the audio it should be (file-kind.ts), give it its
+    // real name, and add it to the history.
+    const { notAudio, realType } = kindProblem(
+      fileName,
+      await sniffFile(part.path).catch(() => undefined),
+    );
+    if (notAudio) {
+      throw new DownloadError(`Couldn't download the audio: what came was ${notAudio}, not audio`);
+    }
+    const saved = await claimName(
+      part.path,
+      folder,
+      realType ? `${fileName.slice(0, -path.extname(fileName).length)}${realType}` : fileName,
+    );
     part = undefined;
     await storage
       .createDownload({ url, title: info.title, spotifyId, source: link.source })

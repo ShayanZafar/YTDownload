@@ -536,4 +536,49 @@ test.describe("Music player (browser)", () => {
       await fs.rm(tired, { recursive: true, force: true });
     }
   });
+
+  test("a song that's another kind of file than its name says can be renamed, and a file that isn't audio never plays", async ({
+    page,
+    request,
+  }) => {
+    const odd = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-player-test-"));
+    try {
+      // An M4A named .mp3, and a program named .mp3.
+      await ffmpeg([
+        ...["-i", mp3, "-c:a", "aac", "-f", "mp4"],
+        ...["-metadata", "title=Wrong Name", path.join(odd, "Wrong Name.mp3")],
+      ]);
+      await fs.writeFile(
+        path.join(odd, "Not A Song.mp3"),
+        Buffer.concat([Buffer.from("MZ"), Buffer.alloc(4000)]),
+      );
+      await request.put("/api/settings", { data: { saveFolder: odd } });
+      await page.goto("/");
+      const library = page.getByRole("region", { name: "Your music" });
+      await expect(library.getByRole("listitem")).toHaveCount(2);
+
+      // Not a song: it says what it is, can't be played, and can be deleted.
+      const program = library.getByRole("button", { name: /^Play “Not A Song”/ });
+      await expect(program).toBeDisabled();
+      await expect(program).toHaveAccessibleName(/not a song: it's a Windows program/);
+      await expect(library.getByText("Not a song: it's a Windows program")).toBeVisible();
+      await expect(
+        library.getByRole("button", { name: "Delete from folder: “Not A Song”" }),
+      ).toBeVisible();
+
+      // Fix name: renamed to .m4a, and it still plays.
+      await library
+        .getByRole("button", { name: "Fix name: “Wrong Name” is really a .m4a file" })
+        .click();
+      await expect(page.getByText("“Wrong Name” is now Wrong Name.m4a.")).toBeVisible();
+      await expect(library.getByRole("button", { name: /^Fix name/ })).toHaveCount(0);
+      await fs.stat(path.join(odd, "Wrong Name.m4a"));
+      await expect(fs.stat(path.join(odd, "Wrong Name.mp3"))).rejects.toThrow();
+      await library.getByRole("button", { name: /^Play “Wrong Name”/ }).click(START_SONG);
+      await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
+    } finally {
+      await request.put("/api/settings", { data: { saveFolder: null } });
+      await fs.rm(odd, { recursive: true, force: true });
+    }
+  });
 });

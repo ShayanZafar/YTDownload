@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   audioSources,
   deletedSongSchema,
+  renamedSongSchema,
   downloadSchema,
   folderEntrySchema,
   lyricsSchema,
@@ -396,6 +397,16 @@ export const api = {
       path: "/api/music/:id" as const,
       input: z.object({ permanently: z.boolean().optional() }),
       responses: { 200: deletedSongSchema, 409: noBinSchema },
+    },
+    /**
+     * Gives a song whose content is another kind of audio than its name says
+     * (a ".mp3" that's really an M4A) the extension it should have — or a
+     * numbered name, if that's taken. `409` if its name is right already.
+     */
+    fixName: {
+      method: "POST" as const,
+      path: "/api/music/:id/fix-name" as const,
+      responses: { 200: renamedSongSchema },
     },
   },
 };

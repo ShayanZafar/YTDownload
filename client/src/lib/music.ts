@@ -10,8 +10,10 @@ import {
   deletedSongSchema,
   musicLibrarySchema,
   noBinSchema,
+  renamedSongSchema,
   type MusicLibrary,
   type MusicTrack,
+  type RenamedSong,
 } from "@shared/schema";
 import { searchableText } from "@/lib/history-filter";
 import { ApiError, errorFrom, requestJson } from "@/lib/save-to-folder";
@@ -35,6 +37,10 @@ export type PlayerTrack = {
   addedAt: number;
   /** What to ask `canPlayType()` about it ("" when the kind of file is unknown). */
   check: string;
+  /** A folder song that's another kind of audio than its name says: the extension it should have. */
+  realType?: string | null;
+  /** A folder file that isn't audio at all, by its content: what it is. It can't be played. */
+  notAudio?: string | null;
 } & (
   | { source: "folder"; id: string }
   | {
@@ -65,7 +71,10 @@ export function folderTrack(track: MusicTrack): PlayerTrack {
     duration: track.duration,
     fileName: track.path,
     addedAt: Date.parse(track.addedAt) || 0,
-    check: audioTypeOf(track.path)?.check ?? "",
+    // What it really is, if its name says otherwise.
+    check: audioTypeOf(track.realType ?? track.path)?.check ?? "",
+    realType: track.realType,
+    notAudio: track.notAudio,
   };
 }
 
@@ -120,6 +129,20 @@ export async function deleteFolderSong(
   if (!done.success)
     throw new ApiError("The app sent an answer the page didn't expect.", res.status);
   return { deleted: true, ...done.data };
+}
+
+/** Fix name: gives a folder song the extension its content says it should have. */
+export async function fixFolderSongName(id: string): Promise<RenamedSong> {
+  const res = await fetch(buildUrl(api.music.fixName.path, { id }), {
+    method: api.music.fixName.method,
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) throw await errorFrom(res);
+  const done = renamedSongSchema.safeParse(await res.json().catch(() => undefined));
+  if (!done.success)
+    throw new ApiError("The app sent an answer the page didn't expect.", res.status);
+  return done.data;
 }
 
 // --- Songs picked on this device ----------------------------------------------------------
