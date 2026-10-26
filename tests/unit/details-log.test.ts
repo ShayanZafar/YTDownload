@@ -47,7 +47,12 @@ describe("explainMiss", () => {
         [song("Another Song", "Other"), song("Desert Plain (Live)", "Vibrasphere")],
         search,
       ),
-    ).toBe("2 answers; closest “Desert Plain (Live)” by Vibrasphere: a different title");
+    ).toBe(
+      "2 answers; closest “Desert Plain (Live)” by Vibrasphere: a different version, and the song's length isn't known",
+    );
+    expect(
+      explainMiss([song("Desert Rain", "Vibrasphere"), song("Another Song", "Other")], search),
+    ).toBe("2 answers; closest “Desert Rain” by Vibrasphere: a different title");
     expect(explainMiss([song("Another Song", "Other")], search)).toBe(
       "1 answer, none with that title or artist (first: “Another Song” by Other)",
     );

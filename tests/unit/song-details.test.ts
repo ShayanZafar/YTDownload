@@ -14,8 +14,10 @@ import {
   lookUpSongNoted,
   pickMatch,
   resetCatalogues,
+  CATALOGUE_LIMITS,
   type CatalogueSong,
 } from "../../server/catalogues";
+import { readId3Frames, withFramesFrom } from "../../server/id3-frames";
 import { findAudioFiles, parseFile, type AudioFile } from "../../server/library";
 import {
   canWriteDetails,
@@ -182,6 +184,19 @@ describe("pickMatch", () => {
     expect(pickMatch([live], search, 180)).toBe(live);
   });
 
+  it("takes a title that differs only in brackets when it's the same length, the same title first", () => {
+    const search = { track: "Test Tone (long version)", artist: "Sine Wave" };
+    const remaster = song({ title: "Test Tone (Long Version; 2002 Remaster)", duration: 181 });
+    expect(pickMatch([remaster], search, 180)).toBe(remaster);
+    expect(pickMatch([remaster], search, 240)).toBe(undefined);
+    expect(pickMatch([remaster], search)).toBe(undefined);
+    const exact = song({ title: "Test Tone (Long Version)", duration: 240 });
+    expect(pickMatch([remaster, exact], search, 180)).toBe(exact);
+    // A year or a copy's number in the file's name is no part of the title.
+    expect(pickMatch([song({})], { track: "Test Tone (1998)", artist: "Sine Wave" })).toBeDefined();
+    expect(pickMatch([song({})], { track: "Test Tone HQ (1)", artist: "Sine Wave" })).toBeDefined();
+  });
+
   it("without an artist, takes only a song the same length", () => {
     const search = { track: "Test Tone", artist: "" };
     expect(pickMatch([song({ duration: 200 })], search, 180)).toBe(undefined);
@@ -264,8 +279,36 @@ describe("lookUpSong", () => {
     itunesBusy = false;
     const again = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" });
     expect(again.notes[0]).toBe(
-      "iTunes, “Sine Wave Test Tone”: 1 answer; closest “Test Tone (Live)” by Sine Wave: a different title",
+      "iTunes, “Sine Wave Test Tone”: 1 answer; closest “Test Tone (Live)” by Sine Wave: a different version, and the song's length isn't known",
     );
+  });
+
+  it("asks each catalogue no faster than its published limit, waiting only when there's no other", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
+    try {
+      const asked = { itunes: 0, deezer: 0 };
+      vi.stubGlobal("fetch", async (url: string) => {
+        if (url.startsWith("https://itunes.apple.com/")) {
+          asked.itunes++;
+          return json(itunesAnswer());
+        }
+        asked.deezer++;
+        return json({ data: [] });
+      });
+      const songs = Array.from({ length: 60 }, (_, i) =>
+        lookUpSongNoted({ title: `Tone ${i}`, artist: "Sine Wave" }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      // iTunes' 20 a minute, then Deezer's 50 in 5 seconds; the rest wait for Deezer.
+      expect(asked).toEqual({ itunes: 20, deezer: 50 });
+      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.deezer.perMs);
+      const answers = await Promise.all(songs);
+      expect(asked).toEqual({ itunes: 20, deezer: 60 });
+      expect(answers[59].notes[0]).toBe("iTunes was busy, so it wasn't asked");
+      expect(answers.every((answer) => answer.match === null)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says when neither catalogue can be reached", async () => {
@@ -533,6 +576,30 @@ describe("writeSongDetails", () => {
     expect(await writeSongDetails(await scanned(name), details)).toEqual([]);
   });
 
+  it("keeps the frames ffmpeg can't copy, like an MP3's web address (WOAS)", async () => {
+    const name = "Sine Wave - With Address.mp3";
+    await tone(path.join(dir, "plain.src"), [
+      ...["-c:a", "libmp3lame", "-b:a", "128k", "-id3v2_version", "3", "-f", "mp3"],
+      ...["-metadata", "title=With Address", "-metadata", "artist=Sine Wave"],
+    ]);
+    const address = Buffer.from("https://example.com/with-address", "latin1");
+    const woas = Buffer.concat([Buffer.from("WOAS"), Buffer.alloc(6), address]);
+    woas.writeUInt32BE(address.length, 4);
+    const tagOnly = Buffer.concat([
+      Buffer.from([0x49, 0x44, 0x33, 3, 0, 0, 0, 0, 0, woas.length]),
+      woas,
+    ]);
+    const mp3 = withFramesFrom(tagOnly, await fs.readFile(path.join(dir, "plain.src")), ["WOAS"]);
+    await fs.writeFile(path.join(dir, name), mp3!);
+    expect((await tagIds(name))["ID3v2.3"]).toContain("WOAS");
+
+    expect(await writeSongDetails(await scanned(name), details)).toContain("genre");
+    const ids = (await tagIds(name))["ID3v2.3"];
+    expect(ids).toEqual(expect.arrayContaining(["WOAS", "TCON", "TIT2"]));
+    const frames = readId3Frames(await fs.readFile(path.join(dir, name)))!.frames;
+    expect(frames.find((frame) => frame.id === "WOAS")!.bytes.subarray(10)).toEqual(address);
+  });
+
   it("writes into .m4a, .flac and .opus files too, keeping an Ogg file's tags", async () => {
     for (const name of ["Tone.m4a", "Tone.flac", "Tone.opus"]) {
       const added = await writeSongDetails(await scanned(name), details);
@@ -655,24 +722,24 @@ describe("lookUpDetails", () => {
     resetCatalogues();
     const name = "Bare.mp3";
     await tone(path.join(dir, name), ["-c:a", "libmp3lame", "-b:a", "128k"]);
-    await fs.rename(path.join(dir, name), path.join(dir, "Sine Wave - Test Tone (2).mp3"));
+    await fs.rename(path.join(dir, name), path.join(dir, "Sine Wave - Test Tone (Part 2).mp3"));
     vi.stubGlobal("fetch", async (url: string) =>
       json(
         itunesAnswer({
           ...SINE_SONG,
-          trackName: new URL(url).searchParams.get("term")?.includes("(2)")
-            ? "Test Tone (2)"
+          trackName: new URL(url).searchParams.get("term")?.includes("(Part 2)")
+            ? "Test Tone (Part 2)"
             : "Test Tone",
         }),
       ),
     );
-    const lookup = await lookUpDetails(await scanned("Sine Wave - Test Tone (2).mp3"));
+    const lookup = await lookUpDetails(await scanned("Sine Wave - Test Tone (Part 2).mp3"));
     expect(lookup).toMatchObject({
       missing: ["title", "artist", "album", "genre", "year", "track", "cover"],
       writable: true,
       source: "itunes",
       found: {
-        title: "Test Tone (2)",
+        title: "Test Tone (Part 2)",
         artist: "Sine Wave",
         genre: "Electronic",
         coverUrl: COVER_URL,

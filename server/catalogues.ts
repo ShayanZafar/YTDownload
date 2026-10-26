@@ -10,11 +10,14 @@
  * a song that only looks like it isn't taken. Answers are kept in memory, so
  * a song is looked up once per run of the app.
  *
- * Never slow the app down (.claude/rules/outside-sources.md): a catalogue
- * that refuses (iTunes allows about 20 searches a minute, Deezer 50 requests
- * in 5 seconds) is skipped at once for the next, until its own time is up;
- * only when both are refusing does a look-up wait, for whichever is back first
- * (a song one catalogue doesn't have while the other is refusing is not found).
+ * Never slow the app down (.claude/rules/outside-sources.md): each catalogue
+ * is asked no faster than its published limit (iTunes about 20 searches a
+ * minute, Deezer 50 requests in 5 seconds) — past it Deezer answers "nothing"
+ * for songs it has (seen October 2026) — and one that refuses, or whose limit
+ * is used up, is skipped at once for the next, until its own time is up. Only
+ * when there's no other to ask does a look-up wait, for whichever is back
+ * first; a song one catalogue doesn't have while the other is refusing for
+ * longer than Deezer's 5 seconds is not found.
  */
 import { cleanArtist, cleanSongTitle, searchesFor, type SongToLookUp } from "./lyrics";
 
@@ -56,8 +59,13 @@ const DEEZER_API = "https://api.deezer.com";
 const FETCH_TIMEOUT_MS = 8_000;
 /** A found song this many seconds longer or shorter than ours is another recording. */
 export const SAME_LENGTH_SECONDS = 3;
-/** How long a refusal without Retry-After lasts: iTunes counts a minute, Deezer 5 seconds. */
-const REFUSED_FOR_MS: Record<CatalogueSource, number> = { itunes: 60_000, deezer: 5_000 };
+/** The catalogues' published limits: how many requests in how long. */
+export const CATALOGUE_LIMITS: Record<CatalogueSource, { requests: number; perMs: number }> = {
+  itunes: { requests: 20, perMs: 60_000 },
+  deezer: { requests: 50, perMs: 5_000 },
+};
+/** The longest a look-up waits for a busy catalogue when it has asked the other one already. */
+const SHORT_WAIT_MS = CATALOGUE_LIMITS.deezer.perMs;
 /** Songs whose details (or lack of them) are remembered. */
 const CACHE_SIZE = 2_000;
 
@@ -86,6 +94,17 @@ export function plain(text: string): string {
 
 const sameTitle = (a: string, b: string) => plain(cleanSongTitle(a)) === plain(cleanSongTitle(b));
 
+/** A title without anything in brackets: "Heer (Coke Studio Season 8)" → "heer". */
+const baseTitle = (title: string) =>
+  plain(cleanSongTitle(title).replace(/\s*[([][^)\]]*[)\]]/g, "")) || plain(title);
+
+/**
+ * The same title, or the same but for something in brackets ("(Long
+ * Version; 2002 Remaster)" against our "(long version)") — taken only for a
+ * song the same length.
+ */
+const nearlySameTitle = (a: string, b: string) => baseTitle(a) === baseTitle(b);
+
 /** Is one of the found song's artists ours (or the other way round)? */
 function sameArtist(ours: string, theirs: string): boolean {
   const a = plain(cleanArtist(ours));
@@ -97,9 +116,11 @@ function sameArtist(ours: string, theirs: string): boolean {
 }
 
 /**
- * The catalogue's song that is ours: the same title, the same artist (or, for
- * a song whose artist we don't know, the same length), best first one the
- * same length, on the artist's own album rather than a compilation or single.
+ * The catalogue's song that is ours: the same title (or the same but for
+ * something in brackets, and the same length), the same artist (or, for a
+ * song whose artist we don't know, the same length), best first the same
+ * title, the same length, on the artist's own album rather than a compilation
+ * or single.
  */
 export function pickMatch(
   candidates: readonly CatalogueSong[],
@@ -112,11 +133,15 @@ export function pickMatch(
     Math.abs(song.duration - duration) <= SAME_LENGTH_SECONDS;
   const ours = candidates.filter(
     (song) =>
-      sameTitle(song.title, search.track) &&
+      (sameTitle(song.title, search.track) ||
+        (nearlySameTitle(song.title, search.track) && sameLength(song))) &&
       (search.artist ? sameArtist(search.artist, song.artist) : sameLength(song)),
   );
   const score = (song: CatalogueSong) =>
-    (sameLength(song) ? 4 : 0) + (song.compilation ? 0 : 2) + (song.single ? 0 : 1);
+    (sameTitle(song.title, search.track) ? 8 : 0) +
+    (sameLength(song) ? 4 : 0) +
+    (song.compilation ? 0 : 2) +
+    (song.single ? 0 : 1);
   // A stable sort: equal ones stay in the catalogue's own order.
   return [...ours].sort((a, b) => score(b) - score(a))[0];
 }
@@ -132,20 +157,25 @@ export function explainMiss(
 ): string {
   if (candidates.length === 0) return "nothing came back";
   const titled = candidates.filter((song) => sameTitle(song.title, search.track));
+  const nearly = candidates.filter((song) => nearlySameTitle(song.title, search.track));
   const byArtist = search.artist
     ? candidates.filter((song) => sameArtist(search.artist, song.artist))
     : [];
-  const closest = titled[0] ?? byArtist[0] ?? candidates[0];
+  const closest = titled[0] ?? nearly[0] ?? byArtist[0] ?? candidates[0];
   const name = `“${closest.title}” by ${closest.artist}`;
   const count = `${candidates.length} ${candidates.length === 1 ? "answer" : "answers"}`;
+  const lengthOff = (song: CatalogueSong) =>
+    duration !== undefined && song.duration !== undefined
+      ? `${Math.round(Math.abs(song.duration - duration))} s ${song.duration > duration ? "longer" : "shorter"}`
+      : "and the song's length isn't known";
   if (titled.length > 0 && !search.artist) {
-    const off =
-      duration !== undefined && closest.duration !== undefined
-        ? `, ${Math.round(Math.abs(closest.duration - duration))} s ${closest.duration > duration ? "longer" : "shorter"}`
-        : ", and the song's length isn't known";
-    return `${count}; closest ${name}: the song has no artist to check, and it isn't the same length${off}`;
+    return `${count}; closest ${name}: the song has no artist to check, and it isn't the same length, ${lengthOff(closest)}`;
   }
   if (titled.length > 0) return `${count}; closest ${name}: a different artist`;
+  if (nearly.length > 0 && (!search.artist || sameArtist(search.artist, closest.artist))) {
+    return `${count}; closest ${name}: a different version, ${lengthOff(closest)}`;
+  }
+  if (nearly.length > 0) return `${count}; closest ${name}: a different artist`;
   if (byArtist.length > 0) return `${count}; closest ${name}: a different title`;
   return `${count}, none with that title or artist (first: ${name})`;
 }
@@ -274,16 +304,29 @@ async function searchDeezer(search: { track: string; artist: string }) {
 
 // When each catalogue said it's busy until (ms since 1970).
 const refusedUntil: Record<CatalogueSource, number> = { itunes: 0, deezer: 0 };
+// When each catalogue was last asked, oldest first, within its limit's window.
+const asked: Record<CatalogueSource, number[]> = { itunes: [], deezer: [] };
+
+/** Counts a request against the catalogue's published limit, or refuses it if that's used up. */
+function takeTurn(source: CatalogueSource) {
+  const { requests, perMs } = CATALOGUE_LIMITS[source];
+  const now = Date.now();
+  const times = asked[source];
+  while (times.length > 0 && times[0] <= now - perMs) times.shift();
+  if (times.length >= requests) throw new Refused(times[0] + perMs);
+  times.push(now);
+}
 
 /** When a catalogue that refused may be asked again: its Retry-After, else its own window. */
 function retryAtFrom(source: CatalogueSource, retryAfter: string | null): number {
   const seconds = Number(retryAfter);
   if (retryAfter && Number.isFinite(seconds)) return Date.now() + seconds * 1000;
   const date = retryAfter ? Date.parse(retryAfter) : NaN;
-  return Number.isFinite(date) ? date : Date.now() + REFUSED_FOR_MS[source];
+  return Number.isFinite(date) ? date : Date.now() + CATALOGUE_LIMITS[source].perMs;
 }
 
 async function getJson(source: CatalogueSource, url: string): Promise<unknown> {
+  takeTurn(source);
   let res: Response;
   try {
     res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -376,11 +419,16 @@ export async function lookUpSongNoted(song: SongToLookUp): Promise<CatalogueAnsw
     const untried = catalogueSources.filter((source) => !tried.has(source));
     if (untried.length === 0) break;
     const open = untried.filter((source) => refusedUntil[source] <= Date.now());
-    // The rest are busy. If one has answered (it doesn't have the song), that's
-    // the answer; if none has, wait for whichever is back first — there's nothing else to ask.
-    if (open.length === 0 && tried.size > 0) break;
+    // The rest are busy: wait for whichever is back first — there's nothing else
+    // to ask — unless one has answered (it doesn't have the song) and the rest
+    // are busy for longer than a moment.
     if (open.length === 0) {
-      await sleep(Math.max(0, Math.min(...untried.map((s) => refusedUntil[s])) - Date.now()));
+      const back = Math.min(...untried.map((s) => refusedUntil[s]));
+      if (tried.size > 0 && back - Date.now() > SHORT_WAIT_MS) {
+        notes.unshift(...untried.map((s) => `${sourceName(s)} was busy, so it wasn't asked`));
+        break;
+      }
+      await sleep(Math.max(0, back - Date.now()));
       continue;
     }
     const source = open[0];
@@ -395,7 +443,6 @@ export async function lookUpSongNoted(song: SongToLookUp): Promise<CatalogueAnsw
     } catch (err) {
       if (err instanceof Refused) {
         refusedUntil[source] = Math.max(refusedUntil[source], err.retryAt);
-        notes.push(`${sourceName(source)} was busy, so it wasn't asked`);
         continue; // the next catalogue, at once
       }
       tried.add(source);
@@ -422,4 +469,6 @@ export function resetCatalogues() {
   cache.clear();
   refusedUntil.itunes = 0;
   refusedUntil.deezer = 0;
+  asked.itunes = [];
+  asked.deezer = [];
 }
