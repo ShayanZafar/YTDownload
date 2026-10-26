@@ -2,9 +2,12 @@
   YouTube Audio Extractor on Windows: what the .cmd files next to this file
   run, so a double-click works whatever PowerShell's script policy is.
 
-    app.ps1 start [-NoBrowser]  Get ready to start the app (start.cmd then runs
+    app.ps1 start [-NoBrowser] [-Dev]
+                                Get ready to start the app (start.cmd then runs
                                 it): check it isn't running already, install
-                                what it needs when needed, and open the
+                                what it needs when needed, build a copy of the
+                                source code when its code changed (-Dev: run
+                                the development server instead), and open the
                                 browser once it's up.
     app.ps1 stop                Stop the app, however it was started.
     app.ps1 update              Get the newest version of the app: the newest
@@ -26,6 +29,8 @@ param(
   [string] $Action = "start",
   # start: don't open the browser (starting with Windows does this).
   [switch] $NoBrowser,
+  # start: run a copy of the source code with the development server, not its build.
+  [switch] $Dev,
   # autostart-on/off: the folder Windows starts programs from when you sign in.
   [string] $StartupFolder = [Environment]::GetFolderPath("Startup")
 )
@@ -147,7 +152,8 @@ function Test-DoubleClicked {
 
 # --- Actions -----------------------------------------------------------------
 
-# Exit codes for start.cmd: 0 = run the app now, 1 = a problem (shown), 2 = already running.
+# Exit codes for start.cmd: 0 = run the app now, 1 = a problem (shown), 2 = already running,
+# 3 = run the development server.
 function Start-App {
   $app = Get-App
   if (@(Find-Servers $app.Port).Count -gt 0) {
@@ -181,6 +187,24 @@ function Start-App {
     $installed = Join-Path $Root "node_modules\.package-lock.json"
     if (Test-Path -LiteralPath $installed) { (Get-Item -LiteralPath $installed).LastWriteTime = Get-Date }
   }
+  # A copy of the source code runs its build, which loads quicker than the
+  # development server, built again whenever the code changed since.
+  $runDev = $false
+  if (-not $IsBuild) {
+    if ($Dev) {
+      $runDev = $true
+    } else {
+      & node.exe (Join-Path $Root "scripts\needs-build.mjs")
+      if ($LASTEXITCODE -eq 0) {
+        Write-Host "Building the app (its code changed since the last build) - this takes a few seconds..."
+        & npm.cmd run build
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "Building failed (see above), so the development version starts instead."
+          $runDev = $true
+        }
+      }
+    }
+  }
   if (-not $NoBrowser) {
     # Opens the browser once the app answers (start.cmd runs the app itself, in its own window).
     Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList @(
@@ -191,6 +215,7 @@ function Start-App {
   Write-Host "Starting $AppName at $($app.Url)"
   Write-Host "Keep this window open while you use it. Closing it (or running stop.cmd) stops the app."
   Write-Host ""
+  if ($runDev) { $script:ExitCode = 3 }
 }
 
 # Packages missing, or package-lock.json changed since they were installed (after a git pull, say).

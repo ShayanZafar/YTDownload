@@ -3,9 +3,11 @@
 # double-click (the .command files, on macOS) or one command does the work. The Windows versions
 # are in scripts/windows/ and behave the same.
 #
-#   app.sh start [--no-browser]  Start the app: check it isn't running already, install what it
-#                                needs when needed, open the browser once it's up. Keep the
-#                                terminal open; Ctrl+C stops the app.
+#   app.sh start [--no-browser] [--dev]
+#                                Start the app: check it isn't running already, install what it
+#                                needs when needed, build a copy of the source code when its code
+#                                changed (--dev: run the development server instead), open the
+#                                browser once it's up. Keep the terminal open; Ctrl+C stops it.
 #   app.sh stop                  Stop the app, however it was started.
 #   app.sh update                Get the newest version: the newest build in a copy installed
 #                                from the install branch, the newest code in a copy of the source.
@@ -128,7 +130,13 @@ needs_install() {
 
 start_app() {
   no_browser=false
-  [ "${1:-}" = "--no-browser" ] && no_browser=true
+  dev=false
+  for arg in "$@"; do
+    case "$arg" in
+      --no-browser) no_browser=true ;;
+      --dev) dev=true ;;
+    esac
+  done
   app_url="$(url)"
   if [ -n "$(server_pids | sort -u)" ]; then
     echo "$app_name is already running: $app_url"
@@ -152,13 +160,22 @@ start_app() {
     # Remember this install, so the next start doesn't redo it.
     touch node_modules/.package-lock.json 2>/dev/null || true
   fi
+  # A copy of the source code runs its build, which loads quicker than the development server,
+  # built again whenever the code changed since.
+  if ! $is_build && ! $dev && node scripts/needs-build.mjs; then
+    echo "Building the app (its code changed since the last build) - this takes a few seconds..."
+    if ! npm run build; then
+      echo "Building failed (see above), so the development version starts instead."
+      dev=true
+    fi
+  fi
   if ! $no_browser; then (open_when_ready "$app_url" &); fi
   echo
   echo "Starting $app_name at $app_url"
   echo "Keep this window open while you use it. Ctrl+C (or stop.sh) stops the app."
   echo
-  # A copy of the source code runs the development server; a ready-to-run build runs the built app.
-  if $is_build; then exec npm start; else exec npm run dev; fi
+  # The built app: a ready-to-run build (installed from the install branch), or the source's build.
+  if $dev && ! $is_build; then exec npm run dev; else exec npm start; fi
 }
 
 stop_app() {
@@ -266,7 +283,7 @@ case "$action" in
   update) update_app ;;
   update-yt-dlp) update_ytdlp ;;
   *)
-    echo "Usage: app.sh start [--no-browser] | stop | update | update-yt-dlp"
+    echo "Usage: app.sh start [--no-browser] [--dev] | stop | update | update-yt-dlp"
     exit 2
     ;;
 esac

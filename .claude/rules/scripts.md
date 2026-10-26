@@ -4,7 +4,9 @@ paths:
   - "scripts/unix/**"
   - "scripts/install/**"
   - ".gitattributes"
+  - "scripts/needs-build.mjs"
   - "tests/unit/{windows,unix}-scripts.test.ts"
+  - "tests/unit/needs-build.test.ts"
   - "docs/run/README.md"
 ---
 
@@ -18,3 +20,7 @@ paths:
 - This PC (the owner's Windows 10): Git 2.55. winget's msstore source fails with a certificate error
   here: use `--source winget`. Git's installer stops while anything from Git's folder runs (Git
   Bash, even a `sleep`).
+- A copy of the source code runs its build, not the dev server (owner, Oct 26, 2026): `start`
+  builds first when `scripts/needs-build.mjs` finds code newer than `dist/index.cjs`, and falls back
+  to `npm run dev` if the build fails or with `-Dev`/`--dev`. A new folder or config file the build
+  is made from goes in its `BUILD_SOURCES`.

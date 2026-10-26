@@ -7,7 +7,7 @@ How to install, start and stop the YouTube Audio Extractor, start it with Window
 A PC can have the app two ways:
 
 - **The ready-to-run app**, for using it: the built app, from the repository's `install` branch, which GitHub builds after every change. No source code and nothing to build — install it once, and update it with a double-click.
-- **The source code**, for changing it: this `main` branch, run with the development server.
+- **The source code**, for changing it: this `main` branch. `start.cmd` builds it whenever its code changed (after an update or an edit, which takes a few seconds) and runs the build, which opens quicker than the development server; `start.cmd -Dev` (`start.sh --dev`) or `npm run dev` runs the development server instead.
 
 ### Installing the ready-to-run app
 
@@ -51,7 +51,7 @@ Some Linux file managers open a double-clicked `.sh` file as text; run it from a
 | `autostart-on.cmd`  | Starts the app whenever you sign in to Windows (minimized, without opening the browser), so it's always there at http://localhost:5000.                                                                                                                                        |
 | `autostart-off.cmd` | Stops starting it with Windows.                                                                                                                                                                                                                                                |
 
-They're `.cmd` files so a double-click runs them whatever PowerShell's script setting is; the work is done by `app.ps1` next to them. `scripts/unix/` has `start.sh`, `stop.sh`, `update.sh` and `update-yt-dlp.sh` for macOS and Linux, plus `start.command`, `stop.command` and `update.command` for a double-click in Finder; they do the same through `app.sh`. They take the app's settings (like `PORT`) from its `.env` file, as the app does. In the ready-to-run app, `start.cmd` runs the built app; in a copy of the source code, the development server.
+They're `.cmd` files so a double-click runs them whatever PowerShell's script setting is; the work is done by `app.ps1` next to them. `scripts/unix/` has `start.sh`, `stop.sh`, `update.sh` and `update-yt-dlp.sh` for macOS and Linux, plus `start.command`, `stop.command` and `update.command` for a double-click in Finder; they do the same through `app.sh`. They take the app's settings (like `PORT`) from its `.env` file, as the app does. Both copies run the built app: in a copy of the source code, `start.cmd` first builds it again when the code changed since the last build (`node scripts/needs-build.mjs` says), and starts the development server if the build fails or with `-Dev`.
 
 ## Starting it with Windows
 
