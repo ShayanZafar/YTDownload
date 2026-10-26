@@ -209,6 +209,18 @@ describe("pickMatch", () => {
     expect(pickMatch([tone], { track: "Test Tone", artist: "Sun Wake" })).toBe(undefined);
   });
 
+  it("takes a name that holds the artist and title with no dash between them", () => {
+    const earth = song({ title: "Earth Song", artist: "Michael Jackson" });
+    const bad = song({ title: "Bad (2012 Remaster)", artist: "Michael Jackson" });
+    expect(pickMatch([earth], { track: "Michael Jackson Earth Song", artist: "" })).toBe(earth);
+    expect(pickMatch([earth], { track: "Earth Song Michael Jackson", artist: "" })).toBe(earth);
+    expect(pickMatch([bad], { track: "Michael Jackson Bad", artist: "" })).toBe(bad);
+    // Not just some of the words.
+    expect(pickMatch([earth], { track: "Michael Jackson Earth Song Live", artist: "" })).toBe(
+      undefined,
+    );
+  });
+
   it("without an artist, takes only a song the same length", () => {
     const search = { track: "Test Tone", artist: "" };
     expect(pickMatch([song({ duration: 200 })], search, 180)).toBe(undefined);
@@ -268,6 +280,135 @@ describe("lookUpSong", () => {
     });
   });
 
+  it("asks MusicBrainz, one a second, for a song iTunes and Deezer don't have", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (url.startsWith("https://itunes.apple.com/")) return json(itunesAnswer());
+      if (!url.startsWith("https://musicbrainz.org/")) return json({ data: [] });
+      asked.push(new URL(url).searchParams.get("query")!);
+      // MusicBrainz asks each app to say who it is.
+      expect(new Headers(init?.headers).get("user-agent")).toMatch(/^YTDownload\//);
+      return json(
+        url.includes("Pipeline")
+          ? {
+              recordings: [
+                {
+                  title: "Pipeline",
+                  length: 556280,
+                  "first-release-date": "1999",
+                  "artist-credit": [{ name: "Man With No Name" }],
+                  tags: [{ name: "psy-trance", count: 2 }],
+                  releases: [
+                    {
+                      title: "Goa-Visions",
+                      date: "1999",
+                      "release-group": {
+                        "primary-type": "Album",
+                        "secondary-types": ["Compilation"],
+                      },
+                      media: [{ track: [{ number: "4" }] }],
+                    },
+                    {
+                      title: "Interstate Highway",
+                      status: "Official",
+                      date: "2003-07-14",
+                      "release-group": { "primary-type": "Album" },
+                      media: [{ track: [{ number: "9" }] }],
+                    },
+                  ],
+                },
+              ],
+            }
+          : { recordings: [] },
+      );
+    });
+    const started = Date.now();
+    const [found, missed] = await Promise.all([
+      lookUpSongNoted({ title: "Man With No Name - Pipeline", duration: 556 }),
+      lookUpSongNoted({ title: "Sine Wave - Nowhere Tone" }),
+    ]);
+    expect(found.match).toEqual({
+      source: "musicbrainz",
+      song: expect.objectContaining({
+        title: "Pipeline",
+        artist: "Man With No Name",
+        album: "Interstate Highway", // its own album, not the compilation
+        genre: "Psy-Trance",
+        year: 1999,
+        track: 9,
+      }),
+    });
+    expect(missed).toMatchObject({ match: null, noneHasIt: true });
+    expect(asked.sort()).toEqual([
+      'recording:"Nowhere Tone" AND artist:"Sine Wave"',
+      'recording:"Pipeline" AND artist:"Man With No Name"',
+    ]);
+    // The second waited its turn.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  });
+
+  it("asks the next catalogue when one has the song but none of the details it needs", async () => {
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) {
+        return json(itunesAnswer({ ...SINE_SONG, primaryGenreName: undefined }));
+      }
+      if (url.includes("/search?")) {
+        return json({
+          data: [{ id: 1, title: "Test Tone", artist: { name: "Sine Wave" }, album: { id: 7 } }],
+        });
+      }
+      return json(url.endsWith("/album/7") ? { genres: { data: [{ name: "Electro" }] } } : {});
+    });
+    // iTunes has the song, but no genre: Deezer is asked, and has it.
+    const genre = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" }, ["genre"]);
+    expect(genre.match).toMatchObject({ source: "deezer", song: { genre: "Electro" } });
+    // Asked for its album, iTunes' answer does.
+    const album = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" }, ["album"]);
+    expect(album.match).toMatchObject({ source: "itunes", song: { album: "Pure Tones" } });
+  });
+
+  it("uses the catalogue with the most of what a song lacks, the earlier one on a tie", async () => {
+    let deezerGenre = true;
+    vi.stubGlobal("fetch", async (url: string) => {
+      if (url.startsWith("https://itunes.apple.com/")) {
+        return json(itunesAnswer({ ...SINE_SONG, primaryGenreName: undefined }));
+      }
+      if (url.includes("/search?")) {
+        return json({
+          data: [
+            {
+              id: 1,
+              title: "Test Tone",
+              artist: { name: "Sine Wave" },
+              album: { id: 7, title: "Deezer Tones" },
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/album/7")) {
+        return json(deezerGenre ? { genres: { data: [{ name: "Electro" }] } } : {});
+      }
+      return json({});
+    });
+    // iTunes has the album but no genre; Deezer has both.
+    const both = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" }, [
+      "genre",
+      "album",
+    ]);
+    expect(both.match).toMatchObject({
+      source: "deezer",
+      song: { genre: "Electro", album: "Deezer Tones" },
+    });
+    // Each has just the album: iTunes, the first asked.
+    resetCatalogues();
+    deezerGenre = false;
+    const tie = await lookUpSongNoted({ title: "Test Tone", artist: "Sine Wave" }, [
+      "genre",
+      "album",
+    ]);
+    expect(tie.match).toMatchObject({ source: "itunes", song: { album: "Pure Tones" } });
+  });
+
   it("asks Deezer again without the brackets when they find nothing", async () => {
     const searched: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {
@@ -312,7 +453,11 @@ describe("lookUpSong", () => {
         "iTunes was busy, so it wasn't asked",
         "Deezer, “Sine Wave Test Tone”: 1 answer; closest “Test Tone” by Someone Else: a different artist",
         "Deezer, “SineWave Sine Wave - Test Tone”: 1 answer, none with that title or artist (first: “Test Tone” by Someone Else)",
+        "MusicBrainz, “Sine Wave Test Tone”: nothing came back",
+        "MusicBrainz, “SineWave Sine Wave - Test Tone”: nothing came back",
       ],
+      // iTunes wasn't asked: it may have the song.
+      noneHasIt: false,
     });
     // With iTunes answering: its closest answer, and why it wasn't taken.
     resetCatalogues();
@@ -326,11 +471,15 @@ describe("lookUpSong", () => {
   it("asks each catalogue no faster than its published limit, waiting only when there's no other", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
     try {
-      const asked = { itunes: 0, deezer: 0 };
+      const asked = { itunes: 0, deezer: 0, musicbrainz: 0 };
       vi.stubGlobal("fetch", async (url: string) => {
         if (url.startsWith("https://itunes.apple.com/")) {
           asked.itunes++;
           return json(itunesAnswer());
+        }
+        if (url.startsWith("https://musicbrainz.org/")) {
+          asked.musicbrainz++;
+          return json({ recordings: [] });
         }
         asked.deezer++;
         return json({ data: [] });
@@ -340,10 +489,13 @@ describe("lookUpSong", () => {
       );
       await vi.advanceTimersByTimeAsync(0);
       // iTunes' 20 a minute, then Deezer's 50 in 5 seconds; the rest wait for Deezer.
-      expect(asked).toEqual({ itunes: 20, deezer: 50 });
-      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.deezer.perMs);
+      // MusicBrainz, for the songs neither has, one a second.
+      expect(asked).toEqual({ itunes: 20, deezer: 50, musicbrainz: 1 });
+      // A minute later all 60 have been asked of MusicBrainz too (the 10 Deezer
+      // was busy for went to MusicBrainz first, then back to Deezer).
+      await vi.advanceTimersByTimeAsync(CATALOGUE_LIMITS.musicbrainz.perMs * 60);
       const answers = await Promise.all(songs);
-      expect(asked).toEqual({ itunes: 20, deezer: 60 });
+      expect(asked).toEqual({ itunes: 20, deezer: 60, musicbrainz: 60 });
       expect(answers[59].notes[0]).toBe("iTunes was busy, so it wasn't asked");
       expect(answers.every((answer) => answer.match === null)).toBe(true);
     } finally {
@@ -526,6 +678,7 @@ async function tagIds(name: string) {
 
 beforeAll(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-details-test-"));
+  process.env.DETAILS_NOT_FOUND_FILE = path.join(dir, "details-not-found.json");
   const picture = path.join(dir, "cover.jpg.src");
   await ffmpeg([
     "-f",
@@ -557,6 +710,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  delete process.env.DETAILS_NOT_FOUND_FILE;
   await fs.rm(dir, { recursive: true, force: true });
 });
 

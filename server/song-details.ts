@@ -18,7 +18,8 @@ import type { IAudioMetadata } from "music-metadata";
 import { extensionOf, songNameOf } from "@shared/audio-types";
 import { sanitizedFileName } from "@shared/name-noise";
 import type { SongDetailField, SongDetails, SongLookup } from "@shared/schema";
-import { lookUpSongNoted } from "./catalogues";
+import { lookUpSongNoted, sourceName } from "./catalogues";
+import { setNotFound } from "./not-found";
 import { fetchCover } from "./cover";
 import { forgetTags, parseFile, readTags, type AudioFile } from "./library";
 import { spawnFfmpeg } from "./audio";
@@ -200,25 +201,41 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
       problem = muxed.problem;
     }
   }
-  const none = { missing, writable, problem, notes: [], found: null, match: null, source: null };
+  const none = {
+    missing,
+    writable,
+    problem,
+    notes: [],
+    found: null,
+    match: null,
+    source: null,
+    notFound: false,
+  };
   if (missing.length === 0 || !writable) return none;
 
   const tags = await readTags(file);
-  const { match, notes } = await lookUpSongNoted({
-    title: tags.title ?? songNameOf(file.relative),
-    artist: tags.trackArtist,
-    duration: tags.duration,
-  });
+  const { match, notes, noneHasIt } = await lookUpSongNoted(
+    {
+      title: tags.title ?? songNameOf(file.relative),
+      artist: tags.trackArtist,
+      duration: tags.duration,
+    },
+    missing.map((field) => (field === "cover" ? "coverUrl" : field)),
+  );
   if (!match) {
     const named = tags.title || tags.trackArtist ? {} : detailsFromName(file.relative, missing);
+    // Not found: every catalogue answered, none has it, and its name says nothing either.
+    const notFound = noneHasIt === true && Object.keys(named).length === 0;
+    await setNotFound(file, notFound);
     return Object.keys(named).length > 0
       ? { ...none, notes, found: named, source: "name" }
-      : { ...none, notes };
+      : { ...none, notes, notFound };
   }
+  await setNotFound(file, false);
   const { song, source } = match;
   const found = detailsFor(missing, song);
   if (Object.keys(found).length === 0) {
-    const catalogue = source === "itunes" ? "iTunes" : "Deezer";
+    const catalogue = sourceName(source);
     return {
       ...none,
       notes: [
@@ -234,6 +251,7 @@ export async function lookUpDetails(file: AudioFile): Promise<SongLookup> {
     found,
     match: { title: song.title, artist: song.artist, album: song.album ?? null },
     source,
+    notFound: false,
   };
 }
 

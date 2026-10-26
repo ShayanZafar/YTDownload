@@ -66,7 +66,7 @@ export function lookUpDownload(
       (match) => ({
         tags: catalogueTagsFor(tags, match),
         coverUrl: match?.song.coverUrl,
-        ...(match ? {} : { why: "not found in iTunes or Deezer" }),
+        ...(match ? {} : { why: "not found in iTunes, Deezer or MusicBrainz" }),
       }),
       (err: unknown) => ({ tags: {}, why: err instanceof Error ? err.message : String(err) }),
     );

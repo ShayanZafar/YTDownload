@@ -49,6 +49,8 @@ export type PlayerTrack = {
   realType?: string | null;
   /** A folder file that isn't audio at all, by its content: what it is. It can't be played. */
   notAudio?: string | null;
+  /** A folder song no music catalogue has (Fill in details' "Not found"). */
+  detailsNotFound?: boolean;
 } & (
   | { source: "folder"; id: string }
   | {
@@ -83,6 +85,7 @@ export function folderTrack(track: MusicTrack): PlayerTrack {
     check: audioTypeOf(track.realType ?? track.path)?.check ?? "",
     realType: track.realType,
     notAudio: track.notAudio,
+    detailsNotFound: track.detailsNotFound ?? false,
   };
 }
 
@@ -266,8 +269,8 @@ export function filterTracks(tracks: readonly PlayerTrack[], query: string): Pla
 
 // --- Filtering by genre, artist, album, year ----------------------------------------
 
-/** What the list can be filtered by, from the songs' tags. */
-export const musicFacets = ["genre", "artist", "album", "year"] as const;
+/** What the list can be filtered by, from the songs' tags (and Fill in details' "Not found"). */
+export const musicFacets = ["genre", "artist", "album", "year", "details"] as const;
 export type MusicFacet = (typeof musicFacets)[number];
 
 export const facetLabels: Record<MusicFacet, { name: string; all: string; none: string }> = {
@@ -275,7 +278,11 @@ export const facetLabels: Record<MusicFacet, { name: string; all: string; none: 
   artist: { name: "Artist", all: "All artists", none: "No artist" },
   album: { name: "Album", all: "All albums", none: "No album" },
   year: { name: "Year", all: "All years", none: "No year" },
+  details: { name: "Details", all: "Any details", none: "Not marked Not found" },
 };
+
+/** The Details filter's one value: songs no music catalogue has. */
+export const NOT_FOUND = "Not found";
 
 /** The filter's choice for songs with nothing for it (no genre tag, say). */
 export const NO_VALUE = "";
@@ -285,6 +292,7 @@ export function facetValues(track: PlayerTrack, facet: MusicFacet): string[] {
   if (facet === "genre") return track.genres;
   if (facet === "artist") return (track.artist ?? "").split(/\s*,\s*/).filter(Boolean);
   if (facet === "album") return track.album ? [track.album] : [];
+  if (facet === "details") return track.detailsNotFound ? [NOT_FOUND] : [];
   return track.year ? [String(track.year)] : [];
 }
 
@@ -324,6 +332,7 @@ export function facetCounts(
     artist: (a, b) => collator.compare(a.value, b.value),
     album: (a, b) => collator.compare(a.value, b.value),
     year: (a, b) => Number(b.value) - Number(a.value),
+    details: () => 0,
   };
   return { values: values.sort(order[facet]), none };
 }

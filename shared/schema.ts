@@ -296,6 +296,8 @@ export const musicTrackSchema = z.object({
   realType: z.string().nullable().default(null),
   /** It isn't audio at all, by its content: what it is ("a Windows program"). It isn't played. */
   notAudio: z.string().nullable().default(null),
+  /** Fill in details found nothing for it in any music catalogue (server/not-found.ts). */
+  detailsNotFound: z.boolean().default(false),
 });
 
 export type MusicTrack = z.infer<typeof musicTrackSchema>;
@@ -375,7 +377,9 @@ export const songLookupSchema = z.object({
    * The catalogue that answered — or "name" for a song with no title or
    * artist tags that no catalogue has: its "Artist - Song" file name's two halves.
    */
-  source: z.enum(["itunes", "deezer", "name"]).nullable(),
+  source: z.enum(["itunes", "deezer", "musicbrainz", "name"]).nullable(),
+  /** Every catalogue answered and none has it (nor does its name say): marked Not found. */
+  notFound: z.boolean().default(false),
 });
 
 export type SongLookup = z.infer<typeof songLookupSchema>;

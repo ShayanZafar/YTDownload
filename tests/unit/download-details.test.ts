@@ -82,7 +82,7 @@ describe("lookUpDownload and lateDetails", () => {
     expect(await throws).toEqual({ tags: {}, why: "thrown at once" });
     expect(await slow).toEqual({ tags: {}, why: "no answer within 0.05 s" });
     const none = await lookUpDownload(tags, 3, { lookUp: async () => null });
-    expect(none).toEqual({ tags: {}, why: "not found in iTunes or Deezer" });
+    expect(none).toEqual({ tags: {}, why: "not found in iTunes, Deezer or MusicBrainz" });
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
