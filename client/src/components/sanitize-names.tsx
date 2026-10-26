@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { AlertCircle, Check, Copy, Eraser, Loader2, Pause, Play, Trash2, X } from "lucide-react";
 import type { MusicTrack } from "@shared/schema";
 import {
@@ -10,7 +10,8 @@ import {
 } from "@/lib/music";
 import { formatDuration } from "@/lib/format";
 import { usePlayer } from "@/hooks/use-player";
-import { eachAtOnce } from "@/lib/song-details";
+import { eachAtOnce } from "@/lib/at-once";
+import { useBatchRun } from "@/hooks/use-batch-run";
 import { cn } from "@/lib/utils";
 
 type FolderTrack = Extract<PlayerTrack, { source: "folder" }>;
@@ -121,8 +122,7 @@ export function SanitizeNames({
     };
   });
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  const batch = useBatchRun();
 
   // A song deleted since (one of two with the same name) leaves the list.
   const present = new Set(folderTracks.map((track) => track.key));
@@ -138,13 +138,10 @@ export function SanitizeNames({
     // the click, so its file isn't being played while it's renamed.
     const current = player.current?.key;
     if (current && kept.some(({ track }) => track.key === current)) player.discard(current);
-    const abort = new AbortController();
-    controller.current = abort;
+    const signal = batch.start();
     let renamed = 0;
     let failed = 0;
-    let done = 0;
     setOutcomes([]);
-    setStage({ name: "renaming", done, total: kept.length });
     await eachAtOnce(
       kept,
       async ({ track, name, title, artist }) => {
@@ -152,9 +149,9 @@ export function SanitizeNames({
         // Only what changes: its name (or extension), its title, its artist.
         const change = sanitizeChangeOf(track, { name, title, artist });
         try {
-          const { track: now } = await renameFolderSong(track.id, change, abort.signal);
+          const { track: now } = await renameFolderSong(track.id, change, signal);
           renamed++;
-          if (!abort.signal.aborted) onSongRenamed(track.id, now);
+          if (!signal.aborted) onSongRenamed(track.id, now);
           const to = now.path.split(/[\\/]/).pop();
           const tags = [
             change.title && `title “${change.title}”`,
@@ -168,7 +165,7 @@ export function SanitizeNames({
               : `“${from}” is now “${to}”${tags ? `, with its ${tags}` : ""}`;
           setOutcomes((all) => [{ key: track.key, text, failed: false }, ...all]);
         } catch (err) {
-          if (!abort.signal.aborted) {
+          if (!signal.aborted) {
             failed++;
             setOutcomes((all) => [
               {
@@ -180,11 +177,10 @@ export function SanitizeNames({
             ]);
           }
         }
-        done++;
-        if (!abort.signal.aborted) setStage({ name: "renaming", done, total: kept.length });
       },
       atOnce,
-      abort.signal,
+      signal,
+      (done, total) => setStage({ name: "renaming", done, total }),
     );
     onRenamed();
     setStage({ name: "done", renamed, failed });
@@ -223,11 +219,7 @@ export function SanitizeNames({
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
                 Renaming {stage.done} of {countSongs(stage.total)}…
               </p>
-              <button
-                type="button"
-                className={secondary}
-                onClick={() => controller.current?.abort()}
-              >
+              <button type="button" className={secondary} onClick={() => batch.stop()}>
                 Stop
               </button>
             </>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertCircle,
   Check,
@@ -38,7 +38,8 @@ import {
   type DeleteOutcome,
   type PlayerTrack,
 } from "@/lib/music";
-import { eachAtOnce } from "@/lib/song-details";
+import { eachAtOnce } from "@/lib/at-once";
+import { useBatchRun } from "@/hooks/use-batch-run";
 
 type FolderTrack = Extract<PlayerTrack, { source: "folder" }>;
 
@@ -152,8 +153,7 @@ export function Housekeeping({
   // Better copies of the low-quality songs, and which the person unticked.
   const [better, setBetter] = useState<Map<string, Better>>(new Map());
   const [replaceTicks, setReplaceTicks] = useState<Map<string, boolean>>(new Map());
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  const batch = useBatchRun();
 
   // Once every song is checked: the copies of songs in the folder twice, among the
   // ones that play through. A copy sounding worse than the bar is listed as a copy.
@@ -226,35 +226,31 @@ export function Housekeeping({
   );
 
   const check = async () => {
-    const abort = new AbortController();
-    controller.current = abort;
-    let done = 0;
+    const signal = batch.start();
     setListedBar(qualityBar);
     setChecks(new Map());
     setGone(new Set());
     setBetter(new Map());
     setReplaceTicks(new Map());
-    setStage({ name: "checking", done, total: tracks.length });
-    const otherFiles = fetchOtherFiles(abort.signal).then(setOthers, () => setOthers([]));
+    const otherFiles = fetchOtherFiles(signal).then(setOthers, () => setOthers([]));
     await eachAtOnce(
       tracks,
       async (track) => {
         let answer: SongCheck | string;
         try {
-          answer = await checkFolderSong(track.id, abort.signal);
+          answer = await checkFolderSong(track.id, signal);
         } catch (err) {
-          if (abort.signal.aborted) return;
+          if (signal.aborted) return;
           answer = messageOf(err);
         }
         setChecks((all) => new Map(all).set(track.key, answer));
-        done++;
-        setStage({ name: "checking", done, total: tracks.length });
       },
       atOnce,
-      abort.signal,
+      signal,
+      (done, total) => setStage({ name: "checking", done, total }),
     );
     await otherFiles;
-    setStage({ name: "review", stopped: abort.signal.aborted, confirming: false });
+    setStage({ name: "review", stopped: signal.aborted, confirming: false });
   };
 
   const setBetterOf = (key: string, state: Better | undefined) =>
@@ -267,47 +263,40 @@ export function Housekeeping({
 
   // Better copies: each low-quality song looked for online, one per CPU core.
   const findCopies = async (chosen: Item[]) => {
-    const abort = new AbortController();
-    controller.current = abort;
-    let done = 0;
-    setStage({ name: "finding", done, total: chosen.length });
+    const signal = batch.start();
     for (const item of chosen) setBetterOf(item.key, { status: "finding" });
     await eachAtOnce(
       chosen,
       async (item) => {
         let state: Better | undefined;
         try {
-          const { copy, reason } = await findBetterCopy(songIdOf.get(item.key)!, abort.signal);
+          const { copy, reason } = await findBetterCopy(songIdOf.get(item.key)!, signal);
           state = copy
             ? { status: "found", copy }
             : { status: "none", reason: reason ?? "No better copy was found." };
         } catch (err) {
-          state = abort.signal.aborted
+          state = signal.aborted
             ? undefined
             : { status: "none", reason: `Couldn't look for one: ${messageOf(err)}` };
         }
         setBetterOf(item.key, state);
         // A song with a better copy is replaced, not deleted, unless the person says otherwise.
         if (state?.status === "found") setTicks((all) => new Map(all).set(item.key, false));
-        done++;
-        setStage({ name: "finding", done, total: chosen.length });
       },
       atOnce,
-      abort.signal,
+      signal,
+      (done, total) => setStage({ name: "finding", done, total }),
     );
     // Stopped: the ones not looked for yet are as they were.
     setBetter((all) => new Map([...all].filter(([, state]) => state.status !== "finding")));
-    setStage({ name: "review", stopped: abort.signal.aborted, confirming: false });
+    setStage({ name: "review", stopped: signal.aborted, confirming: false });
   };
 
   const replaceCopies = async (chosen: Item[]) => {
-    const abort = new AbortController();
-    controller.current = abort;
-    let done = 0;
+    const signal = batch.start();
     let replaced = 0;
     let failed = 0;
     let bin = binNameHere();
-    setStage({ name: "replacing", done, total: chosen.length });
     await eachAtOnce(
       chosen,
       async (item) => {
@@ -318,7 +307,7 @@ export function Housekeeping({
           const answer = await replaceWithBetterCopy(
             songIdOf.get(item.key)!,
             state.copy.url,
-            abort.signal,
+            signal,
           );
           replaced++;
           bin = answer.bin;
@@ -327,17 +316,16 @@ export function Housekeeping({
           setBetterOf(item.key, undefined);
           onReplaced(answer.track);
         } catch (err) {
-          if (abort.signal.aborted) setBetterOf(item.key, state);
+          if (signal.aborted) setBetterOf(item.key, state);
           else {
             failed++;
             setBetterOf(item.key, { status: "failed", reason: messageOf(err) });
           }
         }
-        done++;
-        setStage({ name: "replacing", done, total: chosen.length });
       },
       atOnce,
-      abort.signal,
+      signal,
+      (done, total) => setStage({ name: "replacing", done, total }),
     );
     const note = [
       replaced > 0 &&
@@ -346,19 +334,16 @@ export function Housekeeping({
     ]
       .filter(Boolean)
       .join(" ");
-    setStage({ name: "review", stopped: abort.signal.aborted, confirming: false, note });
+    setStage({ name: "review", stopped: signal.aborted, confirming: false, note });
   };
 
   const remove = async (chosen: Item[], permanently: boolean, deletedBefore = 0) => {
-    const abort = new AbortController();
-    controller.current = abort;
-    let done = 0;
+    const signal = batch.start();
     let deleted = deletedBefore;
     let failed = 0;
     let bin = binNameHere();
     const noBin: Item[] = [];
     const deletedKeys: string[] = [];
-    setStage({ name: "deleting", done, total: chosen.length });
     await eachAtOnce(
       chosen,
       async (item) => {
@@ -372,11 +357,10 @@ export function Housekeeping({
         } catch {
           failed++;
         }
-        done++;
-        setStage({ name: "deleting", done, total: chosen.length });
       },
       atOnce,
-      abort.signal,
+      signal,
+      (done, total) => setStage({ name: "deleting", done, total }),
     );
     setGone((all) => new Set([...all, ...deletedKeys]));
     onDeleted(deletedKeys.flatMap((key) => songIdOf.get(key) ?? []));
@@ -472,11 +456,7 @@ export function Housekeeping({
                 Checked {stage.done.toLocaleString()} of {count(stage.total, "song")}…
                 {items.length > 0 && ` ${count(items.length, "file")} to look at so far.`}
               </p>
-              <button
-                type="button"
-                className={secondary}
-                onClick={() => controller.current?.abort()}
-              >
+              <button type="button" className={secondary} onClick={() => batch.stop()}>
                 Stop
               </button>
             </>
@@ -490,11 +470,7 @@ export function Housekeeping({
                   ? `Looked for a better copy of ${stage.done.toLocaleString()} of ${count(stage.total, "song")}…`
                   : `Replaced ${stage.done.toLocaleString()} of ${count(stage.total, "song")}…`}
               </p>
-              <button
-                type="button"
-                className={secondary}
-                onClick={() => controller.current?.abort()}
-              >
+              <button type="button" className={secondary} onClick={() => batch.stop()}>
                 Stop
               </button>
             </>

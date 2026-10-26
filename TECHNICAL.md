@@ -549,6 +549,11 @@ What each file does, and the function and constant names to look for. This was C
   play order; unit-tested); `components/facet-filter.tsx` is each filter's combobox (type to
   narrow the choices; arrow keys, Enter, Escape); `components/fill-in-details.tsx`
   and `lib/song-details.ts` are **Fill in details** (look up, review, write; one per core).
+  Fill in details, Sanitize Filename and Housekeeping all work through their songs with
+  `eachAtOnce()` in `lib/at-once.ts` (one per core, the next the moment one is done, its
+  `onProgress` the "3 of 10" count; unit-tested) and Stop with `hooks/use-batch-run.ts`
+  (`start()` gives a run's signal, `stop()` or closing the panel aborts it); a new panel that
+  works on many songs uses both.
   `components/sanitize-names.tsx` is **Sanitize Filename** (a tidy file name, title and artist for
   each song, suggested by `tidyOf()` in `lib/music.ts` — `tidiedFile()` in `shared/song-name.ts`
   over what `folderArtistsFor()` says about the whole folder — editable, changed when ticked through

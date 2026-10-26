@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { AlertCircle, Check, Loader2, Minus, Wand2, X } from "lucide-react";
 import { api } from "@shared/routes";
 import type { MusicTrack, SongLookup } from "@shared/schema";
@@ -6,11 +6,12 @@ import type { PlayerTrack } from "@/lib/music";
 import {
   catalogueName,
   detailLabels,
-  eachAtOnce,
   foundWhere,
   lookUpSongDetails,
   writeSongDetails,
 } from "@/lib/song-details";
+import { eachAtOnce } from "@/lib/at-once";
+import { useBatchRun } from "@/hooks/use-batch-run";
 import { cn } from "@/lib/utils";
 
 type FolderTrack = Extract<PlayerTrack, { source: "folder" }>;
@@ -85,8 +86,7 @@ export function FillInDetails({
   // Each song's outcome, newest first, as each is done.
   const [outcomes, setOutcomes] = useState<Outcome[]>([]);
   const report = (outcome: Outcome) => setOutcomes((all) => [outcome, ...all]);
-  const controller = useRef<AbortController | null>(null);
-  useEffect(() => () => controller.current?.abort(), []);
+  const batch = useBatchRun();
 
   const playable = tracks.filter((track) => track.key !== playingKey);
   const skipsPlaying = playable.length < tracks.length;
@@ -97,22 +97,19 @@ export function FillInDetails({
   const leftOut = playable.length - toLookUp.length;
 
   const lookUp = async () => {
-    const abort = new AbortController();
-    controller.current = abort;
+    const signal = batch.start();
     const found: Found[] = [];
     const failed: { title: string; message: string }[] = [];
     const unwritable: string[] = [];
     let notFound = 0;
     let complete = 0;
-    let done = 0;
     setOutcomes([]);
-    setStage({ name: "looking", done, total: toLookUp.length });
     await eachAtOnce(
       toLookUp,
       async (track) => {
         const { key, title } = track;
         try {
-          const lookup = await lookUpSongDetails(track.id, abort.signal);
+          const lookup = await lookUpSongDetails(track.id, signal);
           if (lookup.problem) {
             failed.push({ title, message: lookup.problem });
             report({ key, title, result: "failed", text: `can't be changed: ${lookup.problem}` });
@@ -147,7 +144,7 @@ export function FillInDetails({
             });
           }
         } catch (err) {
-          if (!abort.signal.aborted) {
+          if (!signal.aborted) {
             failed.push({ title, message: messageOf(err) });
             report({
               key,
@@ -157,11 +154,10 @@ export function FillInDetails({
             });
           }
         }
-        done++;
-        if (!abort.signal.aborted) setStage({ name: "looking", done, total: toLookUp.length });
       },
       atOnce,
-      abort.signal,
+      signal,
+      (done, total) => setStage({ name: "looking", done, total }),
     );
     // Songs found or not found are marked so (or no longer): the list shows it.
     onWritten();
@@ -174,34 +170,31 @@ export function FillInDetails({
       complete,
       unwritable,
       failed,
-      stopped: abort.signal.aborted,
+      stopped: signal.aborted,
     });
   };
 
   const write = async (found: Found[]) => {
     const kept = found.filter((item) => item.keep);
-    const abort = new AbortController();
-    controller.current = abort;
+    const signal = batch.start();
     const failed: { title: string; message: string }[] = [];
     let added = 0;
-    let done = 0;
     setOutcomes([]);
-    setStage({ name: "writing", done, total: kept.length });
     await eachAtOnce(
       kept,
       async ({ track, lookup }) => {
         const { key, title } = track;
         try {
-          const written = await writeSongDetails(track.id, lookup.found, abort.signal);
+          const written = await writeSongDetails(track.id, lookup.found, signal);
           if (written.added.length > 0) {
             added++;
-            if (!abort.signal.aborted) onSongWritten(written.track);
+            if (!signal.aborted) onSongWritten(written.track);
             report({ key, title, result: "found", text: "details added" });
           } else {
             report({ key, title, result: "none", text: "had them all by now" });
           }
         } catch (err) {
-          if (!abort.signal.aborted) {
+          if (!signal.aborted) {
             failed.push({ title, message: messageOf(err) });
             report({
               key,
@@ -211,17 +204,16 @@ export function FillInDetails({
             });
           }
         }
-        done++;
-        if (!abort.signal.aborted) setStage({ name: "writing", done, total: kept.length });
       },
       atOnce,
-      abort.signal,
+      signal,
+      (done, total) => setStage({ name: "writing", done, total }),
     );
     onWritten();
     setStage({ name: "done", added, failed });
   };
 
-  const stop = () => controller.current?.abort();
+  const stop = () => batch.stop();
 
   return (
     <section

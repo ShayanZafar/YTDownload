@@ -235,3 +235,44 @@ test("a low-quality song can be replaced by a better copy instead of deleted", a
     await fs.rm(own, { recursive: true, force: true });
   }
 });
+
+test("Stop ends a check part-way, and the songs checked so far are listed", async ({
+  page,
+  request,
+}) => {
+  const own = await fs.mkdtemp(path.join(os.tmpdir(), "yt-audio-housekeeping-stop-e2e-"));
+  try {
+    await tone(path.join(own, "Low One.mp3"), 3, 64);
+    await tone(path.join(own, "Low Two.mp3"), 3, 64);
+    await tone(path.join(own, "Low Three.mp3"), 3, 64);
+    await stayOffline(page);
+    await request.put("/api/settings", { data: { saveFolder: own, qualityBar: "128" } });
+    // The first song's check is answered; the others are held until Stop is pressed.
+    let first = true;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/music/*/check", async (route) => {
+      if (first) {
+        first = false;
+        return route.continue();
+      }
+      await held;
+      await route.continue().catch(() => {}); // the page gave up on it
+    });
+    await page.goto("/");
+    const library = page.getByRole("region", { name: "Your music" });
+    await expect(library.locator("ol > li")).toHaveCount(3);
+    await library.getByRole("button", { name: "Housekeeping" }).click();
+    const panel = library.getByRole("region", { name: "Housekeeping" });
+    await panel.getByRole("button", { name: "Check 3 songs" }).click();
+    await expect(panel.getByText("Checked 1 of 3 songs…", { exact: false })).toBeVisible();
+    await panel.getByRole("button", { name: "Stop" }).click();
+    release();
+    await expect(panel.getByRole("status")).toContainText("Stopped. 1 file to look at.");
+    await expect(panel.getByRole("region", { name: "Low quality" })).toContainText(
+      "64 kbps: below 128 kbps.",
+    );
+  } finally {
+    await fs.rm(own, { recursive: true, force: true });
+  }
+});

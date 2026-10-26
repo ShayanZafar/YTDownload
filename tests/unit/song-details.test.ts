@@ -44,7 +44,8 @@ import {
   filterTracks,
   folderTrack,
 } from "../../client/src/lib/music";
-import { detailLabels, eachAtOnce } from "../../client/src/lib/song-details";
+import { detailLabels } from "../../client/src/lib/song-details";
+import { eachAtOnce } from "../../client/src/lib/at-once";
 
 // Fill in details: the music catalogues' answers (iTunes and Deezer, played
 // by stand-ins — no network), and writing what a song lacks into real files
