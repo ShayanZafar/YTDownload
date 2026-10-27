@@ -22,7 +22,7 @@ export const sourceName = (link: AudioLink) =>
  */
 export function lookUpAudio(link: AudioLink): Promise<AudioInfo> {
   return link.source === "youtube"
-    ? youtubeGuard.run({ attempt: () => fetchAudioInfo(link.url) })
+    ? youtubeGuard.run({ attempt: (signIn) => fetchAudioInfo(link.url, signIn) })
     : lookUpSoundCloud(link.url);
 }
 

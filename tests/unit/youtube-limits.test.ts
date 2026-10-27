@@ -160,7 +160,7 @@ describe("YouTubeGuard", () => {
    * A guard on a fake clock, with a fake health store and an updater whose
    * update never finishes — so a call that waited for it would never settle.
    */
-  function makeGuard() {
+  function makeGuard({ signIn = async (): Promise<"firefox" | undefined> => undefined } = {}) {
     let now = NOW;
     const record = vi.fn();
     const health = { record } as unknown as Pick<SourceHealthStore, "record">;
@@ -173,6 +173,7 @@ describe("YouTubeGuard", () => {
       updater,
       failureText: (err) => (err instanceof Error ? err.message : String(err)),
       log,
+      signIn,
     });
     return { guard, record, update, log, tick: (ms: number) => (now += ms) };
   }
@@ -227,6 +228,85 @@ describe("YouTubeGuard", () => {
       kind: "blocked",
       note: "Sign in to confirm you're not a bot",
     });
+  });
+
+  const BOT_CHECK = "Sign in to confirm you're not a bot. Use --cookies-from-browser or --cookies";
+  /** YouTube's bot check unless the call is signed in. */
+  const botCheckUnlessSignedIn = () =>
+    vi.fn(async (signIn?: string) => {
+      if (!signIn) throw new Error(BOT_CHECK);
+      return `signed in with ${signIn}`;
+    });
+
+  it("never signs in when the setting is off", async () => {
+    const { guard } = makeGuard();
+    const attempt = botCheckUnlessSignedIn();
+    const err = await guard.run({ attempt }).catch((e) => e);
+    expect(err).toBeInstanceOf(YouTubeRefused);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(attempt).toHaveBeenCalledWith(undefined);
+    expect(guard.signInNow()).toBeUndefined();
+  });
+
+  it("answers a bot check by asking again at once with Firefox's sign-in, when allowed", async () => {
+    const { guard, record, log, tick } = makeGuard({ signIn: async () => "firefox" });
+    const attempt = botCheckUnlessSignedIn();
+    expect(await guard.run({ key: "video:a", attempt })).toBe("signed in with firefox");
+    expect(attempt.mock.calls).toEqual([[undefined], ["firefox"]]);
+    // The bot check is still recorded, and so is the signed-in answer.
+    expect(record).toHaveBeenCalledWith("youtube", false, { kind: "blocked", note: BOT_CHECK });
+    expect(record).toHaveBeenLastCalledWith("youtube", true);
+    expect(log).toHaveBeenLastCalledWith(expect.stringMatching(/firefox's YouTube sign-in/));
+
+    // For the next 10 minutes, calls (and streams) sign in straight away.
+    expect(guard.signInNow()).toBe("firefox");
+    const next = botCheckUnlessSignedIn();
+    expect(await guard.run({ attempt: next })).toBe("signed in with firefox");
+    expect(next.mock.calls).toEqual([["firefox"]]);
+    tick(HEDGE_FOR_MS);
+    expect(guard.signInNow()).toBeUndefined();
+  });
+
+  it("stops signing in at once when the setting is turned off", async () => {
+    const { guard } = makeGuard({ signIn: async () => "firefox" });
+    await guard.run({ attempt: botCheckUnlessSignedIn() });
+    guard.forgetSignIn();
+    expect(guard.signInNow()).toBeUndefined();
+  });
+
+  it("signs in only for a bot check, not when YouTube says to slow down", async () => {
+    const signIn = vi.fn(async () => "firefox" as const);
+    const { guard } = makeGuard({ signIn });
+    const attempt = failing("HTTP Error 429: Too Many Requests");
+    expect(await guard.run({ attempt }).catch((e) => e)).toBeInstanceOf(YouTubeRefused);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(signIn).not.toHaveBeenCalled();
+  });
+
+  it("answers with the bot check when Firefox's sign-in can't be read", async () => {
+    const { guard, log } = makeGuard({ signIn: async () => "firefox" });
+    const attempt = vi.fn(async (signIn?: string) => {
+      throw new Error(
+        signIn
+          ? "ERROR: could not find firefox cookies database in C:\\Users\\me\\AppData\\Roaming"
+          : BOT_CHECK,
+      );
+    });
+    const err = await guard.run({ attempt }).catch((e) => e);
+    expect(err).toBeInstanceOf(YouTubeRefused);
+    expect(err).toMatchObject({ kind: "bot-check", reason: BOT_CHECK });
+    expect(attempt).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenLastCalledWith(expect.stringMatching(/Couldn't use firefox's/));
+    expect(guard.signInNow()).toBeUndefined();
+  });
+
+  it("is still refused when YouTube refuses the signed-in call too", async () => {
+    const { guard } = makeGuard({ signIn: async () => "firefox" });
+    const attempt = failing(BOT_CHECK);
+    const err = await guard.run({ attempt }).catch((e) => e);
+    expect(err).toBeInstanceOf(YouTubeRefused);
+    expect(attempt).toHaveBeenCalledTimes(2);
+    expect(guard.signInNow()).toBeUndefined();
   });
 
   it("never makes a request wait for a yt-dlp update", async () => {
@@ -305,6 +385,7 @@ describe("YouTubeGuard", () => {
 
   it("says what to do in its refusal, and never to wait for the app", () => {
     expect(REFUSED_MESSAGE).toMatch(/SoundCloud/);
+    expect(REFUSED_MESSAGE).toMatch(/Use my Firefox YouTube sign-in/);
     expect(REFUSED_MESSAGE).not.toMatch(/try again in|wait/i);
   });
 

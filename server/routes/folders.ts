@@ -13,6 +13,7 @@ import {
   placesToSave,
 } from "../folders";
 import { saveIntoFolder } from "../save";
+import { youtubeGuard } from "../youtube-limits";
 import { songsInFolder } from "../library";
 import { writePlaylistFile } from "../playlist-file";
 import { sendFolderError, NO_FOLDER, validationError } from "./helpers";
@@ -27,12 +28,13 @@ export function registerFolderRoutes(app: Express) {
   app.get(api.settings.get.path, async (req, res) => {
     const local = isLocalRequest(req);
     try {
-      const { saveFolder, qualityBar } = await settings.get();
+      const { saveFolder, qualityBar, youtubeSignIn } = await settings.get();
       const body: SaveSettings = {
         saveFolder: local ? saveFolder : null,
         canSaveToFolder: local,
         cpuCores: cpuCores(),
         qualityBar,
+        youtubeSignIn,
       };
       res.json(body);
     } catch (err) {
@@ -54,12 +56,16 @@ export function registerFolderRoutes(app: Express) {
             : await assertWritableFolder(input.data.saveFolder, { tryWriting: true });
       }
       if (input.data.qualityBar) patch.qualityBar = input.data.qualityBar;
-      const { saveFolder, qualityBar } = await settings.update(patch);
+      if (input.data.youtubeSignIn) patch.youtubeSignIn = input.data.youtubeSignIn;
+      const { saveFolder, qualityBar, youtubeSignIn } = await settings.update(patch);
+      // Turned off: no call uses the sign-in from now on.
+      if (youtubeSignIn === "off") youtubeGuard.forgetSignIn();
       const body: SaveSettings = {
         saveFolder,
         canSaveToFolder: true,
         cpuCores: cpuCores(),
         qualityBar,
+        youtubeSignIn,
       };
       res.json(body);
     } catch (err) {

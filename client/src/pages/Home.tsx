@@ -9,6 +9,7 @@ import { PreviewCard, defaultNameOf, type Selected } from "@/components/preview-
 import { SearchResults } from "@/components/search-results";
 import { RecentExtractions } from "@/components/recent-extractions";
 import { SaveToSetting } from "@/components/save-to-setting";
+import { YouTubeSignInSetting } from "@/components/youtube-sign-in-setting";
 import { ActiveSaves } from "@/components/active-saves";
 import { FolderPicker } from "@/components/folder-picker";
 import { RecentPlaylists } from "@/components/recent-playlists";
@@ -631,6 +632,9 @@ export default function Home() {
             onChoose={() => setChoosingFolder(true)}
             onClear={switchToBrowserDownloads}
           />
+        </div>
+        <div className="w-full">
+          <YouTubeSignInSetting settings={saveTo.settings} onChange={saveTo.setYouTubeSignIn} />
         </div>
         {choosingFolder && (
           <FolderPicker onChoose={chooseFolder} onClose={() => setChoosingFolder(false)} />

@@ -19,7 +19,7 @@
 import type { AudioSource, SearchResult } from "@shared/schema";
 import { SAME_LENGTH_SECONDS } from "@shared/schema";
 import { foldWords } from "@shared/fold-text";
-import { runYtDlpJson, ytDlpErrorLine } from "./audio";
+import { runYtDlpJson, signInArgs, ytDlpErrorLine } from "./audio";
 import { looksLikePreview, recordSoundCloud, soundCloudResult } from "./soundcloud";
 import type { SourceHealthStore } from "./source-health";
 import {
@@ -288,8 +288,9 @@ export async function searchYouTube(
 ): Promise<SearchResult[]> {
   return guard.run({
     key: searchCacheKey(query, options.targetDuration),
-    attempt: async () => {
-      const info = (await run(ytDlpSearchArgs(query))) as { entries?: RawSearchEntry[] };
+    attempt: async (signIn) => {
+      const args = [...signInArgs(signIn), ...ytDlpSearchArgs(query)];
+      const info = (await run(args)) as { entries?: RawSearchEntry[] };
       return rankResults(query, info.entries ?? [], options);
     },
   });

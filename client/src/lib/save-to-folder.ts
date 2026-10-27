@@ -20,6 +20,7 @@ import {
   type PlaylistFileSong,
   type SaveEvent,
   type SaveSettings,
+  type YouTubeSignIn,
   type SavedPlaylistFile,
   type SongToFind,
   type SongsInFolder,
@@ -92,6 +93,14 @@ export function updateSaveFolder(folder: string | null): Promise<SaveSettings> {
   return requestJson(saveSettingsSchema, api.settings.update.path, {
     method: api.settings.update.method,
     json: { saveFolder: folder },
+  });
+}
+
+/** Whose YouTube sign-in the app may use when YouTube asks for one ("off": none). */
+export function saveYouTubeSignIn(youtubeSignIn: YouTubeSignIn): Promise<SaveSettings> {
+  return requestJson(saveSettingsSchema, api.settings.update.path, {
+    method: api.settings.update.method,
+    json: { youtubeSignIn },
   });
 }
 

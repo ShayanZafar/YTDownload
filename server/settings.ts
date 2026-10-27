@@ -1,12 +1,13 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { z } from "zod";
-import { qualityBarSchema } from "@shared/schema";
+import { qualityBarSchema, youtubeSignInSchema } from "@shared/schema";
 import { oneAtATime, writeJsonFile } from "./json-file";
 
 /**
  * App settings that live on the server, so every browser on this computer
- * shares them: the "Save to" folder, and Housekeeping's quality bar. Kept as a small JSON file
+ * shares them: the "Save to" folder, Housekeeping's quality bar, and whether
+ * YouTube's bot check may be answered with Firefox's YouTube sign-in. Kept as a small JSON file
  * next to the history (data/settings.json, or wherever SETTINGS_FILE points).
  */
 export const settingsSchema = z.object({
@@ -14,11 +15,13 @@ export const settingsSchema = z.object({
   saveFolder: z.string().nullable().default(null),
   /** Housekeeping lists songs below this as low quality (the owner's choice: 128 kbps). */
   qualityBar: qualityBarSchema.catch("128").default("128"),
+  /** Off unless the owner turns it on (youtube-limits.ts). */
+  youtubeSignIn: youtubeSignInSchema.catch("off").default("off"),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;
 
-const DEFAULT_SETTINGS: Settings = { saveFolder: null, qualityBar: "128" };
+const DEFAULT_SETTINGS: Settings = { saveFolder: null, qualityBar: "128", youtubeSignIn: "off" };
 
 export function settingsFilePath(): string {
   return path.resolve(
