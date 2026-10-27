@@ -103,6 +103,10 @@ layer(base);
   @apply absolute pointer-events-none;
   width: calc(40% + 480px);
   height: calc(40% + 480px);
+  /* Never the page's scroll anchor: the glows are sized and placed by the page's
+     height, so whenever it changes (a panel opens, a filter narrows the songs)
+     they move, and Chrome, keeping its anchor still, would hop the page a dozen pixels. */
+  overflow-anchor: none;
   background: radial-gradient(
     closest-side,
     hsl(var(--primary) / 0.046),
