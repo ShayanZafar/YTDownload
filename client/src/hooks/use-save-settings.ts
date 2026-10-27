@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@shared/routes";
-import type { QualityBar, SaveSettings } from "@shared/schema";
+import type { QualityBar, SaveSettings, YouTubeSignIn } from "@shared/schema";
 import { saveQualityBar } from "@/lib/housekeeping";
 import { queryClient } from "@/lib/queryClient";
-import { fetchSaveSettings, updateSaveFolder } from "@/lib/save-to-folder";
+import { fetchSaveSettings, saveYouTubeSignIn, updateSaveFolder } from "@/lib/save-to-folder";
 
 const SETTINGS_KEY = [api.settings.get.path];
 
@@ -36,6 +36,16 @@ export function useSaveSettings() {
     onSuccess: (settings) => queryClient.setQueryData<SaveSettings>(SETTINGS_KEY, settings),
   });
 
+  const { mutate: setYouTubeSignIn } = useMutation({
+    mutationFn: saveYouTubeSignIn,
+    onMutate: (youtubeSignIn: YouTubeSignIn) =>
+      queryClient.setQueryData<SaveSettings>(
+        SETTINGS_KEY,
+        (settings) => settings && { ...settings, youtubeSignIn },
+      ),
+    onSuccess: (settings) => queryClient.setQueryData<SaveSettings>(SETTINGS_KEY, settings),
+  });
+
   return {
     /** Undefined until the setting has loaded. */
     settings: data,
@@ -44,6 +54,8 @@ export function useSaveSettings() {
     setFolder: mutateAsync,
     /** Saves Housekeeping's quality bar. */
     setQualityBar,
+    /** Saves whose YouTube sign-in to use when YouTube asks for one. */
+    setYouTubeSignIn,
     /** Reloads the setting, e.g. after a save found the folder gone. */
     refresh: () => queryClient.invalidateQueries({ queryKey: SETTINGS_KEY }),
   };

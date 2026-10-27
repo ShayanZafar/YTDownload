@@ -292,7 +292,7 @@ export async function replaceWithBetterCopy(
         info.formatId,
         betterCopyArgs(file.absolute, part, ext, info.acodec),
         undefined,
-        { spawnSource },
+        { spawnSource, signIn: info.signIn },
       );
       // ffmpeg writes the file itself: its own output is nothing, but must be read to end.
       pipeline.audio.resume();

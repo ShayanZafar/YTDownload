@@ -221,6 +221,14 @@ export const qualityBars = ["off", "128", "192", "256", "lossless"] as const;
 export const qualityBarSchema = z.enum(qualityBars);
 export type QualityBar = z.infer<typeof qualityBarSchema>;
 
+/**
+ * Whose YouTube sign-in the app may use when YouTube asks it to "confirm
+ * you're not a bot": none (the default), or Firefox's. Only ever used after
+ * YouTube asked (server/youtube-limits.ts).
+ */
+export const youtubeSignInSchema = z.enum(["off", "firefox"]);
+export type YouTubeSignIn = z.infer<typeof youtubeSignInSchema>;
+
 /** The "Save to" setting as the page sees it. */
 export const saveSettingsSchema = z.object({
   /** Folder downloads are saved into, or null for the browser's own downloads. */
@@ -238,6 +246,8 @@ export const saveSettingsSchema = z.object({
   cpuCores: z.number().int().positive(),
   /** Housekeeping's bar for a song's sound (see qualityBars). */
   qualityBar: qualityBarSchema.default("128"),
+  /** Use Firefox's YouTube sign-in when YouTube asks for one (see youtubeSignInSchema). */
+  youtubeSignIn: youtubeSignInSchema.default("off"),
 });
 
 export type SaveSettings = z.infer<typeof saveSettingsSchema>;

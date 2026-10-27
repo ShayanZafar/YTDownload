@@ -158,7 +158,9 @@ export async function saveIntoFolder(req: Request, res: Response) {
       stop?.();
     });
 
-    const pipeline = startAudioPipeline(link.url, info.formatId, output.ffmpegArgs, output.prefix);
+    const pipeline = startAudioPipeline(link.url, info.formatId, output.ffmpegArgs, output.prefix, {
+      signIn: info.signIn,
+    });
     stop = pipeline.stop;
     if (clientGone) pipeline.stop(); // cancelled while the file was being made
 

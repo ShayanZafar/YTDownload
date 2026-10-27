@@ -56,6 +56,21 @@ export const MP3_BITRATE = "320k";
 // audible gain. Encodes at roughly 15× real time on a typical PC.
 export const LAME_QUALITY = "2";
 
+/**
+ * A browser whose YouTube sign-in (its cookies) yt-dlp may use to get past
+ * YouTube's bot check — only when the owner turns it on, and only after
+ * YouTube asked (youtube-limits.ts). Firefox only: on Windows, Chrome and
+ * Edge lock their cookies away from other programs.
+ */
+export type YtDlpSignIn = "firefox";
+
+/** The yt-dlp flags of a sign-in: none without one. */
+export const signInFlags = (signIn?: YtDlpSignIn) => (signIn ? { cookiesFromBrowser: signIn } : {});
+
+/** The same, as yt-dlp arguments (they go before a "--"). */
+export const signInArgs = (signIn?: YtDlpSignIn): string[] =>
+  signIn ? ["--cookies-from-browser", signIn] : [];
+
 // youtube-dl-exec's typings leave these out, but the module does export them.
 const ytDlpModule = youtubedl as unknown as {
   constants: { YOUTUBE_DL_PATH: string };
@@ -94,10 +109,20 @@ export type CoverFiles = { jpeg: Buffer; file?: string; tagsFile?: string };
 type Container = { ext: string; contentType: string; muxerArgs: string[] };
 
 /** yt-dlp arguments that write the chosen audio stream to stdout. */
-export function ytDlpAudioArgs(videoUrl: string, format: string = AUDIO_FORMAT): string[] {
+export function ytDlpAudioArgs(
+  videoUrl: string,
+  format: string = AUDIO_FORMAT,
+  signIn?: YtDlpSignIn,
+): string[] {
   return [
     videoUrl,
-    ...ytDlpModule.args({ format, output: "-", quiet: true, ...YT_DLP_BASE_FLAGS }),
+    ...ytDlpModule.args({
+      format,
+      output: "-",
+      quiet: true,
+      ...YT_DLP_BASE_FLAGS,
+      ...signInFlags(signIn),
+    }),
   ];
 }
 
@@ -288,8 +313,12 @@ export async function prepareAudioOutput(
   }
 }
 
-export function spawnYtDlpAudio(videoUrl: string, format?: string): ChildProcessWithoutNullStreams {
-  return spawn(YT_DLP_PATH, ytDlpAudioArgs(videoUrl, format), { windowsHide: true });
+export function spawnYtDlpAudio(
+  videoUrl: string,
+  format?: string,
+  signIn?: YtDlpSignIn,
+): ChildProcessWithoutNullStreams {
+  return spawn(YT_DLP_PATH, ytDlpAudioArgs(videoUrl, format, signIn), { windowsHide: true });
 }
 
 const SEARCH_TIMEOUT_MS = 30_000;
@@ -337,13 +366,14 @@ export type VideoInfo = { title: string; thumbnail: string; channel?: string };
  * A YouTube video's title, thumbnail and channel. Only those are kept: yt-dlp's
  * whole answer lists every format and runs to hundreds of KB.
  */
-export async function fetchVideoInfo(videoUrl: string): Promise<VideoInfo> {
+export async function fetchVideoInfo(videoUrl: string, signIn?: YtDlpSignIn): Promise<VideoInfo> {
   let info: ThumbnailLike & { title?: string; uploader?: string; channel?: string };
   try {
     info = (await youtubedl(videoUrl, {
       dumpSingleJson: true,
       skipDownload: true,
       ...YT_DLP_BASE_FLAGS,
+      ...signInFlags(signIn),
     })) as typeof info;
   } catch (err) {
     throw new Error(ytDlpFailure(err), { cause: err });
@@ -379,6 +409,8 @@ export type AudioInfo = AudioMetadata & {
   duration?: number;
   /** The stream's bitrate in kbps (to weigh it against a song's own: better-copy.ts). */
   abr?: number;
+  /** The YouTube sign-in the look-up needed: the stream uses it too. */
+  signIn?: YtDlpSignIn;
 };
 
 /**
@@ -397,7 +429,7 @@ export function codecOf({ acodec, ext }: { acodec?: string; ext?: string }): str
  * any response or file is started. `videoUrl` is always a canonical link
  * (shared/soundcloud-link.ts: `audioLinkOf()`).
  */
-export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
+export async function fetchAudioInfo(videoUrl: string, signIn?: YtDlpSignIn): Promise<AudioInfo> {
   let info: {
     title?: string;
     uploader?: string;
@@ -419,6 +451,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
       skipDownload: true,
       format: AUDIO_FORMAT,
       ...YT_DLP_BASE_FLAGS,
+      ...signInFlags(signIn),
     })) as typeof info;
   } catch (err) {
     throw new Error(ytDlpFailure(err), { cause: err });
@@ -436,6 +469,7 @@ export async function fetchAudioInfo(videoUrl: string): Promise<AudioInfo> {
     ...(artwork ? { artwork } : {}),
     ...(typeof info.duration === "number" && info.duration > 0 ? { duration: info.duration } : {}),
     ...kbpsOfStream(info),
+    ...(signIn ? { signIn } : {}),
   };
 }
 
@@ -484,13 +518,16 @@ export function startAudioPipeline(
   formatId: string | undefined,
   ffmpegArgs: string[],
   prefix?: Buffer | Promise<Buffer>,
-  { spawnSource = spawnYtDlpAudio }: { spawnSource?: typeof spawnYtDlpAudio } = {},
+  {
+    spawnSource = spawnYtDlpAudio,
+    signIn,
+  }: { spawnSource?: typeof spawnYtDlpAudio; signIn?: YtDlpSignIn } = {},
 ): AudioPipeline {
   // ffmpeg first: if it can't start (throws), no yt-dlp has been left running.
   const ffmpeg = spawnFfmpeg(ffmpegArgs);
   // What the caller reads: ffmpeg's output, with an MP3's tag in front of it.
   const audio = prefix ? withPrefix(ffmpeg.stdout, prefix) : ffmpeg.stdout;
-  const ytdlp = spawnSource(videoUrl, formatId);
+  const ytdlp = spawnSource(videoUrl, formatId, signIn);
   const kill = () => {
     for (const p of [ytdlp, ffmpeg]) if (isRunning(p)) p.kill();
   };

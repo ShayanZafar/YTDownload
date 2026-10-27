@@ -4,6 +4,7 @@ import {
   deletedSongSchema,
   folderFilesSchema,
   qualityBarSchema,
+  youtubeSignInSchema,
   songCheckSchema,
   betterCopyLookupSchema,
   replacedSongSchema,
@@ -346,10 +347,16 @@ export const api = {
           saveFolder: z.string().max(1000).nullable().optional(),
           /** Housekeeping's bar for a song's sound. */
           qualityBar: qualityBarSchema.optional(),
+          /** Whose YouTube sign-in to use when YouTube asks for one. */
+          youtubeSignIn: youtubeSignInSchema.optional(),
         })
-        .refine((input) => input.saveFolder !== undefined || input.qualityBar !== undefined, {
-          message: "Give a folder or a quality bar.",
-        }),
+        .refine(
+          (input) =>
+            input.saveFolder !== undefined ||
+            input.qualityBar !== undefined ||
+            input.youtubeSignIn !== undefined,
+          { message: "Give a folder, a quality bar or a YouTube sign-in." },
+        ),
       responses: { 200: saveSettingsSchema, 400: errorSchemas.validation },
     },
   },

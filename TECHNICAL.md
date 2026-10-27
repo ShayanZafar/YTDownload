@@ -54,7 +54,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── search.ts              # Song search: yt-dlp ytsearch + ranking official uploads first; SoundCloud as the fallback (hedged)
 │   ├── soundcloud.ts          # SoundCloud results with canonical links, previews, the recorded look-up
 │   ├── audio-source.ts        # A download's look-up and end of stream, for YouTube or SoundCloud
-│   ├── youtube-limits.ts      # youtubeGuard: cache, refusals answered at once, hedging memory, self-update
+│   ├── youtube-limits.ts      # youtubeGuard: cache, refusals answered at once, hedging memory, self-update, opt-in sign-in
 │   ├── yt-dlp-update.ts       # Updates yt-dlp in the background, once an hour at most
 │   ├── source-health.ts       # How YouTube, SoundCloud and Spotify have been answering → data/source-health.json
 │   ├── cpu-cores.ts           # cpuCores() and mapAtOnce(): one per CPU core wherever work runs in parallel
@@ -171,7 +171,12 @@ What each file does, and the function and constant names to look for. This was C
   and save too when nothing has been sent yet (`pipelineEnded()`); it's remembered for 10 minutes
   (`refusedRecently()`, `HEDGE_FOR_MS`), during which searches ask SoundCloud at the same time as
   YouTube. A broken/bot-check failure also starts the yt-dlp self-update in the background (nobody
-  waits for it). Pure parts take the time as an argument; unit-tested with a fake clock
+  waits for it). A bot check, with the owner's opt-in setting `youtubeSignIn: "firefox"` on, is made
+  again at once signed in (`--cookies-from-browser firefox`; `attempt(signIn)`), and for 10 minutes
+  after that works calls and streams sign in straight away (`signInNow()`, carried to the stream
+  as `AudioInfo.signIn`); Firefox's cookies unreadable → the bot check is the answer. Turning the
+  setting off calls `forgetSignIn()`. Pure parts take the time as an argument; unit-tested with a
+  fake clock
 - `server/yt-dlp-update.ts` — `YtDlpUpdater`: runs `node scripts/yt-dlp.mjs --update` (what
   `npm run update-yt-dlp` runs; never through a shell) at most once an hour, 2-minute limit, one
   log line at the start and one at the end; a failed update counts as the hour's try
@@ -197,7 +202,9 @@ What each file does, and the function and constant names to look for. This was C
   past any ID3 tag, MP3/AAC frame headers, `ftyp`, `fLaC`, `OggS`, RIFF/WAVE, EBML, ASF…; programs,
   archives, PDFs, pictures and web pages by their own starts; anything else can't be told), and
   `kindProblem()`: `realType` (another kind of audio than the name says) or `notAudio`
-- `server/settings.ts` — app settings (the Save to folder) in `data/settings.json` (`SETTINGS_FILE`)
+- `server/settings.ts` — app settings (the Save to folder, Housekeeping's quality bar, the YouTube
+  sign-in: `youtubeSignIn`, `"off"` unless turned on, anything else read as off) in
+  `data/settings.json` (`SETTINGS_FILE`; the unit tests point it at a file that isn't there)
 - `server/library.ts` — which of a playlist's songs are in the Save to folder (`POST /api/folders/songs`):
   walks it and its subfolders (≤6 deep, ≤`MAX_SONG_FILES`), reads tags (one file per CPU core;
   cached per file until it changes, and kept between runs in `data/song-tags.json`, `SONG_TAGS_FILE`:
@@ -539,7 +546,8 @@ What each file does, and the function and constant names to look for. This was C
   `unexpectedAnswer()` says the app needs restarting when an answer is a page (an older server).
   `components/folder-picker.tsx` is the folder browser (native `<dialog>`, portalled to `<body>`);
   `components/save-to-setting.tsx` sits under the search box, always visible — other devices get
-  a note there instead
+  a note there instead. `components/youtube-sign-in-setting.tsx` under it is the "Use my Firefox
+  YouTube sign-in" switch (`PUT /api/settings { youtubeSignIn }`), shown only on this computer
 - `client/src/components/video-preview.tsx` — a search result's video in YouTube's embedded player
   (`youtubeEmbedUrl()` in `shared/youtube-link.ts`, youtube-nocookie), opened by its thumbnail under
   that result, one at a time; it pauses the app's player
@@ -867,7 +875,7 @@ Without a folder, the panel says what choosing one would add.
 
 Browsers always put downloads in their own downloads folder, and a web page can't choose another one (only Chrome and Edge have an API for it). But the app runs on your computer, so it saves the file itself — which works the same in every browser:
 
-1. **The setting** sits just below the search box (`client/src/components/save-to-setting.tsx`), always visible, so it can be set before a video is opened and applies to **Redownload** too. It's stored by the app in `data/settings.json` (or wherever `SETTINGS_FILE` points; `server/settings.ts`), so every browser on this computer shares it. `GET /api/settings` returns `{ saveFolder, canSaveToFolder, cpuCores }` — `cpuCores` being how many songs **Download all** works on at once.
+1. **The setting** sits just below the search box (`client/src/components/save-to-setting.tsx`), always visible, so it can be set before a video is opened and applies to **Redownload** too. It's stored by the app in `data/settings.json` (or wherever `SETTINGS_FILE` points; `server/settings.ts`), so every browser on this computer shares it. `GET /api/settings` returns `{ saveFolder, canSaveToFolder, cpuCores, qualityBar, youtubeSignIn }` — `cpuCores` being how many songs **Download all** works on at once.
 2. **Choosing the folder:** browsers can't show a folder picker that tells the page a real path, so **Choose folder** opens the app's own folder browser (`client/src/components/folder-picker.tsx`, a native `<dialog>`). `GET /api/folders?path=…` lists a folder's subfolders (hidden and system ones left out) plus quick links — Music, Downloads, Desktop, Documents, Home and, on Windows, each drive (`server/folders.ts`). On Windows the quick links come from the registry (`User Shell Folders`), so a Music folder moved to another drive or into OneDrive is found where it really is. You can click through folders, type or paste a path (Explorer's **Copy as path** quotes are fine), or make a **New folder** (`POST /api/folders`). **Use** sends `PUT /api/settings`, which checks the folder by writing a tiny file there and deleting it — on Windows the permission check alone misses folders only an administrator can change, like `C:\` or Program Files.
 3. **Saving:** download clicks are intercepted (`startDownload()` in `client/src/pages/Home.tsx`, for the preview card and Recent Extractions alike): instead of following the link, the page calls `POST /api/video/save` with `{ url, format, name }` (`saveOnServer()` in `client/src/lib/save-to-folder.ts`). The server (`server/save.ts`) runs the same yt-dlp → ffmpeg pipeline as a download (`startAudioPipeline()` in `server/audio.ts`), but into `<name>.<ext>.part` in the folder — created with the `wx` flag, so the system itself refuses to open an existing file. When both processes have exited cleanly, it's renamed to `<name>.<ext>` — or `<name> (1).<ext>` and so on; an existing file is never replaced — and added to the history. The name is claimed first by creating it empty with `wx` too (`claimNewName()`), then the `.part` file is renamed over it, so saves finishing at the same moment never take the same name, without any of them waiting for another.
 4. **Progress:** once the first audio arrives, the reply is a stream of JSON lines (`application/x-ndjson`, `saveEventSchema` in `shared/schema.ts`): `{"type":"progress","bytes":…}` every quarter-second, then `{"type":"done","fileName","folder","path","bytes"}` or `{"type":"error","message"}`. Problems found before that — no folder chosen (`409`), the folder is gone (`404`) or off-limits (`403`), YouTube refused the video or SoundCloud only previews the track (`502`) — are a normal JSON error. A save YouTube refused offers **Find on SoundCloud**, which searches SoundCloud alone for the song. The page reads the stream with `getReader()` (Safari can't loop over it with `for await`) and shows the size on the button.
@@ -1483,6 +1491,7 @@ tests/
 │   ├── playlist.spec.ts         # YouTube playlists in the panel: open, save the rest, play, save a playlist file
 │   ├── video-preview.spec.ts    # a search result's video played in the list (stand-in search and player, no YouTube)
 │   ├── clipboard.spec.ts        # Paste and the copied-link suggestion (a stand-in clipboard, no YouTube)
+│   ├── youtube-sign-in.spec.ts  # the Firefox sign-in switch: kept by the app, named by a bot check's message
 │   ├── housekeeping.spec.ts     # Housekeeping: not audio, cut short, low quality and other files found; the bar; deleting the ticked; better copies
 │   └── test-server-files.ts     # the test server's temp history, settings and player cache; deleted as the run ends
 ├── unit/
