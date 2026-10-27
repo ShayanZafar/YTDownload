@@ -18,6 +18,8 @@ import {
   queueWithout,
   queueWithoutSong,
   seekRanOffTheEnd,
+  afterSeek,
+  SEEK_LOOKS,
   shuffledOrder,
   sortTracks,
   upNext,
@@ -295,5 +297,28 @@ describe("the queue", () => {
     const q = queueWith(EMPTY_QUEUE, [d, e], "next");
     expect(playOrder(q)).toBe("[D] E");
     expect(playOrder(queueWith(EMPTY_QUEUE, [d, e], "last"))).toBe("[D] E");
+  });
+});
+
+describe("afterSeek", () => {
+  it("is done when the song plays on from where it got to", () => {
+    expect(afterSeek({ from: 240, now: 244, fetching: false, looks: 1 })).toBe("playing");
+    // Landed short (WebKit), and plays on from there.
+    expect(afterSeek({ from: 60, now: 63.5, fetching: false, looks: 1 })).toBe("playing");
+  });
+
+  it("says a file is cut short when the song stands still, fetching nothing", () => {
+    // Said it got there, and plays nothing (WebKit on Linux).
+    expect(afterSeek({ from: 240, now: 240, fetching: false, looks: 1 })).toBe("cut-short");
+    // Landed short, and stands still (WebKit on Windows).
+    expect(afterSeek({ from: 60, now: 60.2, fetching: false, looks: 1 })).toBe("cut-short");
+  });
+
+  it("looks again while the file is still being fetched, but not for ever", () => {
+    expect(afterSeek({ from: 240, now: 240, fetching: true, looks: 1 })).toBe("look-again");
+    expect(afterSeek({ from: 240, now: 240, fetching: true, looks: SEEK_LOOKS - 1 })).toBe(
+      "look-again",
+    );
+    expect(afterSeek({ from: 240, now: 240, fetching: true, looks: SEEK_LOOKS })).toBe("cut-short");
   });
 });

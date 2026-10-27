@@ -36,6 +36,9 @@ export function FacetFilter({
   const [typed, setTyped] = useState("");
   const [active, setActive] = useState(0);
   const list = useRef<HTMLUListElement>(null);
+  // Whether the list is open, for keys pressed faster than React shows it (WebKit):
+  // an ArrowUp right after the ArrowDown that opened it moves, instead of opening it again.
+  const isOpen = useRef(false);
 
   // The choice made, as the list names it (any spelling of it).
   const chosen =
@@ -55,6 +58,7 @@ export function FacetFilter({
   }, [open, active]);
 
   const close = () => {
+    isOpen.current = false;
     setOpen(false);
     setTyped("");
   };
@@ -64,8 +68,9 @@ export function FacetFilter({
   };
   // Opening the list: on the choice made, or the first.
   const openList = () => {
-    if (open) return;
+    if (isOpen.current) return;
     const at = offered.findIndex((choice) => choice.value === chosen?.value);
+    isOpen.current = true;
     setActive(Math.max(0, at));
     setOpen(true);
   };
@@ -90,18 +95,19 @@ export function FacetFilter({
         onChange={(event) => {
           setTyped(event.target.value);
           setActive(0);
+          isOpen.current = true;
           setOpen(true);
         }}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
-            if (!open) return openList();
+            if (!isOpen.current) return openList();
             const step = event.key === "ArrowDown" ? 1 : -1;
             setActive((at) => Math.min(Math.max(at + step, 0), offered.length - 1));
-          } else if (event.key === "Enter" && open) {
+          } else if (event.key === "Enter" && isOpen.current) {
             event.preventDefault();
             choose(offered[active]);
-          } else if (event.key === "Escape" && open) {
+          } else if (event.key === "Escape" && isOpen.current) {
             event.preventDefault();
             close();
           }
