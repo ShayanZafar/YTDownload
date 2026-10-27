@@ -522,6 +522,28 @@ export function seekRanOffTheEnd(asked: number, landed: number, duration: number
   return asked < duration - 1 && landed >= duration - 0.5;
 }
 
+/**
+ * What a look at the song some seconds after a seek finds: it plays on from
+ * where it got to (`from`: where it landed, or where the last look saw it);
+ * it's still fetching the file, so it's looked at again, up to `looks` times;
+ * or it stands still — a file cut short, which WebKit doesn't end on as Chrome
+ * does (it lands short and stands still, or says it got there and plays
+ * nothing, or never finishes the seek).
+ */
+export function afterSeek(look: {
+  from: number;
+  now: number;
+  fetching: boolean;
+  looks: number;
+}): "playing" | "look-again" | "cut-short" {
+  if (look.now - look.from >= 0.5) return "playing";
+  if (look.fetching && look.looks < SEEK_LOOKS) return "look-again";
+  return "cut-short";
+}
+
+/** How many times a seek still fetching is looked at before it counts as cut short. */
+export const SEEK_LOOKS = 3;
+
 // --- The queue ----------------------------------------------------------------------
 
 /** The player's songs: each song once, and the order they play in. */

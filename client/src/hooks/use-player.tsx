@@ -24,6 +24,7 @@ import {
   queueWithoutSong,
   repeatModes,
   seekRanOffTheEnd,
+  afterSeek,
   shuffledOrder,
   upNext,
   type PlayerTrack,
@@ -128,7 +129,9 @@ const TimeContext = createContext<{ time: number; duration: number | null }>({
 const SKIP_AFTER_FAILURE_MS = 2000;
 // WebKit doesn't end a song on a seek past where a cut-short file stops, as Chrome
 // does: it lands short of the place asked for and stands still there (seen on Windows),
-// or never finishes the seek. Still so this long after the seek, that's a file cut short.
+// says it got there and plays nothing (seen on Linux), or never finishes the seek.
+// Not playing on this long after the seek (looked at again while it's still
+// fetching, up to SEEK_LOOKS times), that's a file cut short.
 const STUCK_SEEK_MS = 4000;
 
 // Per-browser conveniences, remembered when storage allows.
@@ -237,6 +240,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Where a seek landed short of where it was asked to (WebKit, a file cut short).
   const seekLanded = useRef<number | null>(null);
   const seekCheck = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Counts seeks, so a look at one that's been followed by another does nothing.
+  const seeks = useRef(0);
 
   const current = currentOf(queue) ?? null;
 
@@ -469,24 +474,30 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       element.currentTime = asked;
       setTime(element.currentTime);
       clearTimeout(seekCheck.current);
+      const seekNumber = ++seeks.current;
+      let from: number | null = null;
+      let looks = 0;
+      // Judged by whether the song plays on, not by the seek's events: WebKit can
+      // say a seek past a cut-short file's end got there, then play nothing.
       const check = () => {
-        if (seekAsked.current !== asked || element.paused) return;
-        const landed = seekLanded.current;
-        const stuck = element.seeking
-          ? // Waiting for the file, but not fetching any of it.
-            element.networkState !== HTMLMediaElement.NETWORK_LOADING
-          : // Short of the place asked for, and standing still.
-            landed !== null && element.currentTime - landed < 0.5;
-        if (!stuck) {
-          // A seek still fetching (a slow drive or network) is looked at again; one
-          // that got somewhere and plays on is done.
-          if (element.seeking) seekCheck.current = setTimeout(check, STUCK_SEEK_MS);
-          else seekAsked.current = null;
+        if (seeks.current !== seekNumber || element.paused) return;
+        looks += 1;
+        const verdict = afterSeek({
+          from: from ?? seekLanded.current ?? asked,
+          now: element.currentTime,
+          fetching: element.networkState === HTMLMediaElement.NETWORK_LOADING,
+          looks,
+        });
+        from = element.currentTime;
+        if (verdict === "look-again") {
+          seekCheck.current = setTimeout(check, STUCK_SEEK_MS);
           return;
         }
-        seekAsked.current = null;
-        element.pause();
-        cutShort(asked);
+        if (seekAsked.current === asked) seekAsked.current = null;
+        if (verdict === "cut-short") {
+          element.pause();
+          cutShort(asked);
+        }
       };
       seekCheck.current = setTimeout(check, STUCK_SEEK_MS);
     };
