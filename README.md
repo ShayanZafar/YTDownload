@@ -1,0 +1,41 @@
+# YouTube Audio Extractor — ready to run
+
+This branch is the app, built and ready to run: no source code, nothing to build. GitHub Actions makes it from the `main` branch after every change ([`install.yml`](https://github.com/ShayanZafar/YTDownload/blob/main/.github/workflows/install.yml)), and each build replaces the one before — so don't change it by hand.
+
+This build: [`a39a4e3`](https://github.com/ShayanZafar/YTDownload/commit/a39a4e3877785b590d9d1b1192546963911ece69), 2026-10-27 — Merge pull request #64 from ShayanZafar/claude/project-thread-xwv0zx
+
+## Install it on a Windows PC
+
+1. **Install Node.js and Git, once.** In PowerShell:
+
+   ```powershell
+   winget install -e --id OpenJS.NodeJS.LTS
+   winget install -e --id Git.Git
+   ```
+
+   Then close and reopen PowerShell.
+
+2. **Get the app** — into a folder called "YouTube Audio Extractor" in your user folder, say. The repository is private, so sign in to GitHub if Git asks.
+
+   ```powershell
+   git clone --depth 1 --branch install https://github.com/ShayanZafar/YTDownload.git "$HOME\YouTube Audio Extractor"
+   ```
+
+3. **Double-click `Start.cmd`** in that folder (on macOS, `Start.command`; on Linux, run `./Start.sh` in a terminal). The first start installs what the app needs, yt-dlp and ffmpeg among them, which takes a minute or two; after that it starts in a few seconds. It opens in your browser at http://localhost:5000. Keep its window open while you use the app.
+
+## Using it
+
+| File                                              | What it does                                                                                                                            |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `Start.cmd`                                       | Starts the app and opens it in your browser (or just opens the page, if it's running).                                                  |
+| `Stop.cmd`                                        | Stops the app.                                                                                                                          |
+| `Update.cmd`                                      | Gets the newest build. Your download history, settings and `.env` stay; a running app is stopped and started again.                     |
+| `Start.command`, `Stop.command`, `Update.command` | The same three for macOS (double-click in Finder); `Start.sh`, `Stop.sh`, `Update.sh` for Linux (run in a terminal).                    |
+| `scripts\windows\`                                | The rest: `update-yt-dlp.cmd` when YouTube downloads stop working, `autostart-on.cmd` and `autostart-off.cmd` to start it with Windows. |
+| `.env` (copy `.env.example`)                      | Settings, like the port, or `HOST=0.0.0.0` to let your phone use the app.                                                               |
+
+Your phone uses the app running on this PC — see [Using it from your phone](https://github.com/ShayanZafar/YTDownload/blob/main/docs/run/README.md#using-it-from-your-phone).
+
+On macOS or Linux (no Python needed): install with `YOUTUBE_DL_SKIP_PYTHON_CHECK=1 npm ci --omit=dev`, start with `npm start`, and update with `git fetch --depth 1 origin install && git reset --hard FETCH_HEAD` (then install again). `npm run update-yt-dlp` gets the newest yt-dlp.
+
+More: [Running the app](https://github.com/ShayanZafar/YTDownload/blob/main/docs/run/README.md) and the [user guide](https://github.com/ShayanZafar/YTDownload/blob/main/README.md).
