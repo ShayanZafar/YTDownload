@@ -11,6 +11,36 @@ import { cn } from "@/lib/utils";
  * scrolling through a long list every time. Its first choice, while nothing
  * is typed, shows every song again.
  */
+/** The list's width (`w-64 max-w-[80vw]`), in CSS pixels. */
+const LIST_WIDTH = 256;
+const listWidth = () => Math.min(LIST_WIDTH, window.innerWidth * 0.8);
+
+/**
+ * Whether the list should hang to the left of the box's right edge instead of
+ * from its left edge: when it would reach past something that clips it — an
+ * ancestor that hides its overflow (the card around Your music), or the window
+ * — and there's room for it on the left.
+ */
+export function listGoesLeft(box: HTMLElement, width = listWidth()): boolean {
+  const { left, right } = box.getBoundingClientRect();
+  if (right - width < 0) return false;
+  const end = left + width;
+  if (end > window.innerWidth) return true;
+  for (let el = box.parentElement; el; el = el.parentElement) {
+    if (getComputedStyle(el).overflowX !== "visible" && end > el.getBoundingClientRect().right)
+      return true;
+  }
+  return false;
+}
+
+/** Scrolls the list, and nothing else, just enough to show the item. */
+export function scrollListTo(list: HTMLElement, item: HTMLElement): void {
+  const top = item.offsetTop;
+  const bottom = top + item.offsetHeight;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+}
+
 export function FacetFilter({
   label,
   name,
@@ -35,6 +65,10 @@ export function FacetFilter({
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
   const [active, setActive] = useState(0);
+  // Whether the list hangs to the left of the box's right edge, when it would
+  // stick out of the card (or the window) otherwise.
+  const [toLeft, setToLeft] = useState(false);
+  const box = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
   // Whether the list is open, for keys pressed faster than React shows it (WebKit):
   // an ArrowUp right after the ArrowDown that opened it moves, instead of opening it again.
@@ -52,9 +86,13 @@ export function FacetFilter({
     ...matchChoices(choices, typed),
   ];
 
+  // Keeps the active choice in view by scrolling the list itself, and only it:
+  // scrollIntoView() would also scroll whatever clips the list — the card around
+  // Your music (overflow hidden), the page — and shove the whole list of songs aside.
   useEffect(() => {
-    if (!open) return;
-    list.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
+    if (!open || !list.current) return;
+    const item = list.current.querySelector<HTMLElement>(`[data-index="${active}"]`);
+    if (item) scrollListTo(list.current, item);
   }, [open, active]);
 
   const close = () => {
@@ -72,12 +110,14 @@ export function FacetFilter({
     const at = offered.findIndex((choice) => choice.value === chosen?.value);
     isOpen.current = true;
     setActive(Math.max(0, at));
+    setToLeft(box.current ? listGoesLeft(box.current) : false);
     setOpen(true);
   };
 
   return (
     <div className="relative" title={name}>
       <input
+        ref={box}
         type="text"
         role="combobox"
         aria-label={label}
@@ -128,7 +168,10 @@ export function FacetFilter({
           id={listId}
           role="listbox"
           aria-label={label}
-          className="absolute left-0 top-full z-30 mt-1 max-h-72 w-64 max-w-[80vw] overflow-y-auto rounded-lg border border-border bg-card py-1 text-xs shadow-lg"
+          className={cn(
+            "absolute top-full z-30 mt-1 max-h-72 w-64 max-w-[80vw] overflow-y-auto rounded-lg border border-border bg-card py-1 text-xs shadow-lg",
+            toLeft ? "right-0" : "left-0",
+          )}
         >
           {offered.map((choice, index) => (
             <li
