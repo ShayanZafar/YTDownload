@@ -1,14 +1,25 @@
 # Claude reviews each pull request once, when it's opened or marked ready, and
-# posts findings as inline comments. It runs on the Claude subscription through
-# the CLAUDE_CODE_OAUTH_TOKEN secret (created with `claude setup-token`).
-# Drafts and pull requests from forks are skipped, and so are Dependabot's:
-# GitHub gives Dependabot-triggered runs no repository secrets, so the review
-# could not sign in anyway (the Tests/verify workflow still checks them). If the
-# secret is missing or empty, the job logs a warning and finishes green instead
-# of failing. The review runs on Sonnet 5.5, a different model from the one that
-# usually writes the code, so their blind spots don't line up. To review again
+# posts findings as inline comments. Since Nov 1, 2026 it runs on the Max plan's
+# monthly API credits, in the Claude Console's `ci` workspace ($25 a month, then
+# it stops until the credit refreshes on the 11th), not on the subscription's
+# usage windows. It signs in by workload identity federation: the job's GitHub
+# OIDC token is exchanged for a ten-minute Anthropic token, so no API key or
+# OAuth token is stored in the repository. The four `anthropic_*` values below
+# are identifiers, not secrets. Changing the repository's name or owner, or the
+# workspace, means a new federation rule in the Console (Settings › Workload
+# identity): the rule matches `repo:ShayanZafar/YTDownload:pull_request`.
+# Drafts and pull requests from forks are skipped (a fork's run could ask for a
+# token), and so are Dependabot's (the Tests/verify workflow still checks them).
+# If the sign-in fails or the month's credit is spent, the step logs a warning
+# and the job finishes green instead of failing: re-run it from the Actions tab
+# after the 11th, or run /code-review locally. The review runs on Sonnet 5.5, a
+# different model from the one that usually writes the code, so their blind
+# spots don't line up, and is capped at 60 turns and $2 a run. To review again
 # after a push, re-run the workflow from the Actions tab, or add `synchronize`
-# to the types below (that reviews every push, which costs more plan usage).
+# to the types below (that reviews every push, which costs more credit).
+# The other Claude workflows (claude-backlog.yml, claude-refactor.yml) still run
+# on the subscription through the CLAUDE_CODE_OAUTH_TOKEN secret: they use Opus
+# for up to 150 turns, which would spend the month's CI credit in a run or two.
 name: Claude Code Review
 
 on:
@@ -30,30 +41,29 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
-      id-token: write
-    env:
-      # `secrets` can't be read in a job-level `if`, so the steps check this copy.
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      id-token: write # the GitHub OIDC token the action exchanges for an Anthropic token
     steps:
-      - name: Skip without a token
-        if: env.CLAUDE_CODE_OAUTH_TOKEN == ''
-        run: |
-          echo "::warning::The CLAUDE_CODE_OAUTH_TOKEN secret is not set, so the review was skipped. Run 'claude setup-token' and 'gh secret set CLAUDE_CODE_OAUTH_TOKEN -R ${{ github.repository }}'."
-
       - uses: actions/checkout@v7
-        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
         with:
           fetch-depth: 1
 
       - uses: anthropics/claude-code-action@v1
-        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        id: review
+        # A failed sign-in or a spent credit must not block the pull request.
+        continue-on-error: true
         env:
           # A CI run ends with Claude's last message, so nothing may run in the background: on
           # Oct 11, 2026 the review plugin started its checks as background subagents, the run
           # ended before they reported back, and the review posted nothing.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Workload identity federation (Console › Settings › Workload identity). Never add
+          # anthropic_api_key or claude_code_oauth_token here: a static credential takes
+          # precedence and federation is silently skipped.
+          anthropic_federation_rule_id: fdrl_015wfXoG3eaUFqMwuRVPMhxv
+          anthropic_organization_id: 8411b64c-d8cc-492a-8d94-dda2e4a77057
+          anthropic_service_account_id: svac_01RErSThrKhpeXFGrBxwsGug
+          anthropic_workspace_id: wrkspc_01Nd6Y8Py1V9c4ZMfaL4Aqhw
           # The monthly refactor pull request is opened by Claude's own GitHub App (claude[bot]);
           # without this the action refuses to review it.
           allowed_bots: "claude"
@@ -62,5 +72,11 @@ jobs:
           plugins: "code-review@claude-code-plugins"
           prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
           # The code-review plugin reads the pull request with gh and posts its summary with
-          # `gh pr comment`; without these commands it stops after its first step.
-          claude_args: '--model claude-sonnet-5-5 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)" --append-system-prompt "This is a non-interactive CI run that ends with your final message; nothing can resume it. Run every subagent and command in the foreground, wait for each result, and finish only when the work is complete."'
+          # `gh pr comment`; without these commands it stops after its first step. The turn and
+          # dollar caps keep one runaway review from spending the month's credit.
+          claude_args: '--model claude-sonnet-5-5 --max-turns 60 --max-budget-usd 2 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)" --append-system-prompt "This is a non-interactive CI run that ends with your final message; nothing can resume it. Run every subagent and command in the foreground, wait for each result, and finish only when the work is complete."'
+
+      - name: Note a skipped review
+        if: steps.review.outcome == 'failure'
+        run: |
+          echo "::warning::Claude's review did not finish: the ci workspace's monthly credit may be spent (it refreshes on the 11th), the federation sign-in may have failed (Console › Workload identity › Authentication events), or the run hit its turn or dollar cap. See the step above. Re-run from the Actions tab once the cause is fixed, or run /code-review locally."
