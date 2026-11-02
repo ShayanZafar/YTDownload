@@ -65,5 +65,5 @@ TypeScript (`server/`); schemas and API contracts in `shared/`; no database, jus
 
 - After each completed milestone (a feature, fix or cleanup, done and tested), commit it alone to
   `main` with a descriptive message, without asking first, and push to `origin/main`; never
-  half-finished work. Each push rebuilds the `install` branch PCs update from, untested, so push
+  half-finished work. PCs update from the `install` branch, rebuilt once CI passes on `main`; push
   only what passes `npm run verify`. Never commit to `install` by hand.

@@ -3,9 +3,11 @@
 # unit tests) — the one check you run locally too — on Linux
 # and Windows after every push to main (and on pull requests), and on macOS
 # too every Monday or when run by hand (Actions tab, Run workflow): macOS
-# minutes count ten times against GitHub's free allowance. A push to main whose
-# commit is "Merge pull request #N" skips both jobs: that pull request already ran
-# them (half of the minutes spent here went to those repeats).
+# minutes count ten times against GitHub's free allowance. Every push to main is
+# tested, merges too: a pull request was tested against the main it started
+# from, and main may have changed since. The install branch is built only once
+# this passes on main (install.yml). Auto-merge starts it on Linux and Windows
+# only (all_systems: false) after each merge it makes.
 #
 # The API and browser tests that talk to YouTube aren't run here — YouTube
 # often refuses GitHub's machines — but the music player's API test is: it
@@ -21,6 +23,11 @@ on:
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
+    inputs:
+      all_systems:
+        description: "Also run on macOS"
+        type: boolean
+        default: true
 
 # A newer push replaces a run that's still going.
 concurrency:
@@ -29,11 +36,10 @@ concurrency:
 
 jobs:
   test:
-    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
+        os: ${{ fromJSON((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.all_systems)) && '["ubuntu-latest", "windows-latest", "macos-latest"]' || '["ubuntu-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -68,7 +74,6 @@ jobs:
         run: npm run verify
 
   browser:
-    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Merge pull request')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
