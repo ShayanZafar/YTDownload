@@ -113,8 +113,9 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── workflows/
 │   │   ├── install.yml        # Builds the ready-to-run app onto the install branch after every push to main
 │   │   ├── tests.yml          # npm run verify on Linux and Windows (macOS weekly), on pull requests and direct pushes
-│   │   ├── claude-code-review.yml # Claude reviews each pull request once, with inline comments
-│   │   └── claude-refactor.yml # Monthly: Claude runs /refactor and opens a pull request
+│   │   ├── claude-code-review.yml # Claude reviews each pull request once, with inline comments (API credits, federated sign-in)
+│   │   ├── claude-refactor.yml # Monthly: Claude runs /refactor and opens a pull request (subscription)
+│   │   └── claude-backlog.yml  # Acts on the owner's answer on a decision or debt issue (subscription)
 │   ├── dependabot.yml         # Monthly grouped npm and GitHub Actions updates
 │   └── pull_request_template.md # The checklist a pull request starts with
 ├── .claude/skills/            # Claude Code skills: /verify (npm run verify), /refactor, /backlog
