@@ -51,9 +51,10 @@ test.describe("Recent Extractions: removing songs (browser)", () => {
       .click();
     await expect(rows).toHaveCount(2);
     await expect(section.getByText("Daft Punk - Get Lucky")).toBeHidden();
+    // Polled: the app's history can lag the list on screen by a moment.
     const titles = async () =>
       ((await (await request.get("/api/downloads")).json()) as Download[]).map((e) => e.title);
-    expect(await titles()).toEqual([songs[0], songs[2]]);
+    await expect.poll(titles).toEqual([songs[0], songs[2]]);
     await expect(
       page.getByText("Removed “Daft Punk - Get Lucky” from the history", { exact: true }),
     ).toBeVisible();
@@ -71,13 +72,13 @@ test.describe("Recent Extractions: removing songs (browser)", () => {
       .getByRole("button", { name: "Clear history" })
       .click();
     await expect(section.getByText("No downloads yet")).toBeVisible();
-    expect(await titles()).toEqual([]);
+    await expect.poll(titles).toEqual([]);
     await expect(
       page.getByText("Cleared 3 downloads from the history", { exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "Undo" }).click();
     await expect(rows).toHaveCount(3);
-    expect(await titles()).toEqual(songs);
+    await expect.poll(titles).toEqual(songs);
   });
 });
 
