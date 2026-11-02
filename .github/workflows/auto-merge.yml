@@ -1,11 +1,11 @@
-# Merges a pull request on its own when a bot opened it and every check on it passed:
-# - Dependabot's minor and patch updates (a major version bump waits for you);
-# - the monthly Claude Refactor pull request (refactor/*), only when the Claude Code Review ran
-#   and left no comments.
-# Your own pull requests are never touched. It runs each time one of a pull request's workflows
-# finishes, looks at every check on the pull request's latest commit, and squash-merges when all
-# of them passed and none is still running. A merge made with the workflow's own token doesn't
-# start the workflows that run on pushes to the default branch, so it starts them itself.
+# Merges a pull request on its own when Dependabot opened it for a minor or patch update and
+# every check on it passed (a major version bump waits for you). Every other pull request waits
+# for a person, the monthly Claude Refactor one too: a Claude review of a Claude change isn't an
+# independent check (owner's choice, 2026-11-02). It runs each time one of a pull request's
+# workflows finishes, looks at every check on the pull request's latest commit, and squash-merges
+# when all of them passed and none is still running. A merge made with the workflow's own token
+# doesn't start the workflows that run on pushes to the default branch, so it starts the Tests
+# itself (Linux and Windows); the install branch is built once they pass (install.yml).
 name: Auto-merge
 
 on:
@@ -37,7 +37,7 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # Workflows that run on pushes to the default branch, started by hand after a merge.
-          ON_MAIN: "install.yml"
+          ON_MAIN: "tests.yml"
         run: |
           set -euo pipefail
           pr=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[] | select(.state == "open")][0].number // empty')
@@ -60,10 +60,9 @@ jobs:
           kind=""
           case "$author" in
             app/dependabot|dependabot\[bot\]) kind=dependabot ;;
-            app/*) case "$branch" in refactor/*) kind=refactor ;; esac ;;
           esac
           if [ -z "$kind" ]; then
-            echo "Opened by $author on $branch: not a bot pull request, so it waits for a person."
+            echo "Opened by $author on $branch: not Dependabot's, so it waits for a person."
             exit 0
           fi
 
@@ -95,25 +94,6 @@ jobs:
                 exit 0
               fi
               ;;
-            refactor)
-              reviews=$(gh run list -R "$REPO" --workflow "Claude Code Review" --commit "$SHA" --json conclusion --jq '[.[] | select(.conclusion == "success")] | length')
-              if [ "$reviews" = "0" ]; then
-                echo "No completed Claude Code Review for this commit: left for a person."
-                exit 0
-              fi
-              findings=$(gh api "repos/$REPO/pulls/$pr/comments?per_page=100" --jq 'length')
-              if [ "$findings" != "0" ]; then
-                echo "The review left $findings comment(s): left for a person."
-                exit 0
-              fi
-              # The review's summary comment must say so too (a change in its wording stops merges, never allows one).
-              # The review posts as github-actions[bot] since it runs `claude -p` itself (Nov 2026); claude[bot] was the Action.
-              verdict=$(gh api "repos/$REPO/issues/$pr/comments?per_page=100" --jq '[.[] | select(.user.login == "github-actions[bot]" or .user.login == "claude[bot]") | .body | select(test("No issues found"; "i"))] | length')
-              if [ "$verdict" = "0" ]; then
-                echo "The review did not post a \"No issues found\" verdict: left for a person."
-                exit 0
-              fi
-              ;;
           esac
 
           mergeable=UNKNOWN
@@ -130,6 +110,6 @@ jobs:
           gh pr merge "$pr" -R "$REPO" --squash --delete-branch --match-head-commit "$SHA"
           echo "Merged #$pr ($kind)."
           for workflow in $ON_MAIN; do
-            gh workflow run "$workflow" -R "$REPO" --ref "$DEFAULT_BRANCH"
+            gh workflow run "$workflow" -R "$REPO" --ref "$DEFAULT_BRANCH" -f all_systems=false
             echo "Started $workflow on $DEFAULT_BRANCH."
           done

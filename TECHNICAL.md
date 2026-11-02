@@ -111,10 +111,11 @@ This document covers the project's architecture, local development setup, enviro
 │   └── windows/               # Double-click helpers: start, stop, update, update-yt-dlp, autostart-on/off (.cmd → app.ps1)
 ├── .github/
 │   ├── workflows/
-│   │   ├── install.yml        # Builds the ready-to-run app onto the install branch after every push to main
-│   │   ├── tests.yml          # npm run verify on Linux and Windows (macOS weekly), on pull requests and direct pushes
+│   │   ├── install.yml        # Builds the ready-to-run app onto the install branch once Tests pass on main
+│   │   ├── tests.yml          # npm run verify on Linux and Windows (macOS weekly), on pull requests and every push to main
 │   │   ├── claude-code-review.yml # Claude reviews each pull request once, with inline comments (API credits, federated sign-in)
-│   │   ├── claude-refactor.yml # Monthly: Claude runs /refactor and opens a pull request (subscription)
+│   │   ├── claude-refactor.yml # Monthly: Claude runs /refactor and opens a pull request (subscription), which waits for you
+│   │   ├── auto-merge.yml     # Merges Dependabot's minor/patch pull requests once every check passed, then starts Tests on main
 │   │   └── claude-backlog.yml  # Acts on the owner's answer on a decision or debt issue (subscription)
 │   ├── dependabot.yml         # Monthly grouped npm and GitHub Actions updates
 │   └── pull_request_template.md # The checklist a pull request starts with
@@ -615,14 +616,15 @@ What each file does, and the function and constant names to look for. This was C
   `server\index.ts`: the source (installs everything, runs `npm run build` when `scripts/needs-build.mjs` finds code newer
   than `dist/index.cjs`, then `npm start`; `npm run dev` with `-Dev`/`--dev` or if the build fails) and a
   ready-to-run build (`npm ci --omit=dev`, `npm start`)
-- `.github/workflows/install.yml` — after every push to `main`, builds the app on GitHub and
+- `.github/workflows/install.yml` — once the Tests workflow passes on `main` (a push, or a run auto-merge
+  or a person started; not the weekly one), and only if that commit is still `main`'s newest, builds the app on GitHub and
   force-pushes the ready-to-run result to the `install` branch as a single commit: `dist/`,
   `package*.json`, the Windows and Unix scripts and `scripts/install/` (README with the build filled in,
   `.gitignore`, `Start/Stop/Update.cmd` shortcuts — one line each, as `Update.cmd` replaces them
   while they run). PCs `git clone --depth 1 --branch install`; `update.cmd` fetches and resets
   (no history to merge); it's only ever written by the workflow (`CLAUDE.md` › Workflow)
 - `.github/workflows/tests.yml` — `npm ci`, yt-dlp/ffmpeg run, then `npm run verify` (formatting,
-  lint, type-check, dependency licences, the core-flows and instructions checks, unit tests + the music and history API tests) on Linux and Windows on pull requests and direct pushes to `main`, not the "Merge pull request" push
+  lint, type-check, dependency licences, the core-flows and instructions checks, unit tests + the music and history API tests) on Linux and Windows on pull requests and every push to `main`, merges too (a pull request was tested against an older `main`)
   (macOS on Mondays / by hand: its minutes count 10×); its `browser` job runs the Playwright tests (Chrome and WebKit, on
   Linux) with stand-ins for YouTube, Spotify and SoundCloud. The YouTube API tests and the `@live`
   browser tests aren't run there (GitHub's machines get refused)
@@ -1482,9 +1484,9 @@ The project ships with two end-to-end test suites that exercise the real app aga
 
 ### Continuous integration
 
-`.github/workflows/tests.yml` keeps the app easy to work on from any system. On every pull request and every direct push to `main` (a "Merge pull request" push is skipped: its pull request already ran the same checks) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. A second job, `browser`, runs the Playwright tests on Linux in Chrome (the runner's Google Chrome) and WebKit (`npx playwright install --with-deps chromium webkit`), with YouTube, Spotify and SoundCloud played by stand-ins. The other API tests and the `@live` browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
+`.github/workflows/tests.yml` keeps the app easy to work on from any system. On every pull request and every push to `main` (merges too: a pull request was tested against the `main` it started from, and `main` may have moved since; the install branch is built only once this passes) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. A second job, `browser`, runs the Playwright tests on Linux in Chrome (the runner's Google Chrome) and WebKit (`npx playwright install --with-deps chromium webkit`), with YouTube, Spotify and SoundCloud played by stand-ins. The other API tests and the `@live` browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
 
-Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups; and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The review runs `claude -p` itself (not the Claude Code GitHub Action, which the credit doesn't cover), signs in by workload identity federation and spends the Max plan's monthly API credits in the Console's `ci` workspace (capped at $25 a month, $2 and 60 turns a run), posting as `github-actions[bot]`; the refactor, like `claude-backlog.yml`, signs in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and runs on the subscription. Each skips with a warning, still green, when it can't sign in.
+Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups, which waits for the owner like any other (`auto-merge.yml` merges only Dependabot's minor and patch updates, once every check passed, then starts the Tests on `main`, since a merge with the workflow's own token starts no push workflows); and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The review runs `claude -p` itself (not the Claude Code GitHub Action, which the credit doesn't cover), signs in by workload identity federation and spends the Max plan's monthly API credits in the Console's `ci` workspace (capped at $25 a month, $2 and 60 turns a run), posting as `github-actions[bot]`; the refactor, like `claude-backlog.yml`, signs in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and runs on the subscription. Each skips with a warning, still green, when it can't sign in.
 
 ### Layout
 
@@ -1685,7 +1687,7 @@ The Express server serves the static client from `dist/public` and the API from 
 
 ### The install branch (the ready-to-run app)
 
-`.github/workflows/install.yml` builds the app on GitHub after every push to `main` (or by hand, from the Actions tab) and publishes the result to the `install` branch, which PCs install from (`git clone --depth 1 --branch install …`) and update from (`Update.cmd`) — see [Running the app](docs/run/README.md#installing-the-ready-to-run-app).
+`.github/workflows/install.yml` builds the app on GitHub once the Tests workflow has passed on `main`'s newest commit (or by hand, from the Actions tab) and publishes the result to the `install` branch, which PCs install from (`git clone --depth 1 --branch install …`) and update from (`Update.cmd`) — see [Running the app](docs/run/README.md#installing-the-ready-to-run-app).
 
 - **What's in it:** `dist/`; `package.json` and `package-lock.json`, for `npm ci --omit=dev`, which installs the packages the server runs with — and downloads yt-dlp and ffmpeg, so each PC gets its own and the branch stays small; the Windows scripts, `.env.example` and `.gitattributes` (CRLF for the scripts); and from `scripts/install/` a README (with the build's commit filled in), a `.gitignore` (`node_modules/`, `data/`, `.env`) and `Start.cmd`, `Stop.cmd` and `Update.cmd`, which run the scripts in `scripts\windows` (with `Start/Stop/Update.command` for macOS and `Start/Stop/Update.sh` for Linux, which run `scripts/unix/app.sh`).
 - **One commit:** each build replaces the one before (a fresh commit, force-pushed), so the branch never grows. `Update.cmd` therefore fetches the branch and resets to it (`git fetch --depth 1 origin install`, `git reset --hard FETCH_HEAD`) instead of `git pull`; `node_modules/`, `data/` and `.env` aren't tracked, so they stay. A batch file being run is read a line at a time, and `Update.cmd` replaces the shortcuts while it runs, so each one does its work in a single line.
