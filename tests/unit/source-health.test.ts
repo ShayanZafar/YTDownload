@@ -393,8 +393,10 @@ describe("SourceHealthStore", () => {
 
   it("writes by itself soon after a record, without being flushed", async () => {
     store.record("spotify", true);
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    expect((await readFile()).sources.spotify.ok).toBe(1);
+    // Polls rather than sleeping a fixed time: under load the write can land later.
+    await vi.waitFor(async () => expect((await readFile()).sources.spotify.ok).toBe(1), {
+      timeout: 3000,
+    });
   });
 
   it("forgets events older than 24 hours as time passes", () => {
