@@ -1,7 +1,10 @@
 # Builds the app and puts the ready-to-run result on the `install` branch, which
 # PCs install from and update from (docs/run/README.md: "Installing the
-# ready-to-run app"). Runs after every push to main, or by hand from the
-# Actions tab (Run workflow).
+# ready-to-run app"). Runs once the Tests workflow has passed on a push to main
+# (or a run of it started by hand or by auto-merge), so PCs only ever get code
+# that passed its tests; and by hand from the Actions tab (Run workflow). A
+# build of a commit that's no longer main's newest is skipped: the newer one's
+# own tests will build it.
 #
 # The branch holds the built app (dist/), what npm needs to install the
 # packages it runs with (package.json, package-lock.json, and
@@ -15,24 +18,60 @@
 name: Install branch
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Tests"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
-# A newer push replaces a build that's still running.
+# A newer build replaces one that's still running.
 concurrency:
   group: install-branch
   cancel-in-progress: true
 
+env:
+  # The commit to build: the one the tests passed on, or main's newest when run by hand.
+  BUILD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
 jobs:
+  # Tests passed on that commit (not the weekly run), and it's still main's newest.
+  newest:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Still main's newest commit?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          newest=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          if [ "$newest" = "$BUILD_SHA" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main is at $newest now, not $BUILD_SHA: its own tests will build it."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: newest
+    if: needs.newest.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.BUILD_SHA }}
 
       - uses: actions/setup-node@v7
         with:
@@ -64,8 +103,8 @@ jobs:
             const { execSync } = require("child_process");
             const values = {
               REPO: process.env.GITHUB_REPOSITORY,
-              SHA: process.env.GITHUB_SHA,
-              SHORT_SHA: process.env.GITHUB_SHA.slice(0, 7),
+              SHA: process.env.BUILD_SHA,
+              SHORT_SHA: process.env.BUILD_SHA.slice(0, 7),
               DATE: new Date().toISOString().slice(0, 10),
               SUBJECT: execSync("git log -1 --format=%s").toString().trim(),
             };
@@ -84,5 +123,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -q -m "Build of main ${GITHUB_SHA::7}: $subject"
+          git commit -q -m "Build of main ${BUILD_SHA::7}: $subject"
           git push -q --force "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:install

@@ -1,6 +1,6 @@
 # YouTube Audio Extractor — ready to run
 
-This branch is the app, built and ready to run: no source code, nothing to build. GitHub Actions makes it from the `main` branch after every change ([`install.yml`](https://github.com/{{REPO}}/blob/main/.github/workflows/install.yml)), and each build replaces the one before — so don't change it by hand.
+This branch is the app, built and ready to run: no source code, nothing to build. GitHub Actions makes it from the `main` branch after every change that passes its tests ([`install.yml`](https://github.com/{{REPO}}/blob/main/.github/workflows/install.yml)), and each build replaces the one before — so don't change it by hand.
 
 This build: [`{{SHORT_SHA}}`](https://github.com/{{REPO}}/commit/{{SHA}}), {{DATE}} — {{SUBJECT}}
 
