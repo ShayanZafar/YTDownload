@@ -4,19 +4,30 @@
 # it stops until the credit refreshes on the 11th), not on the subscription's
 # usage windows. It signs in by workload identity federation: the job's GitHub
 # OIDC token is exchanged for a ten-minute Anthropic token, so no API key or
-# OAuth token is stored in the repository. The four `anthropic_*` values below
+# OAuth token is stored in the repository. The four `ANTHROPIC_*` values below
 # are identifiers, not secrets. Changing the repository's name or owner, or the
 # workspace, means a new federation rule in the Console (Settings › Workload
-# identity): the rule matches `repo:ShayanZafar/YTDownload:pull_request`.
+# identity): the rule matches the token's subject, which GitHub writes with IDs,
+# `repo:ShayanZafar@1667047/YTDownload@1168219174:pull_request`.
+#
+# It runs `claude -p` itself rather than the Claude Code GitHub Action: the
+# credit covers `claude -p` and the Agent SDK but not the Action, whose runs the
+# API refuses with "Credit balance is too low" (tried on Nov 1, 2026, PR #69).
+# Two consequences: the review's comments come from github-actions[bot], not
+# claude[bot], and inline comments go through `gh api` instead of the Action's
+# comment tool (auto-merge.yml accepts either author).
+#
 # Drafts and pull requests from forks are skipped (a fork's run could ask for a
 # token), and so are Dependabot's (the Tests/verify workflow still checks them).
-# If the sign-in fails or the month's credit is spent, the step logs a warning
-# and the job finishes green instead of failing: re-run it from the Actions tab
-# after the 11th, or run /code-review locally. The review runs on Sonnet 5.5, a
-# different model from the one that usually writes the code, so their blind
-# spots don't line up, and is capped at 60 turns and $2 a run. To review again
-# after a push, re-run the workflow from the Actions tab, or add `synchronize`
-# to the types below (that reviews every push, which costs more credit).
+# Claude reads CLAUDE.md and .claude/ from main, not from the pull request, so a
+# pull request can't rewrite its reviewer's instructions. If the sign-in fails
+# or the month's credit is spent, the step logs a warning and the job finishes
+# green instead of failing: re-run it from the Actions tab after the 11th, or
+# run /code-review locally. The review runs on Sonnet 5.5, a different model
+# from the one that usually writes the code, so their blind spots don't line
+# up, and is capped at 60 turns and $2 a run. To review again after a push,
+# re-run the workflow from the Actions tab, or add `synchronize` to the types
+# below (that reviews every push, which costs more credit).
 # The other Claude workflows (claude-backlog.yml, claude-refactor.yml) still run
 # on the subscription through the CLAUDE_CODE_OAUTH_TOKEN secret: they use Opus
 # for up to 150 turns, which would spend the month's CI credit in a run or two.
@@ -39,42 +50,68 @@ jobs:
       cancel-in-progress: true
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write # the review's comments
       issues: read
-      id-token: write # the GitHub OIDC token the action exchanges for an Anthropic token
+      id-token: write # the GitHub OIDC token exchanged for an Anthropic token
+    env:
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
-      - uses: anthropics/claude-code-action@v1
+      - name: Take Claude's instructions from main, not the pull request
+        run: |
+          git fetch --depth=1 origin main
+          git checkout origin/main -- CLAUDE.md .claude
+          git status --short | sed 's/^/instructions restored: /' || true
+
+      - name: Fetch the GitHub OIDC token
+        run: |
+          mkdir -p "$RUNNER_TEMP/wif"
+          curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" \
+            | jq -r .value > "$RUNNER_TEMP/wif/token"
+
+      - name: Install Claude Code and the review plugin
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/claude" plugin marketplace add https://github.com/anthropics/claude-code.git
+          "$HOME/.local/bin/claude" plugin install code-review@claude-code-plugins
+
+      - name: Review
         id: review
         # A failed sign-in or a spent credit must not block the pull request.
         continue-on-error: true
         env:
+          GH_TOKEN: ${{ github.token }}
+          # Workload identity federation (Console › Settings › Workload identity). Never set
+          # ANTHROPIC_API_KEY here: a static credential takes precedence and federation is skipped.
+          ANTHROPIC_FEDERATION_RULE_ID: fdrl_015wfXoG3eaUFqMwuRVPMhxv
+          ANTHROPIC_ORGANIZATION_ID: 8411b64c-d8cc-492a-8d94-dda2e4a77057
+          ANTHROPIC_SERVICE_ACCOUNT_ID: svac_01RErSThrKhpeXFGrBxwsGug
+          ANTHROPIC_WORKSPACE_ID: wrkspc_01Nd6Y8Py1V9c4ZMfaL4Aqhw
           # A CI run ends with Claude's last message, so nothing may run in the background: on
           # Oct 11, 2026 the review plugin started its checks as background subagents, the run
           # ended before they reported back, and the review posted nothing.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
-        with:
-          # Workload identity federation (Console › Settings › Workload identity). Never add
-          # anthropic_api_key or claude_code_oauth_token here: a static credential takes
-          # precedence and federation is silently skipped.
-          anthropic_federation_rule_id: fdrl_015wfXoG3eaUFqMwuRVPMhxv
-          anthropic_organization_id: 8411b64c-d8cc-492a-8d94-dda2e4a77057
-          anthropic_service_account_id: svac_01RErSThrKhpeXFGrBxwsGug
-          anthropic_workspace_id: wrkspc_01Nd6Y8Py1V9c4ZMfaL4Aqhw
-          # The monthly refactor pull request is opened by Claude's own GitHub App (claude[bot]);
-          # without this the action refuses to review it.
-          allowed_bots: "claude"
-          show_full_output: true
-          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
-          plugins: "code-review@claude-code-plugins"
-          prompt: "/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+        run: |
+          export ANTHROPIC_IDENTITY_TOKEN_FILE="$RUNNER_TEMP/wif/token"
           # The code-review plugin reads the pull request with gh and posts its summary with
-          # `gh pr comment`; without these commands it stops after its first step. The turn and
-          # dollar caps keep one runaway review from spending the month's credit.
-          claude_args: '--model claude-sonnet-5-5 --max-turns 60 --max-budget-usd 2 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*)" --append-system-prompt "This is a non-interactive CI run that ends with your final message; nothing can resume it. Run every subagent and command in the foreground, wait for each result, and finish only when the work is complete."'
+          # `gh pr comment`; inline comments go through `gh api` since the Action's comment tool
+          # isn't here. The turn and dollar caps keep one runaway review from spending the credit.
+          claude -p "/code-review:code-review --comment $REPO/pull/$PR" \
+            --model claude-sonnet-5-5 --max-turns 60 --max-budget-usd 2 \
+            --output-format json \
+            --allowedTools "Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(gh pr comment:*),Bash(gh issue view:*),Bash(gh issue list:*),Bash(gh search:*),Bash(gh api:*)" \
+            --append-system-prompt "This is a non-interactive CI run that ends with your final message; nothing can resume it. Run every subagent and command in the foreground, wait for each result, and finish only when the work is complete. The mcp__github_inline_comment__create_inline_comment tool does not exist in this run: post each inline comment once with \`gh api -X POST repos/$REPO/pulls/$PR/comments -f body=<text> -f commit_id=$HEAD_SHA -f path=<file> -F line=<line> -f side=RIGHT\` (add -F start_line and -f start_side=RIGHT for a range). Earlier reviews on this pull request are comments by github-actions[bot] that start with '## Code review'." \
+            | tee "$RUNNER_TEMP/review.json"
+          echo
+          jq -r '"turns: \(.num_turns)  cost: $\(.total_cost_usd)  error: \(.is_error)\n\(.result)"' "$RUNNER_TEMP/review.json"
+          jq -e '.is_error == false' "$RUNNER_TEMP/review.json" > /dev/null
 
       - name: Note a skipped review
         if: steps.review.outcome == 'failure'
