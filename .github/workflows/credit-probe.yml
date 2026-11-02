@@ -1,0 +1,45 @@
+# Temporary probe (draft PR only, deleted before merge): does the Max plan's monthly API credit
+# cover a plain `claude -p` run signed in by workload identity federation? The Claude Code
+# GitHub Action's runs were refused with "Credit balance is too low".
+name: Credit probe
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  probe:
+    if: github.head_ref == 'ci/credit-probe'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Fetch GitHub OIDC token
+        run: |
+          mkdir -p "$RUNNER_TEMP/wif"
+          curl -sS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://api.anthropic.com" \
+            | jq -r .value > "$RUNNER_TEMP/wif/token"
+          echo "token bytes: $(wc -c < "$RUNNER_TEMP/wif/token")"
+
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: claude -p under federation (Haiku, one turn)
+        env:
+          ANTHROPIC_FEDERATION_RULE_ID: fdrl_015wfXoG3eaUFqMwuRVPMhxv
+          ANTHROPIC_ORGANIZATION_ID: 8411b64c-d8cc-492a-8d94-dda2e4a77057
+          ANTHROPIC_SERVICE_ACCOUNT_ID: svac_01RErSThrKhpeXFGrBxwsGug
+          ANTHROPIC_WORKSPACE_ID: wrkspc_01Nd6Y8Py1V9c4ZMfaL4Aqhw
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+        run: |
+          export ANTHROPIC_IDENTITY_TOKEN_FILE="$RUNNER_TEMP/wif/token"
+          claude --version
+          claude -p --model claude-haiku-5-5 --max-turns 1 --output-format json \
+            "Reply with the single word ok" | tee "$RUNNER_TEMP/probe.json"
+          echo "---"
+          jq -r '.result, .is_error, .total_cost_usd' "$RUNNER_TEMP/probe.json"
