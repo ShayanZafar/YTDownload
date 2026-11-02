@@ -625,10 +625,13 @@ What each file does, and the function and constant names to look for. This was C
   browser tests aren't run there (GitHub's machines get refused)
 - `.github/workflows/claude-code-review.yml` — Claude reviews each pull request once (opened or
   marked ready; not drafts, forks or Dependabot's) with inline comments, on a different model.
-  It runs on the Max plan's monthly API credits in the Claude Console's `ci` workspace ($25 a
-  month, then it waits for the 11th), signing in by workload identity federation (the job's
-  GitHub OIDC token, no stored secret; the rule and workspace IDs are in the workflow), and
-  finishes green with a warning when the sign-in fails or the credit is spent.
+  It runs `claude -p` with the `code-review` plugin on the Max plan's monthly API credits in the
+  Claude Console's `ci` workspace ($25 a month, then it waits for the 11th), signing in by
+  workload identity federation (the job's GitHub OIDC token, no stored secret; the rule and
+  workspace IDs are in the workflow), reads `CLAUDE.md` and `.claude/` from `main` rather than
+  the pull request, posts as `github-actions[bot]`, and finishes green with a warning when the
+  sign-in fails or the credit is spent. It doesn't use the Claude Code GitHub Action: the credit
+  doesn't cover the Action's runs (`Credit balance is too low`), only `claude -p` and the SDK.
   `claude-refactor.yml` — monthly, runs the `/refactor` skill and opens a pull request.
   `claude-backlog.yml` — when the owner comments on a `decision` or `debt` issue, records the
   answer in `docs/decisions.md`, does the work it calls for and opens a pull request (`backlog`
@@ -1477,7 +1480,7 @@ The project ships with two end-to-end test suites that exercise the real app aga
 
 `.github/workflows/tests.yml` keeps the app easy to work on from any system. On every pull request and every direct push to `main` (a "Merge pull request" push is skipped: its pull request already ran the same checks) it runs on Linux and Windows — and on macOS too every Monday, or when started by hand from the Actions tab, since macOS minutes count ten times against GitHub's free allowance: `npm ci` (with the standalone yt-dlp), a check that yt-dlp and ffmpeg run, then `npm run verify`: Prettier, ESLint, `npm run check`, `npm run licenses`, `npm run core-flows`, `npm run instructions`, the unit tests and the music player's and the history's API tests (which make their own songs and history, and stand in for LRCLIB). It's the same command you run locally before calling a change done. A second job, `browser`, runs the Playwright tests on Linux in Chrome (the runner's Google Chrome) and WebKit (`npx playwright install --with-deps chromium webkit`), with YouTube, Spotify and SoundCloud played by stand-ins. The other API tests and the `@live` browser tests talk to YouTube, which often refuses GitHub's machines, so they're run locally.
 
-Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups; and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The review signs in by workload identity federation and spends the Max plan's monthly API credits in the Console's `ci` workspace (capped at $25 a month, $2 and 60 turns a run); the refactor, like `claude-backlog.yml`, signs in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and runs on the subscription. Each skips with a warning, still green, when it can't sign in.
+Three more pieces of automation live in `.github/`: `claude-code-review.yml` has Claude review each pull request once (when it's opened or marked ready; drafts, forks and Dependabot's are skipped) with inline comments; `claude-refactor.yml` runs the repo's `/refactor` skill (`.claude/skills/refactor`) on the 1st of each month and opens a pull request with at most three behaviour-preserving cleanups; and `dependabot.yml` groups the month's npm and GitHub Actions updates into one pull request each (TypeScript majors are left for a manual upgrade). The review runs `claude -p` itself (not the Claude Code GitHub Action, which the credit doesn't cover), signs in by workload identity federation and spends the Max plan's monthly API credits in the Console's `ci` workspace (capped at $25 a month, $2 and 60 turns a run), posting as `github-actions[bot]`; the refactor, like `claude-backlog.yml`, signs in with the `CLAUDE_CODE_OAUTH_TOKEN` repository secret and runs on the subscription. Each skips with a warning, still green, when it can't sign in.
 
 ### Layout
 
