@@ -27,7 +27,9 @@
 # from the one that usually writes the code, so their blind spots don't line
 # up, and is capped at 60 turns and $2 a run. To review again after a push,
 # re-run the workflow from the Actions tab, or add `synchronize` to the types
-# below (that reviews every push, which costs more credit).
+# below (that reviews every push, which costs more credit). Claude Code is
+# pinned to one version so a release can't change the review under us; bump
+# it on purpose, with a pull request, so the bump reviews itself.
 # The other Claude workflows (claude-backlog.yml, claude-refactor.yml) still run
 # on the subscription through the CLAUDE_CODE_OAUTH_TOKEN secret: they use Opus
 # for up to 150 turns, which would spend the month's CI credit in a run or two.
@@ -76,8 +78,10 @@ jobs:
             | jq -r .value > "$RUNNER_TEMP/wif/token"
 
       - name: Install Claude Code and the review plugin
+        id: install
+        continue-on-error: true
         run: |
-          curl -fsSL https://claude.ai/install.sh | bash
+          curl -fsSL https://claude.ai/install.sh | bash -s 2.1.316
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/claude" plugin marketplace add https://github.com/anthropics/claude-code.git
           "$HOME/.local/bin/claude" plugin install code-review@claude-code-plugins
@@ -114,6 +118,6 @@ jobs:
           jq -e '.is_error == false' "$RUNNER_TEMP/review.json" > /dev/null
 
       - name: Note a skipped review
-        if: steps.review.outcome == 'failure'
+        if: steps.install.outcome == 'failure' || steps.review.outcome == 'failure'
         run: |
-          echo "::warning::Claude's review did not finish: the ci workspace's monthly credit may be spent (it refreshes on the 11th), the federation sign-in may have failed (Console › Workload identity › Authentication events), or the run hit its turn or dollar cap. See the step above. Re-run from the Actions tab once the cause is fixed, or run /code-review locally."
+          echo "::warning::Claude's review did not finish: the install of Claude Code or its plugin may have failed, the ci workspace's monthly credit may be spent (it refreshes on the 11th), the federation sign-in may have failed (Console › Workload identity › Authentication events), or the run hit its turn or dollar cap. See the step above. Re-run from the Actions tab once the cause is fixed, or run /code-review locally."
