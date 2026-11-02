@@ -20,6 +20,8 @@ export default defineConfig({
     env: {
       SONG_TAGS_FILE: "",
       SETTINGS_FILE: path.join(os.tmpdir(), "yt-audio-tests-no-settings.json"),
+      // Nor keep a song's original in the real data/ while its tags are written.
+      TAG_WRITE_BACKUP_DIR: path.join(os.tmpdir(), "yt-audio-tests-tag-writes"),
     },
     // Deletes what earlier runs that were stopped part-way left in the temp folder.
     globalSetup: "./scripts/leftovers.ts",

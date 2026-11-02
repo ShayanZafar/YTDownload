@@ -241,7 +241,10 @@ What each file does, and the function and constant names to look for. This was C
   one change at a time at a song (Fill in details, Rename and Fix name, Trim and its Undo, better
   copies; a second gets 409 "That song is being changed already."), and the finished new version
   takes the song's place one of three ways: `writeOver()` (written into the same file, dates put
-  back: tags), `swapIn()` (a `.part` renamed over it, else copied over when Windows holds the file:
+  back: tags; the original is copied into `TAG_WRITE_BACKUP_DIR`, default
+  `data/unfinished-tag-writes`, first and deleted once the write is complete, put back at once if
+  the write fails, and put back at the next start by `restoreUnfinishedTagWrites()`, called from
+  `server/index.ts`, if the app stopped part-way), `swapIn()` (a `.part` renamed over it, else copied over when Windows holds the file:
   Trim) or `binAndSwapIn()` (the old one to the bin first: better copies; `PartKeptError` when the
   copy can't take its name). Unit-tested on plain files
 - `server/trim.ts` — trimming a folder song (local-only): `readWaveform()` (ffmpeg decodes it to
@@ -1336,6 +1339,7 @@ All JSON errors follow the shape `{ message: string, field?: string }`. When You
 | `FFMPEG_BIN`             | No       | Use this ffmpeg instead of the one `ffmpeg-static` downloads.                                                                                                     |
 | `PLAYER_CACHE_DIR`       | No       | Where the music player keeps songs converted to FLAC (default `yt-audio-player` in the system's temp folder; up to 2 GB).                                         |
 | `TRIM_BACKUP_DIR`        | No       | Where a trimmed song's original is kept for Undo (default `data/trimmed-originals`; each kept 30 days).                                                           |
+| `TAG_WRITE_BACKUP_DIR`   | No       | Where a song's original waits while its tags are written over it, put back at the next start if the app stopped part-way (default `data/unfinished-tag-writes`).  |
 | `DETAILS_LOG_FILE`       | No       | Where to keep the details log: each song looked up, written or downloaded, and why (default `data/details.log`; also at `/api/details-log`).                      |
 | `DETAILS_NOT_FOUND_FILE` | No       | Where to keep the songs Fill in details marked Not found (default `data/details-not-found.json`).                                                                 |
 | `SPOTIFY_CLIENT_ID`      | No       | Your Spotify app's Client ID, if you'd rather not paste it in Playlist mode (one pasted there wins).                                                              |
@@ -1528,7 +1532,7 @@ tests/
 │   ├── playlist-file.test.ts    # the .m3u8 text and name; writing it, updating its own file, never another
 │   ├── music.test.ts            # the player's server side: song ids, Ogg lengths, covers, FLAC conversion + cache
 │   ├── trim.test.ts             # trimming: dead air found, the ffmpeg filter and formats, tags and cover kept, Undo, the window's times
-│   ├── song-file.test.ts        # one change to a song at a time; written over in place, swapped in, or the old one binned first
+│   ├── song-file.test.ts        # one change to a song at a time; written over in place (original backed up, put back after a stop), swapped in, or the old one binned first
 │   ├── trim-routes.test.ts      # the trim routes on a real song: waveform, cut, Undo, refusals, local-only
 │   ├── housekeeping.test.ts     # Housekeeping on ffmpeg-made songs: cut short, damaged, not audio, bitrate; the quality bar; other files
 │   ├── housekeeping-routes.test.ts # the Housekeeping routes: a song checked, other files listed and deleted, the bar kept, local-only

@@ -6,6 +6,7 @@ import { FolderError } from "../../server/folders";
 import {
   binAndSwapIn,
   PartKeptError,
+  restoreUnfinishedTagWrites,
   SONG_BUSY,
   swapIn,
   whileBusy,
@@ -107,6 +108,125 @@ describe("writeOver", () => {
     expect(Math.abs(after.mtimeMs - before.mtimeMs)).toBeLessThan(1);
     await writeOver(target, Buffer.from("a song with more tags now"), before);
     expect(await fs.readFile(target, "utf8")).toBe("a song with more tags now");
+  });
+
+  it("keeps the original in the backup folder while it writes, and deletes it after", async () => {
+    const backups = path.join(dir, "backups-kept");
+    const target = await file("kept.mp3", "the original song");
+    const before = await fs.stat(target);
+    let seen: string[] = [];
+    const open = fs.open;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      // As the song is opened to be written over, its original is already safe.
+      const [song] = await fs.readdir(backups);
+      seen = [
+        await fs.readFile(path.join(backups, song, "original"), "utf8"),
+        JSON.parse(await fs.readFile(path.join(backups, song, "info.json"), "utf8")).song,
+      ];
+      return open(...(args as Parameters<typeof fs.open>));
+    });
+    try {
+      await writeOver(target, Buffer.from("new tags"), before, backups);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(seen).toEqual(["the original song", target]);
+    expect(await fs.readdir(backups)).toEqual([]);
+    expect(await fs.readFile(target, "utf8")).toBe("new tags");
+  });
+
+  it("puts the original back at once when the write fails part-way", async () => {
+    const backups = path.join(dir, "backups-failed");
+    const target = await file("failed.mp3", "the original song");
+    const before = await fs.stat(target);
+    const open = fs.open;
+    let calls = 0;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...(args as Parameters<typeof fs.open>));
+      if (++calls > 1) return handle; // putting the original back works
+      // The first write gets half its bytes down, then the disk says no.
+      handle.writeFile = (async (data: Buffer) => {
+        await fs.writeFile(target, data.subarray(0, 3));
+        throw Object.assign(new Error("ENOSPC: disk full"), { code: "ENOSPC" });
+      }) as typeof handle.writeFile;
+      return handle;
+    });
+    try {
+      await expect(
+        writeOver(target, Buffer.from("new tags that won't fit"), before, backups),
+      ).rejects.toMatchObject({ code: "ENOSPC" });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fs.readFile(target, "utf8")).toBe("the original song");
+    expect((await fs.stat(target)).mtime.toISOString()).toBe("2024-03-01T12:00:00.000Z");
+    expect(await fs.readdir(backups)).toEqual([]);
+  });
+
+  it("leaves the song alone when its original can't be backed up", async () => {
+    const backups = path.join(dir, "backups-none");
+    const target = await file("unread.mp3", "the original song");
+    const before = await fs.stat(target);
+    const spy = vi
+      .spyOn(fs, "copyFile")
+      .mockRejectedValue(Object.assign(new Error("EIO: no"), { code: "EIO" }));
+    try {
+      await expect(writeOver(target, Buffer.from("new"), before, backups)).rejects.toMatchObject({
+        code: "EIO",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await fs.readFile(target, "utf8")).toBe("the original song");
+    expect(await fs.readdir(backups)).toEqual([]);
+  });
+});
+
+describe("restoreUnfinishedTagWrites", () => {
+  /** A backup as writeOver() leaves it when the app stops part-way through a write. */
+  async function leftBehind(backups: string, song: string, original: string | undefined) {
+    const backup = path.join(backups, `song-${Math.random().toString(36).slice(2, 8)}`);
+    await fs.mkdir(backup, { recursive: true });
+    if (original !== undefined) {
+      await fs.writeFile(path.join(backup, "original"), original);
+      const old = Date.parse("2024-03-01T12:00:00Z");
+      await fs.writeFile(
+        path.join(backup, "info.json"),
+        JSON.stringify({ song, atimeMs: old, mtimeMs: old }),
+      );
+    } else {
+      await fs.writeFile(path.join(backup, "original"), "half a co");
+    }
+    return backup;
+  }
+
+  it("puts back a song the app stopped writing, with its dates, and forgets the backup", async () => {
+    const backups = path.join(dir, "backups-restart");
+    const song = await file("halfway.mp3", "the newHALF");
+    await leftBehind(backups, song, "the original song");
+    expect(await restoreUnfinishedTagWrites(backups)).toEqual([song]);
+    expect(await fs.readFile(song, "utf8")).toBe("the original song");
+    expect((await fs.stat(song)).mtime.toISOString()).toBe("2024-03-01T12:00:00.000Z");
+    expect(await fs.readdir(backups)).toEqual([]);
+  });
+
+  it("drops a backup the write never got to, and keeps one whose song is gone", async () => {
+    const backups = path.join(dir, "backups-other");
+    const untouched = await file("untouched.mp3", "as it was");
+    await leftBehind(backups, untouched, undefined);
+    const gone = await leftBehind(backups, path.join(dir, "gone.mp3"), "the original song");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await restoreUnfinishedTagWrites(backups)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(await fs.readFile(untouched, "utf8")).toBe("as it was");
+    expect(await fs.readdir(backups)).toEqual([path.basename(gone)]);
+  });
+
+  it("does nothing when there's no backup folder", async () => {
+    expect(await restoreUnfinishedTagWrites(path.join(dir, "no-such-folder"))).toEqual([]);
   });
 });
 
