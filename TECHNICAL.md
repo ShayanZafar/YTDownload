@@ -80,6 +80,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── better-copy.ts         # Housekeeping's better copies: the same song online at a higher bitrate; replacing it
 │   ├── details-log.ts         # data/details.log: each song looked up, written or downloaded, and why
 │   ├── save.ts                # POST /api/video/save — saves a download straight into the Save to folder
+│   ├── prepare-song.ts        # What a download and a save both do first: look-up, name, tags, cover, details, ffmpeg args
 │   ├── settings.ts            # App settings (the Save to folder, Housekeeping's quality bar) → data/settings.json
 │   ├── folders.ts             # The folder browser: list and make folders, quick links, new files
 │   ├── local-only.ts          # Folder routes answer only this computer's own page; history changes and work-starting routes only the app's page
@@ -195,6 +196,12 @@ What each file does, and the function and constant names to look for. This was C
   unreliable too, or none) and a one-sentence `summary`; such a refusal also rewrites the file
   when it stops counting and when it ends. `GET /api/health/sources` serves it
   (not local-only; no paths in it). Pure parts unit-tested with a fake clock
+- `server/prepare-song.ts` — `prepareSong()`: what `GET /api/video/download` and `POST /api/video/save`
+  both do before any audio flows — `lookUpAudio()` (a failure other than `YouTubeRefused` becomes
+  `AudioLookUpError`), the name and tags (`songOfVideo()`, Spotify's when a song id is given), the
+  cover, the catalogues' genre and album (`lookUpDownload()`; a save also passes the folder's songs
+  for an artist's genre), the details log line, `prepareAudioOutput()` and the file name; answers
+  undefined if the page went away during the look-up. Unit-tested with stand-ins
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete onto a name
   claimed with `wx` too (`claimNewName()`), so saves finishing together never take the same name and
@@ -1549,6 +1556,7 @@ tests/
 │   ├── trim.test.ts             # trimming: dead air found, the ffmpeg filter and formats, tags and cover kept, Undo, the window's times
 │   ├── song-file.test.ts        # one change to a song at a time; written over in place (original backed up, put back after a stop), swapped in, or the old one binned first
 │   ├── shutdown.test.ts         # stopping cleanly: every tidy-up runs once, a hung one doesn't hold the exit, a second signal exits at once
+│   ├── prepare-song.test.ts     # a download's and a save's shared preparation: file name, cancel, look-up failures, folder genres
 │   ├── trim-routes.test.ts      # the trim routes on a real song: waveform, cut, Undo, refusals, local-only
 │   ├── housekeeping.test.ts     # Housekeeping on ffmpeg-made songs: cut short, damaged, not audio, bitrate; the quality bar; other files
 │   ├── housekeeping-routes.test.ts # the Housekeeping routes: a song checked, other files listed and deleted, the bar kept, local-only

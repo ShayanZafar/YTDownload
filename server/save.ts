@@ -2,15 +2,11 @@ import type { Request, Response } from "express";
 import { promises as fs, type WriteStream } from "fs";
 import path from "path";
 import { api } from "@shared/routes";
-import { safeFileName } from "@shared/filename";
-import { fileNameOf, songOfVideo } from "@shared/song-name";
 import type { SaveEvent } from "@shared/schema";
 import { audioLinkOf } from "@shared/soundcloud-link";
-import { prepareAudioOutput, startAudioPipeline, type PreparedOutput } from "./audio";
-import { audioEnded, lookUpAudio, sourceName } from "./audio-source";
-import { coverFor } from "./cover";
-import { lateDetails, lookUpDownload } from "./download-details";
-import { downloadEntry, logDetails } from "./details-log";
+import { startAudioPipeline, type PreparedOutput } from "./audio";
+import { audioEnded, sourceName } from "./audio-source";
+import { AudioLookUpError, prepareSong } from "./prepare-song";
 import { kindProblem, sniffFile } from "./file-kind";
 import {
   FolderError,
@@ -22,7 +18,6 @@ import {
 import { folderArtistSongs } from "./music";
 import { retryWhenBusy } from "./retry-when-busy";
 import { settings } from "./settings";
-import { spotifySongTags } from "./spotify";
 import { storage } from "./storage";
 import { YouTubeRefused, sendRefused } from "./youtube-limits";
 import { onShutdown } from "./shutdown";
@@ -100,55 +95,27 @@ export async function saveIntoFolder(req: Request, res: Response) {
     }
     const folder = await assertWritableFolder(saveFolder);
 
-    // A Spotify song is tagged with Spotify's title and artists (looked up
-    // while the source is asked about the audio).
-    const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
-    // And its cover: Spotify's album cover, or the video's thumbnail — looked up
-    // meanwhile — or a SoundCloud track's artwork, once the look-up has found it.
-    const videoCover =
-      link.source === "youtube"
-        ? coverFor({ kind: "youtube", videoId: link.videoId }, songTags)
-        : undefined;
-    let info;
+    // Asked about, named and tagged the same way as a download (prepare-song.ts),
+    // with the folder's songs by the same artist for a genre the catalogues lack.
+    let prepared;
     try {
-      // A refusal from YouTube is answered at once with a 502 that says so.
-      info = await lookUpAudio(link);
-    } catch (err) {
-      if (err instanceof YouTubeRefused) throw err;
-      throw new DownloadError(`Couldn't download the audio: ${(err as Error).message}`, {
-        cause: err,
+      prepared = await prepareSong(link, {
+        format,
+        name,
+        spotifyId,
+        folderSongs: () => folderArtistSongs(folder),
+        cancelled: () => clientGone,
       });
+    } catch (err) {
+      if (err instanceof AudioLookUpError) {
+        throw new DownloadError(`Couldn't download the audio: ${err.message}`, { cause: err });
+      }
+      throw err;
     }
-    // Its artist and title as a player shows them — the artist the video's title names, not
-    // the channel that uploaded it, without "(Official Video)", "HQ"… — unless Spotify names it.
-    const song = songOfVideo(info.title, info.artist);
-    const tags = {
-      ...info,
-      title: song.title,
-      artist: song.artist ?? undefined,
-      ...(await songTags),
-      spotifyId,
-    };
-    // Its genre (and for a song without an album, its album) from the music
-    // catalogues, looked up meanwhile — or its artist's genre, from the folder's
-    // other songs by them first. It never fails or holds the download up.
-    const lookedUp = lookUpDownload(tags, info.duration, {
-      folderSongs: () => folderArtistSongs(folder),
-    });
-    // Cancelled while we were looking up the video: don't start any work.
+    if (!prepared) return;
+    const { info, fileName } = prepared;
+    output = prepared.output;
     if (clientGone) return;
-
-    const cover =
-      videoCover ??
-      coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
-    const ownCover = await cover;
-    const later = lateDetails(lookedUp, ownCover !== undefined);
-    // What it got, or why not, goes in the details log.
-    void later.then((found) => logDetails(downloadEntry(name || info.title, found)));
-    output = await prepareAudioOutput(format, tags, info.acodec, ownCover, later);
-    if (clientGone) return;
-    // The name chosen on the page, or "Artist - Title" (fileNameOf: made safe too).
-    const fileName = `${name ? safeFileName(name) : fileNameOf(song)}.${output.ext}`;
     const created = await createNewFile(folder, `${fileName}.part`);
     doneSaving = markBeingSaved(created.path);
     part = {

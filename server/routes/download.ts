@@ -3,14 +3,9 @@ import type { Express } from "express";
 import { storage } from "../storage";
 import { api } from "@shared/routes";
 import { audioLinkOf } from "@shared/soundcloud-link";
-import { safeFileName } from "@shared/filename";
-import { fileNameOf, songOfVideo } from "@shared/song-name";
-import { spotifySongTags } from "../spotify";
-import { prepareAudioOutput, startAudioPipeline, type PreparedOutput } from "../audio";
-import { audioEnded, lookUpAudio, sourceName } from "../audio-source";
-import { coverFor } from "../cover";
-import { lateDetails, lookUpDownload } from "../download-details";
-import { downloadEntry, logDetails } from "../details-log";
+import { startAudioPipeline, type PreparedOutput } from "../audio";
+import { audioEnded, sourceName } from "../audio-source";
+import { prepareSong } from "../prepare-song";
 import { YouTubeRefused, sendRefused } from "../youtube-limits";
 import { sameOriginOnly } from "../local-only";
 import { onShutdown } from "../shutdown";
@@ -48,52 +43,19 @@ export function registerDownloadRoutes(app: Express) {
         return res.status(400).send("Invalid or missing YouTube or SoundCloud link");
       }
 
-      // A Spotify song is tagged with Spotify's title and artists (looked up
-      // while the source is asked about the audio).
-      const songTags = spotifyId ? spotifySongTags(spotifyId) : undefined;
-      // And its cover: Spotify's album cover, or the video's thumbnail — looked up
-      // meanwhile — or a SoundCloud track's artwork, once the look-up has found it.
-      const videoCover =
-        link.source === "youtube"
-          ? coverFor({ kind: "youtube", videoId: link.videoId }, songTags)
-          : undefined;
-
-      // Metadata first, so audio that can't be downloaded fails with a clean
-      // error before a streaming response is opened. (A refusal from YouTube
-      // is answered at once with a 502 that says so.)
-      const info = await lookUpAudio(link);
-      // Its artist and title as a player shows them — the artist the video's title names, not
-      // the channel that uploaded it, without "(Official Video)", "HQ"… — unless Spotify names it.
-      const song = songOfVideo(info.title, info.artist);
-      const tags = {
-        ...info,
-        title: song.title,
-        artist: song.artist ?? undefined,
-        ...(await songTags),
+      // Asked about, named and tagged the same way as a save (prepare-song.ts).
+      const prepared = await prepareSong(link, {
+        format,
+        name,
         spotifyId,
-      };
-      // Its genre (and for a song without an album, its album) from the music
-      // catalogues, looked up meanwhile. It never fails or holds the download up.
-      const lookedUp = lookUpDownload(tags, info.duration);
-
-      // Cancelled while we were looking up the video: don't start any work.
+        cancelled: () => clientGone,
+      });
+      if (!prepared) return;
+      const { info, fileName } = prepared;
+      output = prepared.output;
       if (clientGone) return;
-
-      // These only go out with the first chunk of audio, so a failure before
-      // then can still be turned into a proper error response (see below).
-      const cover =
-        videoCover ??
-        coverFor(info.artwork ? { kind: "soundcloud", url: info.artwork } : undefined, songTags);
-      const ownCover = await cover;
-      const later = lateDetails(lookedUp, ownCover !== undefined);
-      // What it got, or why not, goes in the details log.
-      void later.then((found) => logDetails(downloadEntry(name || info.title, found)));
-      output = await prepareAudioOutput(format, tags, info.acodec, ownCover, later);
-      if (clientGone) return;
-      // Saved as the name chosen on the page, or "Artist - Title" (fileNameOf: made
-      // safe too). res.attachment writes both a plain filename and a UTF-8 one
-      // (filename*), so accents and non-Latin titles survive.
-      const fileName = `${name ? safeFileName(name) : fileNameOf(song)}.${output.ext}`;
+      // res.attachment writes both a plain filename and a UTF-8 one (filename*),
+      // so accents and non-Latin titles survive.
       res.attachment(fileName);
       res.header("Content-Type", output.contentType);
 

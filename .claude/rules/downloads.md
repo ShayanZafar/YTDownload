@@ -2,13 +2,13 @@
 paths:
   - "server/audio*.ts"
   - "server/routes/{index,helpers,download,search}.ts"
-  - "server/save.ts"
+  - "server/{save,prepare-song}.ts"
   - "server/tags.ts"
   - "server/cover.ts"
   - "shared/{routes,filename,spotify-names}.ts"
   - "client/src/components/{preview-card,renameable-title}.tsx"
   - "client/src/hooks/use-download-format.ts"
-  - "tests/unit/{audio,audio-routes,cover-art,filename}.test.ts"
+  - "tests/unit/{audio,audio-routes,cover-art,filename,prepare-song}.test.ts"
   - "tests/api/{video,soundcloud}.e2e.test.ts"
   - "tests/utils/*.ts"
   - "tests/browser/download.spec.ts"
@@ -28,6 +28,9 @@ paths:
   which swallows EPIPE on `ffmpeg.stdin` and kills yt-dlp once ffmpeg is done. The routes watch
   `res` "close" from the very start and call `stop()` on cancel. Unhandled stream errors or a missed
   kill mean a crashed server or processes left running forever, so re-test cancel paths after edits.
+- A download and a save are prepared by the same `prepareSong()` (`prepare-song.ts`): the source's
+  look-up, name and tags, cover, catalogue details, details log, ffmpeg's arguments and the file
+  name. Change them there, not in one route.
 - Headers go out with the first chunk of audio, so failures before any audio become a `502`; don't
   write to `res` before the pipeline produces output.
 - A download is added to the history only after it fully succeeds (both processes exit 0 and the
