@@ -12,7 +12,7 @@ import {
   type OwnPlaylist,
   type SpotifyAccount,
 } from "@shared/schema";
-import { requestJson } from "@/lib/save-to-folder";
+import { requestJson } from "@/lib/api";
 
 export const fetchSpotifyAccount = (): Promise<SpotifyAccount> =>
   requestJson(spotifyAccountSchema, api.spotifyAccount.status.path);

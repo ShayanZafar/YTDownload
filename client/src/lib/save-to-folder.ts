@@ -4,8 +4,8 @@
  * The page only picks the folder (with the app's folder browser) and shows
  * progress. Only a browser on that computer can use it; see server/save.ts.
  */
-import { z } from "zod";
-import { api, errorSchemas, type DownloadFormat } from "@shared/routes";
+import { api, type DownloadFormat } from "@shared/routes";
+import { ApiError, errorFrom, requestJson } from "@/lib/api";
 import {
   folderEntrySchema,
   folderListingSchema,
@@ -25,63 +25,6 @@ import {
   type SongToFind,
   type SongsInFolder,
 } from "@shared/schema";
-
-/** A request the app turned down, with its reason and HTTP status. */
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-    /** YouTube refused it: it's limiting this computer (the app says so at once, in a 502). */
-    readonly limited = false,
-  ) {
-    super(message);
-  }
-}
-
-/** The app's error for a response that wasn't OK, from its JSON body (or the status alone). */
-export async function errorFrom(res: Response): Promise<ApiError> {
-  const data: unknown = await res.json().catch(() => undefined);
-  const limited = errorSchemas.limited.safeParse(data);
-  if (limited.success) return new ApiError(limited.data.message, res.status, true);
-  const parsed = errorSchemas.internal.safeParse(data);
-  return new ApiError(
-    parsed.success ? parsed.data.message : `Something went wrong (HTTP ${res.status}).`,
-    res.status,
-  );
-}
-
-/**
- * The error for an OK answer that isn't what the page expected. A web page
- * instead of JSON means the app's server doesn't know the request: it's an
- * older version than the page (updated, but not restarted).
- */
-export function unexpectedAnswer(res: Response): ApiError {
-  if (res.headers.get("content-type")?.includes("text/html")) {
-    return new ApiError(
-      "The app needs restarting: it's still running an older version than this page. Stop it and start it again, then try again.",
-      res.status,
-    );
-  }
-  return new ApiError("The app sent an answer the page didn't expect.", res.status);
-}
-
-export async function requestJson<T>(
-  schema: z.ZodType<T>,
-  url: string,
-  init: RequestInit & { json?: unknown } = {},
-): Promise<T> {
-  const { json, ...rest } = init;
-  const res = await fetch(url, {
-    ...rest,
-    ...(json === undefined
-      ? {}
-      : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(json) }),
-  });
-  if (!res.ok) throw await errorFrom(res);
-  const parsed = schema.safeParse(await res.json().catch(() => undefined));
-  if (!parsed.success) throw unexpectedAnswer(res);
-  return parsed.data;
-}
 
 /** Where downloads go, and whether this browser can save into a folder at all. */
 export function fetchSaveSettings(): Promise<SaveSettings> {

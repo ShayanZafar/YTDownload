@@ -38,7 +38,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── src/
 │   │   ├── components/        # UI components (the shadcn/ui ones the app uses, in components/ui)
 │   │   ├── hooks/             # Custom React hooks (API calls, remembered choices, a copied link)
-│   │   ├── lib/               # Helpers (queryClient, utils, format: durations + link detection, music: the player's songs, clipboard: Paste + copied links)
+│   │   ├── lib/               # Helpers (api: requestJson() for every call to the app, queryClient, utils, format: durations + link detection, music: the player's songs, clipboard: Paste + copied links)
 │   │   ├── pages/             # Route pages (Home, NotFound)
 │   │   ├── App.tsx            # Top-level app & router
 │   │   ├── main.tsx           # React entry point
@@ -533,6 +533,13 @@ What each file does, and the function and constant names to look for. This was C
 - `client/src/hooks/use-youtube.ts` — the page's API calls as TanStack Query hooks (history,
   search — `searchSongs()`, `soundCloudOnly` for SoundCloud alone — Spotify links, playlists —
   `usePlaylist()` — and video info)
+- `client/src/lib/api.ts` — how the page talks to the app: `requestJson(schema, url, { json })`
+  sends a request and answers with the reply checked against its schema from `shared/`; a reply
+  that isn't OK is an `ApiError` with the app's message (`errorFrom()`, `limited` when YouTube
+  refused), an OK one of the wrong shape or a web page is one too (`unexpectedAnswer()`: an HTML
+  page means the app needs restarting). Every call goes through it but a save's progress lines,
+  the player's audio and a delete's "no bin" 409. `queryClient.ts` holds only the cache's
+  defaults: each query brings its own function. Unit-tested with a stand-in `fetch`
 - `client/src/lib/clipboard.ts` + `hooks/use-clipboard-link.ts` — Paste and the copied-link
   suggestion (`findCopiedLink()`, `textToPaste()`, `canReadClipboard()`; unit-tested)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
@@ -1571,6 +1578,7 @@ tests/
 │   ├── local-only.test.ts       # folder routes: this computer's own page only
 │   ├── cross-site-routes.test.ts # download, search, look-ups and lyrics refuse another website's requests
 │   ├── save-to-folder.test.ts   # the page's save client: progress lines, errors, cancel
+│   ├── api.test.ts              # the page's requestJson(): JSON bodies, the app's errors, a refusal, an unexpected or HTML answer
 │   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
 │   ├── web-app.test.ts          # the web app manifest and its icons
 │   ├── yt-dlp-script.test.ts    # scripts/yt-dlp.mjs: the standalone yt-dlp for each system, checked against SHA2-256SUMS

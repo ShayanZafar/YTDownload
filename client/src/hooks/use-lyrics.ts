@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 import type { PlayerTrack } from "@/lib/music";
-import { requestJson } from "@/lib/save-to-folder";
+import { requestJson } from "@/lib/api";
 
 /** What to ask the app for a song's lyrics: its title, artist and length. */
 export function lyricsQuery(track: Pick<PlayerTrack, "title" | "artist" | "duration">) {

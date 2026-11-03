@@ -6,7 +6,7 @@
 import { api, buildUrl } from "@shared/routes";
 import { audioTypeOf, extensionOf } from "@shared/audio-types";
 import { trimmedSongSchema, waveformSchema, type TimeRange } from "@shared/schema";
-import { requestJson } from "@/lib/save-to-folder";
+import { requestJson } from "@/lib/api";
 
 /** Can the app trim this song? Any it plays, but .ape (ffmpeg can't write those). */
 export const canTrimFile = (fileName: string) =>

@@ -16,7 +16,7 @@ import {
 } from "@shared/schema";
 import { folderArtistsOf, songKeyOf, tidiedSong } from "@shared/song-name";
 import { formatDuration } from "@/lib/format";
-import { requestJson } from "@/lib/save-to-folder";
+import { requestJson } from "@/lib/api";
 
 /** Housekeeping's check of one folder song: read all the way through, on the app's computer. */
 export function checkFolderSong(id: string, signal?: AbortSignal): Promise<SongCheck> {

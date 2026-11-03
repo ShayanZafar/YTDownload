@@ -13,7 +13,7 @@ import {
   type SongDetailsWritten,
   type SongLookup,
 } from "@shared/schema";
-import { requestJson } from "@/lib/save-to-folder";
+import { requestJson } from "@/lib/api";
 
 /** What a folder song lacks, and what the catalogues found for it. */
 export function lookUpSongDetails(id: string, signal?: AbortSignal): Promise<SongLookup> {

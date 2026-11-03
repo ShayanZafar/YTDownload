@@ -5,7 +5,7 @@ import { api, buildUrl } from "@shared/routes";
 import { downloadSchema, type Download } from "@shared/schema";
 import { ToastAction } from "@/components/ui/toast";
 import { useToast } from "@/hooks/use-toast";
-import { requestJson } from "@/lib/save-to-folder";
+import { requestJson } from "@/lib/api";
 
 const historyKey = [api.downloads.list.path];
 

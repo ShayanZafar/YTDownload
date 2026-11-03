@@ -9,7 +9,8 @@ import {
 } from "@shared/schema";
 import { spotifyFileName } from "@shared/spotify-names";
 import { searchSongs } from "@/hooks/use-youtube";
-import { ApiError, folderName, saveOnServer } from "@/lib/save-to-folder";
+import { folderName, saveOnServer } from "@/lib/save-to-folder";
+import { ApiError } from "@/lib/api";
 
 /** Where one song of a "Download all" is at. */
 export type SongStatus =
