@@ -23,7 +23,9 @@ paths:
   `binAndSwapIn()` (`server/song-file.ts`).
 - A new route goes in its area's `server/routes/<area>.ts`, with `songFor()`, `sendFolderError()`
   and `validationError()` from `server/routes/helpers.ts`; `tests/unit/routes-registered.test.ts`
-  checks every contract route is served once.
+  checks every contract route is served once. A route that starts work (spawns yt-dlp or ffmpeg,
+  fetches an outside service) takes `sameOriginOnly()` or `localOnly()`
+  (`tests/unit/cross-site-routes.test.ts`).
 - Many songs at once, in the page: `eachAtOnce()` (`client/src/lib/at-once.ts`) with
   `useBatchRun()` for Stop (`client/src/hooks/use-batch-run.ts`); on the server, `mapAtOnce()`
   (`server/cpu-cores.ts`).

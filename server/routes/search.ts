@@ -16,6 +16,7 @@ import { YouTubePlaylistError, fetchYouTubePlaylist } from "../youtube-playlist"
 import { YouTubeRefused, sendRefused, videoCacheKey, youtubeGuard } from "../youtube-limits";
 import { sourceHealth } from "../source-health";
 import { validationError } from "./helpers";
+import { sameOriginOnly } from "../local-only";
 
 export function registerSearchRoutes(app: Express) {
   // How YouTube, SoundCloud and Spotify have been answering lately (see source-health.ts).
@@ -27,7 +28,7 @@ export function registerSearchRoutes(app: Express) {
   // The yt-dlp calls below go through youtubeGuard (youtube-limits.ts): a
   // recent answer comes from its cache, and when YouTube refuses (it's
   // limiting this computer) the answer is a 502 that says so, straight away.
-  app.post(api.video.info.path, async (req, res) => {
+  app.post(api.video.info.path, sameOriginOnly(), async (req, res) => {
     try {
       const input = api.video.info.input.parse(req.body);
 
@@ -62,7 +63,7 @@ export function registerSearchRoutes(app: Express) {
   // nothing — SoundCloud is asked at the same time while YouTube has been
   // refusing this computer (searchSongs()). `source=soundcloud` asks
   // SoundCloud alone: for a song YouTube refused to hand over.
-  app.get(api.video.search.path, async (req, res) => {
+  app.get(api.video.search.path, sameOriginOnly(), async (req, res) => {
     const query = api.video.search.query.safeParse(req.query);
     if (!query.success) {
       const [issue] = query.error.issues;
@@ -105,7 +106,7 @@ export function registerSearchRoutes(app: Express) {
 
   // The videos in a public YouTube playlist, for the playlist panel. Picking
   // one opens it like a pasted link; "Download" saves the ticked ones as they are.
-  app.get(api.youtube.playlist.path, async (req, res) => {
+  app.get(api.youtube.playlist.path, sameOriginOnly(), async (req, res) => {
     const query = api.youtube.playlist.query.safeParse(req.query);
     if (!query.success) return res.status(400).json(validationError(query.error));
     try {

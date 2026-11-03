@@ -81,7 +81,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── save.ts                # POST /api/video/save — saves a download straight into the Save to folder
 │   ├── settings.ts            # App settings (the Save to folder, Housekeeping's quality bar) → data/settings.json
 │   ├── folders.ts             # The folder browser: list and make folders, quick links, new files
-│   ├── local-only.ts          # Folder routes answer only this computer's own page; history changes only the app's page
+│   ├── local-only.ts          # Folder routes answer only this computer's own page; history changes and work-starting routes only the app's page
 │   ├── retry-when-busy.ts     # Retries a rename/delete Windows briefly blocks (antivirus, indexer)
 │   ├── json-file.ts           # writeJsonFile() (temp file + rename) and oneAtATime() for every data/*.json store
 │   ├── ffmpeg.ts              # ffmpeg() / runFfmpeg(): every one-off ffmpeg run (timeout, Stop, its error line)
@@ -264,7 +264,10 @@ What each file does, and the function and constant names to look for. This was C
   once wherever it can — Download all's songs, the folder's tag reads, a long Spotify playlist's
   pages) and `mapAtOnce()` (one per core, results in order)
 - `server/local-only.ts` — `localOnly()`: folder routes answer only loopback, same-origin, JSON
-  requests with no proxy headers; `GET /api/settings` says `canSaveToFolder: false` elsewhere
+  requests with no proxy headers; `GET /api/settings` says `canSaveToFolder: false` elsewhere.
+  `sameOriginOnly()`: any device, but only the app's own page — the history's changes, and the
+  routes that start work (download, search, video info, YouTube playlist, Spotify link and
+  playlist, lyrics), so another website's link or picture can't set this computer to work
 - `server/search.ts` — song search: `yt-dlp ytsearch12:` (flat, ~4s) + `rankResults()` (official
   uploads up; partial matches and live/cover/remix down unless searched for; `sameSongAs()`: the
   song searched for at its length, for better copies), and SoundCloud's
@@ -1549,6 +1552,7 @@ tests/
 │   ├── details-log.test.ts      # why a song wasn't found (explainMiss), the details log's lines, order and size
 │   ├── download-all.test.ts     # "Download all": the same-length rule, one song per CPU core, Stop, a full drive, "Artist - Title" names
 │   ├── local-only.test.ts       # folder routes: this computer's own page only
+│   ├── cross-site-routes.test.ts # download, search, look-ups and lyrics refuse another website's requests
 │   ├── save-to-folder.test.ts   # the page's save client: progress lines, errors, cancel
 │   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
 │   ├── web-app.test.ts          # the web app manifest and its icons
@@ -1725,6 +1729,7 @@ A typical flow:
 - **Folder access (`server/local-only.ts`):** the routes that browse folders and save into them only answer this computer's own page — a loopback address with no proxy headers, a same-origin request (`Sec-Fetch-Site`/`Origin`), and changes sent as JSON. Another website you visit can't make the app list your folders, look at what's in them or write files, and neither can another device on your network. Checking which playlist songs are in the folder (`POST /api/folders/songs`) only ever reads the chosen **Save to** folder — the request names songs, not a path. See [Save to a folder](#save-to-a-folder).
 - **Music player:** the routes that list and play the **Save to** folder's songs (`/api/music…`) are local-only in the same way — a phone on your Wi-Fi can't list or play them, and another website can't play them in its own page. A song is asked for by an id the folder scan made, never by a path, so only audio files found in the chosen folder can be sent. A cover picture is sent only if it's an image type browsers won't run as a page. **Fill in details** sends the music catalogues only a song's title, artist and length, fetches covers only from their image hosts, and writes into a song only after its copy has been checked. Songs picked on another device never reach the app at all.
 - **Outside services:** besides YouTube and Spotify, the app fetches covers from `i.ytimg.com` (an address built from the validated video id) and Spotify's image hosts (a URL checked against them), and lyrics from `lrclib.net` (a fixed address; the title, artist and length go in its query string, built with `URLSearchParams`). Nothing the page sends can make the app fetch another address.
+- **Work another website could start** (a download, a search, a video, playlist or Spotify look-up, lyrics) is refused unless the request comes from the app's own page (`Sec-Fetch-Site`/`Origin`), so a link or picture on another site pointing at `localhost:5000` can't make the app run yt-dlp, fill the history or spend YouTube's patience with your IP.
 - **History changes** (remove, clear, Undo) only come from the app's own page (`Sec-Fetch-Site`/`Origin`, and JSON for Undo), so another website can't empty your history; any device using the app may, like downloading.
 - The server listens on `127.0.0.1` by default and has no authentication; see the note under [Deploying](#deploying).
 

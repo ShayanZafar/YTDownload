@@ -5,7 +5,7 @@ import { api } from "@shared/routes";
 import { safeFileName } from "@shared/filename";
 import { audioTypeOf, songNameOf } from "@shared/audio-types";
 import { settings } from "../settings";
-import { localOnly } from "../local-only";
+import { localOnly, sameOriginOnly } from "../local-only";
 import { LyricsError, findLyrics } from "../lyrics";
 import { FolderError } from "../folders";
 import { readTags } from "../library";
@@ -212,7 +212,7 @@ export function registerMusicRoutes(app: Express) {
 
   // A song's lyrics for the music player, from LRCLIB. Only the title, artist
   // and length are sent there; the song itself never leaves its device.
-  app.get(api.lyrics.get.path, async (req, res) => {
+  app.get(api.lyrics.get.path, sameOriginOnly(), async (req, res) => {
     const query = api.lyrics.get.query.safeParse(req.query);
     if (!query.success) {
       const [issue] = query.error.issues;

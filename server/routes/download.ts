@@ -12,13 +12,14 @@ import { coverFor } from "../cover";
 import { lateDetails, lookUpDownload } from "../download-details";
 import { downloadEntry, logDetails } from "../details-log";
 import { YouTubeRefused, sendRefused } from "../youtube-limits";
+import { sameOriginOnly } from "../local-only";
 
 export function registerDownloadRoutes(app: Express) {
   // Streams a video's audio as a download: yt-dlp → ffmpeg → response. `url`
   // is a YouTube video, or a SoundCloud track (a SoundCloud search result).
   // `?format=mp3` (default) converts to MP3; `?format=original` keeps the
   // source's own stream untouched. See server/audio.ts for the details.
-  app.get(api.video.download.path, async (req, res) => {
+  app.get(api.video.download.path, sameOriginOnly(), async (req, res) => {
     // Watch for the browser going away (download cancelled, tab closed) from the
     // very start — the metadata lookup below can take 10–20s, and a cancel during
     // it must stop us from starting processes that would then block forever.
