@@ -206,7 +206,9 @@ What each file does, and the function and constant names to look for. This was C
   `kindProblem()`: `realType` (another kind of audio than the name says) or `notAudio`
 - `server/settings.ts` — app settings (the Save to folder, Housekeeping's quality bar, the YouTube
   sign-in: `youtubeSignIn`, `"off"` unless turned on, anything else read as off) in
-  `data/settings.json` (`SETTINGS_FILE`; the unit tests point it at a file that isn't there)
+  `data/settings.json` (`SETTINGS_FILE`; the unit tests point it at a file that isn't there); a
+  damaged file reads as the defaults and is copied to `settings.json.broken-<time>` before the next
+  change is written over it
 - `server/library.ts` — which of a playlist's songs are in the Save to folder (`POST /api/folders/songs`):
   walks it and its subfolders (≤6 deep, ≤`MAX_SONG_FILES`), reads tags (one file per CPU core;
   cached per file until it changes, and kept between runs in `data/song-tags.json`, `SONG_TAGS_FILE`:

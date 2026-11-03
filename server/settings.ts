@@ -32,28 +32,50 @@ export function settingsFilePath(): string {
 export class SettingsStore {
   // Each write waits for the previous one to finish.
   private readonly queue = oneAtATime();
+  // Said once that the file is damaged, not on every read.
+  private warned = false;
 
   constructor(private readonly file: () => string = settingsFilePath) {}
 
   async get(): Promise<Settings> {
-    let text: string;
-    try {
-      text = await fs.readFile(this.file(), "utf8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULT_SETTINGS };
-      throw err;
-    }
-    // A damaged file just means default settings — never a broken app.
-    const parsed = settingsSchema.safeParse(safeJson(text));
-    return parsed.success ? parsed.data : { ...DEFAULT_SETTINGS };
+    return (await this.read()).settings;
   }
 
   update(patch: Partial<Settings>): Promise<Settings> {
     return this.queue(async () => {
-      const next = { ...(await this.get()), ...patch };
+      const { settings: current, damaged } = await this.read();
+      // A damaged file is kept beside it before the defaults are written over it,
+      // so a Save to folder it held can still be found (like the history's).
+      if (damaged) {
+        const backup = `${this.file()}.broken-${Date.now()}`;
+        await fs.copyFile(this.file(), backup).catch(() => {});
+        console.warn(`Settings file ${this.file()} couldn't be read; saved a copy to ${backup}.`);
+      }
+      const next = { ...current, ...patch };
       await writeJsonFile(this.file(), next);
       return next;
     });
+  }
+
+  /** The settings, and whether the file was there but couldn't be read. */
+  private async read(): Promise<{ settings: Settings; damaged: boolean }> {
+    let text: string;
+    try {
+      text = await fs.readFile(this.file(), "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { settings: { ...DEFAULT_SETTINGS }, damaged: false };
+      }
+      throw err;
+    }
+    // A damaged file just means default settings — never a broken app.
+    const parsed = settingsSchema.safeParse(safeJson(text));
+    if (parsed.success) return { settings: parsed.data, damaged: false };
+    if (!this.warned) {
+      this.warned = true;
+      console.warn(`Settings file ${this.file()} couldn't be read; using the defaults.`);
+    }
+    return { settings: { ...DEFAULT_SETTINGS }, damaged: true };
   }
 }
 
