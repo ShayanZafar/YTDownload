@@ -5,6 +5,8 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { hostCheck } from "./host-check";
 import { restoreUnfinishedTagWrites } from "./song-file";
+import { onShutdown, stopCleanlyOnSignals } from "./shutdown";
+import { saveSongTags } from "./library";
 
 /** What an error handed to Express's error handler may carry. */
 type HttpError = Error & { status?: number; statusCode?: number };
@@ -80,6 +82,9 @@ app.use((req, res, next) => {
     console.error("Couldn't check for unfinished tag writes:", err),
   );
   await registerRoutes(httpServer, app);
+  // Stopped with Ctrl+C or by closing the window: saves tidy up, tags are kept (shutdown.ts).
+  onShutdown(() => saveSongTags());
+  stopCleanlyOnSignals();
 
   app.use((err: HttpError, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

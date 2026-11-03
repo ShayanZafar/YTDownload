@@ -17,6 +17,7 @@ import { readDetailsLog } from "../../server/details-log";
 import { errorSchemas } from "../../shared/routes";
 import { sourceHealthReportSchema } from "../../shared/schema";
 import { verifyMp3File } from "../utils/mp3";
+import { runShutdown } from "../../server/shutdown";
 
 // The routes that ask YouTube, with yt-dlp played by stand-ins — no network:
 // its look-ups are fakes, and its audio stream is a small Node process
@@ -894,6 +895,42 @@ describe("downloads and saves (yt-dlp's stream played by ffmpeg-made audio)", ()
     await pipelineGone();
     expect(await folderEmptied()).toEqual([]);
     expect(await historyOf(VIDEO)).toHaveLength(before);
+  });
+});
+
+describe("when the app stops (Ctrl+C, its window closed)", () => {
+  it("a save under way stops both processes and leaves no .part file", async () => {
+    await useFolder();
+    const before = (await historyOf(VIDEO)).length;
+    fake.source = playing(tone, { slow: true });
+    const server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    let req: http.ClientRequest | undefined;
+    try {
+      // The save is under way: its first audio has arrived, its .part file is in the folder.
+      await new Promise<void>((resolve, reject) => {
+        req = http.request(
+          `http://127.0.0.1:${port}/api/video/save`,
+          { method: "POST", headers: { "Content-Type": "application/json" } },
+          (res) => res.once("data", () => resolve()),
+        );
+        req.on("error", (err) =>
+          (err as NodeJS.ErrnoException).code === "ECONNRESET" ? null : reject(err),
+        );
+        req.end(JSON.stringify({ url: VIDEO, name: "Stopped" }));
+      });
+      expect((await fs.readdir(folder)).some((name) => name.endsWith(".part"))).toBe(true);
+      await runShutdown();
+      // Tidied before the app would exit: nothing waits on the browser hanging up.
+      expect(await fs.readdir(folder)).toEqual([]);
+      await pipelineGone();
+      expect(await historyOf(VIDEO)).toHaveLength(before);
+    } finally {
+      req?.destroy();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
 

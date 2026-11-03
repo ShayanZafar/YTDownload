@@ -20,7 +20,7 @@ import {
 } from "@shared/schema";
 import { folderArtistsOf, tidiedFile, type FolderArtists } from "@shared/song-name";
 import { searchableText } from "@/lib/history-filter";
-import { errorFrom, requestJson, unexpectedAnswer } from "@/lib/save-to-folder";
+import { errorFrom, requestJson, unexpectedAnswer } from "@/lib/api";
 
 /** A song the player can play. */
 export type PlayerTrack = {
@@ -123,6 +123,7 @@ export function deleteOtherFolderFile(id: string, options: { permanently?: boole
 }
 
 async function deleteFromFolder(url: string, { permanently = false } = {}): Promise<DeleteOutcome> {
+  // Its own fetch, not requestJson(): a 409 "no bin" is an answer here, not a failure.
   const res = await fetch(url, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
@@ -144,16 +145,11 @@ async function deleteFromFolder(url: string, { permanently = false } = {}): Prom
 }
 
 /** Fix name: gives a folder song the extension its content says it should have. */
-export async function fixFolderSongName(id: string): Promise<RenamedSong> {
-  const res = await fetch(buildUrl(api.music.fixName.path, { id }), {
+export function fixFolderSongName(id: string): Promise<RenamedSong> {
+  return requestJson(renamedSongSchema, buildUrl(api.music.fixName.path, { id }), {
     method: api.music.fixName.method,
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
+    json: {},
   });
-  if (!res.ok) throw await errorFrom(res);
-  const done = renamedSongSchema.safeParse(await res.json().catch(() => undefined));
-  if (!done.success) throw unexpectedAnswer(res);
-  return done.data;
 }
 
 /** A folder song's file name without its folder or extension. */

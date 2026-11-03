@@ -10,7 +10,7 @@ import {
   readSpotifyLink,
   unusableLinkError,
 } from "../spotify";
-import { isLocalRequest, localOnly } from "../local-only";
+import { isLocalRequest, localOnly, sameOriginOnly } from "../local-only";
 import {
   CALLBACK_PATH,
   SignInError,
@@ -23,7 +23,7 @@ import { validationError } from "./helpers";
 export function registerSpotifyRoutes(app: Express) {
   // Where a Spotify link leads: the page asks before handling a spotify.link
   // short link, to know whether it's a song (search) or a playlist (the panel).
-  app.get(api.spotify.link.path, async (req, res) => {
+  app.get(api.spotify.link.path, sameOriginOnly(), async (req, res) => {
     const query = api.spotify.link.query.safeParse(req.query);
     if (!query.success) return res.status(400).json(validationError(query.error));
     try {
@@ -46,7 +46,7 @@ export function registerSpotifyRoutes(app: Express) {
 
   // The songs in a public Spotify playlist or album, for the playlist panel.
   // Picking one searches for its song link like any other (above).
-  app.get(api.spotify.playlist.path, async (req, res) => {
+  app.get(api.spotify.playlist.path, sameOriginOnly(), async (req, res) => {
     const query = api.spotify.playlist.query.safeParse(req.query);
     if (!query.success) return res.status(400).json(validationError(query.error));
     try {

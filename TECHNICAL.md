@@ -38,7 +38,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── src/
 │   │   ├── components/        # UI components (the shadcn/ui ones the app uses, in components/ui)
 │   │   ├── hooks/             # Custom React hooks (API calls, remembered choices, a copied link)
-│   │   ├── lib/               # Helpers (queryClient, utils, format: durations + link detection, music: the player's songs, clipboard: Paste + copied links)
+│   │   ├── lib/               # Helpers (api: requestJson() for every call to the app, queryClient, utils, format: durations + link detection, music: the player's songs, clipboard: Paste + copied links)
 │   │   ├── pages/             # Route pages (Home, NotFound)
 │   │   ├── App.tsx            # Top-level app & router
 │   │   ├── main.tsx           # React entry point
@@ -65,6 +65,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── music.ts               # The music player: the folder's songs by id, FLAC conversions, covers
 │   ├── trim.ts                # Trimming a folder song: its waveform and dead air, cutting a part out, Undo
 │   ├── song-file.ts           # Changing a folder song's file: one change at a time, and the swap that never leaves half a song
+│   ├── shutdown.ts            # Stopping cleanly (Ctrl+C, window closed): saves tidy up, tags are kept
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
 │   ├── audio.ts               # yt-dlp / ffmpeg: arguments, metadata pass, the download pipeline
 │   ├── tags.ts                # The MP3's ID3v2.3 tag (with the cover), written by the app; the Ogg cover block
@@ -79,9 +80,10 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── better-copy.ts         # Housekeeping's better copies: the same song online at a higher bitrate; replacing it
 │   ├── details-log.ts         # data/details.log: each song looked up, written or downloaded, and why
 │   ├── save.ts                # POST /api/video/save — saves a download straight into the Save to folder
+│   ├── prepare-song.ts        # What a download and a save both do first: look-up, name, tags, cover, details, ffmpeg args
 │   ├── settings.ts            # App settings (the Save to folder, Housekeeping's quality bar) → data/settings.json
 │   ├── folders.ts             # The folder browser: list and make folders, quick links, new files
-│   ├── local-only.ts          # Folder routes answer only this computer's own page; history changes only the app's page
+│   ├── local-only.ts          # Folder routes answer only this computer's own page; history changes and work-starting routes only the app's page
 │   ├── retry-when-busy.ts     # Retries a rename/delete Windows briefly blocks (antivirus, indexer)
 │   ├── json-file.ts           # writeJsonFile() (temp file + rename) and oneAtATime() for every data/*.json store
 │   ├── ffmpeg.ts              # ffmpeg() / runFfmpeg(): every one-off ffmpeg run (timeout, Stop, its error line)
@@ -194,6 +196,12 @@ What each file does, and the function and constant names to look for. This was C
   unreliable too, or none) and a one-sentence `summary`; such a refusal also rewrites the file
   when it stops counting and when it ends. `GET /api/health/sources` serves it
   (not local-only; no paths in it). Pure parts unit-tested with a fake clock
+- `server/prepare-song.ts` — `prepareSong()`: what `GET /api/video/download` and `POST /api/video/save`
+  both do before any audio flows — `lookUpAudio()` (a failure other than `YouTubeRefused` becomes
+  `AudioLookUpError`), the name and tags (`songOfVideo()`, Spotify's when a song id is given), the
+  cover, the catalogues' genre and album (`lookUpDownload()`; a save also passes the folder's songs
+  for an artist's genre), the details log line, `prepareAudioOutput()` and the file name; answers
+  undefined if the page went away during the look-up. Unit-tested with stand-ins
 - `server/save.ts` — "Save to": the app saves a download into the chosen folder itself (works in any
   browser): same pipeline into `<name>.<ext>.part` (opened `wx`), renamed when complete onto a name
   claimed with `wx` too (`claimNewName()`), so saves finishing together never take the same name and
@@ -206,7 +214,9 @@ What each file does, and the function and constant names to look for. This was C
   `kindProblem()`: `realType` (another kind of audio than the name says) or `notAudio`
 - `server/settings.ts` — app settings (the Save to folder, Housekeeping's quality bar, the YouTube
   sign-in: `youtubeSignIn`, `"off"` unless turned on, anything else read as off) in
-  `data/settings.json` (`SETTINGS_FILE`; the unit tests point it at a file that isn't there)
+  `data/settings.json` (`SETTINGS_FILE`; the unit tests point it at a file that isn't there); a
+  damaged file reads as the defaults and is copied to `settings.json.broken-<time>` before the next
+  change is written over it
 - `server/library.ts` — which of a playlist's songs are in the Save to folder (`POST /api/folders/songs`):
   walks it and its subfolders (≤6 deep, ≤`MAX_SONG_FILES`), reads tags (one file per CPU core;
   cached per file until it changes, and kept between runs in `data/song-tags.json`, `SONG_TAGS_FILE`:
@@ -238,6 +248,13 @@ What each file does, and the function and constant names to look for. This was C
   (`SHFileOperation` with undo, run by PowerShell, no dialogs; a network or removable drive is
   refused with `NoBinError`), macOS's Trash (Finder, else `~/.Trash`), the freedesktop.org trash
   elsewhere (with its `.trashinfo`); `TRASH_DIR` replaces it in tests. Unit-tested
+- `server/shutdown.ts` — stopping cleanly: on SIGINT, SIGTERM, SIGHUP (the window closing, Windows
+  too) or SIGBREAK, `runShutdown()` runs every tidy-up registered with `onShutdown()` at once — a
+  save stops yt-dlp and ffmpeg and deletes its `.part` file, a download stops its processes,
+  `saveSongTags()` keeps the tags read — for at most `SHUTDOWN_GRACE_MS` (5 s), then exits; a
+  second signal exits at once. Windows' Stop.cmd uses `taskkill /F`, which nothing can notice:
+  Housekeeping lists a `.part` it leaves, and `restoreUnfinishedTagWrites()` handles tag writes.
+  Unit-tested with emitted signals, and a real save stopped part-way in `audio-routes.test.ts`
 - `server/song-file.ts` — every change to a folder song's file goes through it: `whileBusy()` lets
   one change at a time at a song (Fill in details, Rename and Fix name, Trim and its Undo, better
   copies; a second gets 409 "That song is being changed already."), and the finished new version
@@ -262,7 +279,10 @@ What each file does, and the function and constant names to look for. This was C
   once wherever it can — Download all's songs, the folder's tag reads, a long Spotify playlist's
   pages) and `mapAtOnce()` (one per core, results in order)
 - `server/local-only.ts` — `localOnly()`: folder routes answer only loopback, same-origin, JSON
-  requests with no proxy headers; `GET /api/settings` says `canSaveToFolder: false` elsewhere
+  requests with no proxy headers; `GET /api/settings` says `canSaveToFolder: false` elsewhere.
+  `sameOriginOnly()`: any device, but only the app's own page — the history's changes, and the
+  routes that start work (download, search, video info, YouTube playlist, Spotify link and
+  playlist, lyrics), so another website's link or picture can't set this computer to work
 - `server/search.ts` — song search: `yt-dlp ytsearch12:` (flat, ~4s) + `rankResults()` (official
   uploads up; partial matches and live/cover/remix down unless searched for; `sameSongAs()`: the
   song searched for at its length, for better copies), and SoundCloud's
@@ -513,6 +533,13 @@ What each file does, and the function and constant names to look for. This was C
 - `client/src/hooks/use-youtube.ts` — the page's API calls as TanStack Query hooks (history,
   search — `searchSongs()`, `soundCloudOnly` for SoundCloud alone — Spotify links, playlists —
   `usePlaylist()` — and video info)
+- `client/src/lib/api.ts` — how the page talks to the app: `requestJson(schema, url, { json })`
+  sends a request and answers with the reply checked against its schema from `shared/`; a reply
+  that isn't OK is an `ApiError` with the app's message (`errorFrom()`, `limited` when YouTube
+  refused), an OK one of the wrong shape or a web page is one too (`unexpectedAnswer()`: an HTML
+  page means the app needs restarting). Every call goes through it but a save's progress lines,
+  the player's audio and a delete's "no bin" 409. `queryClient.ts` holds only the cache's
+  defaults: each query brings its own function. Unit-tested with a stand-in `fetch`
 - `client/src/lib/clipboard.ts` + `hooks/use-clipboard-link.ts` — Paste and the copied-link
   suggestion (`findCopiedLink()`, `textToPaste()`, `canReadClipboard()`; unit-tested)
 - `client/src/hooks/use-stored-choice.ts` — a choice remembered in localStorage; used for the MP3 /
@@ -1535,6 +1562,8 @@ tests/
 │   ├── music.test.ts            # the player's server side: song ids, Ogg lengths, covers, FLAC conversion + cache
 │   ├── trim.test.ts             # trimming: dead air found, the ffmpeg filter and formats, tags and cover kept, Undo, the window's times
 │   ├── song-file.test.ts        # one change to a song at a time; written over in place (original backed up, put back after a stop), swapped in, or the old one binned first
+│   ├── shutdown.test.ts         # stopping cleanly: every tidy-up runs once, a hung one doesn't hold the exit, a second signal exits at once
+│   ├── prepare-song.test.ts     # a download's and a save's shared preparation: file name, cancel, look-up failures, folder genres
 │   ├── trim-routes.test.ts      # the trim routes on a real song: waveform, cut, Undo, refusals, local-only
 │   ├── housekeeping.test.ts     # Housekeeping on ffmpeg-made songs: cut short, damaged, not audio, bitrate; the quality bar; other files
 │   ├── housekeeping-routes.test.ts # the Housekeeping routes: a song checked, other files listed and deleted, the bar kept, local-only
@@ -1547,7 +1576,9 @@ tests/
 │   ├── details-log.test.ts      # why a song wasn't found (explainMiss), the details log's lines, order and size
 │   ├── download-all.test.ts     # "Download all": the same-length rule, one song per CPU core, Stop, a full drive, "Artist - Title" names
 │   ├── local-only.test.ts       # folder routes: this computer's own page only
+│   ├── cross-site-routes.test.ts # download, search, look-ups and lyrics refuse another website's requests
 │   ├── save-to-folder.test.ts   # the page's save client: progress lines, errors, cancel
+│   ├── api.test.ts              # the page's requestJson(): JSON bodies, the app's errors, a refusal, an unexpected or HTML answer
 │   ├── browser-support.test.ts  # no syntax older Safari rejects in the page's code
 │   ├── web-app.test.ts          # the web app manifest and its icons
 │   ├── yt-dlp-script.test.ts    # scripts/yt-dlp.mjs: the standalone yt-dlp for each system, checked against SHA2-256SUMS
@@ -1723,6 +1754,7 @@ A typical flow:
 - **Folder access (`server/local-only.ts`):** the routes that browse folders and save into them only answer this computer's own page — a loopback address with no proxy headers, a same-origin request (`Sec-Fetch-Site`/`Origin`), and changes sent as JSON. Another website you visit can't make the app list your folders, look at what's in them or write files, and neither can another device on your network. Checking which playlist songs are in the folder (`POST /api/folders/songs`) only ever reads the chosen **Save to** folder — the request names songs, not a path. See [Save to a folder](#save-to-a-folder).
 - **Music player:** the routes that list and play the **Save to** folder's songs (`/api/music…`) are local-only in the same way — a phone on your Wi-Fi can't list or play them, and another website can't play them in its own page. A song is asked for by an id the folder scan made, never by a path, so only audio files found in the chosen folder can be sent. A cover picture is sent only if it's an image type browsers won't run as a page. **Fill in details** sends the music catalogues only a song's title, artist and length, fetches covers only from their image hosts, and writes into a song only after its copy has been checked. Songs picked on another device never reach the app at all.
 - **Outside services:** besides YouTube and Spotify, the app fetches covers from `i.ytimg.com` (an address built from the validated video id) and Spotify's image hosts (a URL checked against them), and lyrics from `lrclib.net` (a fixed address; the title, artist and length go in its query string, built with `URLSearchParams`). Nothing the page sends can make the app fetch another address.
+- **Work another website could start** (a download, a search, a video, playlist or Spotify look-up, lyrics) is refused unless the request comes from the app's own page (`Sec-Fetch-Site`/`Origin`), so a link or picture on another site pointing at `localhost:5000` can't make the app run yt-dlp, fill the history or spend YouTube's patience with your IP.
 - **History changes** (remove, clear, Undo) only come from the app's own page (`Sec-Fetch-Site`/`Origin`, and JSON for Undo), so another website can't empty your history; any device using the app may, like downloading.
 - The server listens on `127.0.0.1` by default and has no authentication; see the note under [Deploying](#deploying).
 

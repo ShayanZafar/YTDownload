@@ -1,35 +1,16 @@
 import { useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { api } from "@shared/routes";
-import { z } from "zod";
 import { useAskAgainAt } from "@/hooks/use-ask-again-at";
 import { playlistSourceOf } from "@/lib/format";
-import { errorFrom } from "@/lib/save-to-folder";
-
-/**
- * Safely parse data and log detailed errors if validation fails.
- * This ensures frontend doesn't silently fail when backend shapes change.
- */
-function parseWithLogging<T>(schema: z.ZodType<T>, data: unknown, label: string): T {
-  const result = schema.safeParse(data);
-  if (!result.success) {
-    console.error(`[Zod] ${label} validation failed:`, z.prettifyError(result.error));
-    throw new Error(`Data validation failed for ${label}`);
-  }
-  return result.data;
-}
+import { requestJson } from "@/lib/api";
 
 /** The download history. Pass a poll interval (ms) to keep it refreshing. */
 export function useRecentDownloads(pollEveryMs: number | false = false) {
   return useQuery({
     queryKey: [api.downloads.list.path],
     refetchInterval: pollEveryMs,
-    queryFn: async () => {
-      const res = await fetch(api.downloads.list.path, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch recent downloads");
-      const data = await res.json();
-      return parseWithLogging(api.downloads.list.responses[200], data, "downloads.list");
-    },
+    queryFn: () => requestJson(api.downloads.list.responses[200], api.downloads.list.path),
   });
 }
 
@@ -48,23 +29,17 @@ export async function searchSongs(
 ) {
   const params = new URLSearchParams({ q: query });
   if (soundCloudOnly) params.set("source", "soundcloud");
-  const res = await fetch(`${api.video.search.path}?${params}`, {
-    credentials: "include",
+  return requestJson(api.video.search.responses[200], `${api.video.search.path}?${params}`, {
     signal,
   });
-  if (!res.ok) throw await errorFrom(res);
-  const data: unknown = await res.json().catch(() => undefined);
-  return parseWithLogging(api.video.search.responses[200], data, "video.search");
 }
 
 /** Where a Spotify link leads (a spotify.link short link is opened to find out). */
 export async function openSpotifyLink(link: string) {
-  const res = await fetch(`${api.spotify.link.path}?${new URLSearchParams({ link })}`, {
-    credentials: "include",
-  });
-  if (!res.ok) throw await errorFrom(res);
-  const data: unknown = await res.json().catch(() => undefined);
-  return parseWithLogging(api.spotify.link.responses[200], data, "spotify.link");
+  return requestJson(
+    api.spotify.link.responses[200],
+    `${api.spotify.link.path}?${new URLSearchParams({ link })}`,
+  );
 }
 
 export function useSpotifyLink() {
@@ -96,14 +71,8 @@ export function usePlaylist(link: string | null) {
   const query = useQuery({
     queryKey: [path, link],
     enabled: link !== null,
-    queryFn: async () => {
-      const res = await fetch(`${path}?${new URLSearchParams({ link: link ?? "" })}`, {
-        credentials: "include",
-      });
-      if (!res.ok) throw await errorFrom(res);
-      const data: unknown = await res.json().catch(() => undefined);
-      return parseWithLogging(responses[200], data, path);
-    },
+    queryFn: () =>
+      requestJson(responses[200], `${path}?${new URLSearchParams({ link: link ?? "" })}`),
   });
   const { refetch } = query;
   useAskAgainAt(
@@ -116,25 +85,11 @@ export function usePlaylist(link: string | null) {
 
 export function useVideoInfo() {
   return useMutation({
-    mutationFn: async (url: string) => {
-      // Validate input before sending
-      const validatedInput = api.video.info.input.parse({ url });
-
-      const res = await fetch(api.video.info.path, {
+    // A 400, a 500 or a 502 (YouTube refused: it's limiting this computer) all say why.
+    mutationFn: (url: string) =>
+      requestJson(api.video.info.responses[200], api.video.info.path, {
         method: api.video.info.method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(validatedInput),
-        credentials: "include",
-      });
-
-      // A 400, a 500 or a 502 (YouTube refused: it's limiting this computer) all say why.
-      if (!res.ok) throw await errorFrom(res);
-
-      const data = await res.json();
-      return parseWithLogging(api.video.info.responses[200], data, "video.info");
-    },
-    // Only invalidate if we actually triggered a background process that updates list,
-    // though the app requires clicking "Download" to actually add to the list.
-    // We will invalidate when the user clicks download instead.
+        json: api.video.info.input.parse({ url }),
+      }),
   });
 }

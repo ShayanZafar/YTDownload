@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -76,6 +76,28 @@ describe("SettingsStore", () => {
     expect((await new SettingsStore(() => file).get()).youtubeSignIn).toBe("firefox");
     await fs.writeFile(file, JSON.stringify({ saveFolder: null, youtubeSignIn: "chrome" }));
     expect((await store.get()).youtubeSignIn).toBe("off");
+  });
+
+  it("keeps a copy of a damaged file before writing over it, so its folder isn't lost", async () => {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const damaged = '{ "saveFolder": "D:\\Music", ';
+    await fs.writeFile(file, damaged);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await store.update({ qualityBar: "192" });
+    } finally {
+      warn.mockRestore();
+    }
+    const names = await fs.readdir(path.dirname(file));
+    const backup = names.find((name) => name.startsWith("settings.json.broken-"));
+    expect(backup).toBeDefined();
+    expect(await fs.readFile(path.join(path.dirname(file), backup!), "utf8")).toBe(damaged);
+    expect((await store.get()).qualityBar).toBe("192");
+    // A readable file gets no copy.
+    await store.update({ qualityBar: "128" });
+    expect((await fs.readdir(path.dirname(file))).filter((n) => n.includes("broken"))).toHaveLength(
+      1,
+    );
   });
 
   it("treats a damaged file as no settings rather than failing", async () => {

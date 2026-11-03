@@ -62,10 +62,12 @@ export function localOnly(notLocal = NOT_LOCAL): RequestHandler {
 }
 
 /**
- * For changes any device using the app may make (the download history): only
- * this app's own page may make them, sent as JSON when they carry a body, but
- * from any device — the history is shared by everyone using the app, like
- * the downloads themselves.
+ * For what any device using the app may do, but only from this app's own page:
+ * changes to the download history (shared by everyone using the app, like the
+ * downloads themselves), and the requests that set this computer to work —
+ * downloads, searches, video and playlist look-ups, lyrics — so another
+ * website can't start them through a link or a picture pointing at the app.
+ * Sent as JSON when they carry a body.
  */
 export function sameOriginOnly(): RequestHandler {
   return (req, res, next) => {

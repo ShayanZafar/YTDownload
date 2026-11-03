@@ -42,13 +42,13 @@ import {
   textToPaste,
 } from "@/lib/clipboard";
 import {
-  ApiError,
   folderName,
   saveOnServer,
   savePlaylistFile,
   type ActiveSave,
   type SaveRequest,
 } from "@/lib/save-to-folder";
+import { ApiError } from "@/lib/api";
 import { folderTrack, playlistQueue } from "@/lib/music";
 import { recentPlaylistOf } from "@/lib/recent-playlists";
 import { queryClient } from "@/lib/queryClient";

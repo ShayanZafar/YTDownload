@@ -8,7 +8,7 @@ import {
   type DownloadAllCalls,
   type SongStatus,
 } from "../../client/src/hooks/use-download-all";
-import { ApiError } from "../../client/src/lib/save-to-folder";
+import { ApiError } from "../../client/src/lib/api";
 import { spotifyFileName } from "../../shared/spotify-names";
 import type { SearchResult, SpotifyPlaylistTrack } from "../../shared/schema";
 

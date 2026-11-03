@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  ApiError,
-  folderName,
-  parseSaveEvent,
-  saveOnServer,
-  unexpectedAnswer,
-} from "../../client/src/lib/save-to-folder";
+import { folderName, parseSaveEvent, saveOnServer } from "../../client/src/lib/save-to-folder";
+import { ApiError, unexpectedAnswer } from "../../client/src/lib/api";
 import { REFUSED_MESSAGE } from "../../server/youtube-limits";
 
 const encoder = new TextEncoder();
