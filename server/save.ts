@@ -25,6 +25,7 @@ import { settings } from "./settings";
 import { spotifySongTags } from "./spotify";
 import { storage } from "./storage";
 import { YouTubeRefused, sendRefused } from "./youtube-limits";
+import { onShutdown } from "./shutdown";
 
 /** How often progress is reported while the audio arrives. */
 const PROGRESS_EVERY_MS = 250;
@@ -75,6 +76,8 @@ export async function saveIntoFolder(req: Request, res: Response) {
   // The unfinished file, while there is one to clean up.
   let part: { path: string; stream: WriteStream; closed: Promise<void> } | undefined;
   let doneSaving: (() => void) | undefined;
+  // If the app stops meanwhile: the processes stop, and the .part file goes.
+  let forgetShutdown: (() => void) | undefined;
   try {
     const input = api.video.save.input.safeParse(req.body);
     if (!input.success) {
@@ -153,6 +156,11 @@ export async function saveIntoFolder(req: Request, res: Response) {
       closed: new Promise<void>((resolve) => created.stream.once("close", () => resolve())),
     };
     let writeError: unknown;
+    const unfinished = part;
+    forgetShutdown = onShutdown(async () => {
+      stop?.();
+      await discard(unfinished);
+    });
     part.stream.on("error", (err) => {
       writeError ??= err;
       stop?.();
@@ -228,6 +236,7 @@ export async function saveIntoFolder(req: Request, res: Response) {
   } finally {
     if (part) await discard(part);
     doneSaving?.();
+    forgetShutdown?.();
     void output?.cleanup();
   }
 }

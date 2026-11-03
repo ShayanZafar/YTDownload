@@ -65,6 +65,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── music.ts               # The music player: the folder's songs by id, FLAC conversions, covers
 │   ├── trim.ts                # Trimming a folder song: its waveform and dead air, cutting a part out, Undo
 │   ├── song-file.ts           # Changing a folder song's file: one change at a time, and the swap that never leaves half a song
+│   ├── shutdown.ts            # Stopping cleanly (Ctrl+C, window closed): saves tidy up, tags are kept
 │   ├── storage.ts             # Download history (IStorage + FileStorage → data/history.json)
 │   ├── audio.ts               # yt-dlp / ffmpeg: arguments, metadata pass, the download pipeline
 │   ├── tags.ts                # The MP3's ID3v2.3 tag (with the cover), written by the app; the Ogg cover block
@@ -240,6 +241,13 @@ What each file does, and the function and constant names to look for. This was C
   (`SHFileOperation` with undo, run by PowerShell, no dialogs; a network or removable drive is
   refused with `NoBinError`), macOS's Trash (Finder, else `~/.Trash`), the freedesktop.org trash
   elsewhere (with its `.trashinfo`); `TRASH_DIR` replaces it in tests. Unit-tested
+- `server/shutdown.ts` — stopping cleanly: on SIGINT, SIGTERM, SIGHUP (the window closing, Windows
+  too) or SIGBREAK, `runShutdown()` runs every tidy-up registered with `onShutdown()` at once — a
+  save stops yt-dlp and ffmpeg and deletes its `.part` file, a download stops its processes,
+  `saveSongTags()` keeps the tags read — for at most `SHUTDOWN_GRACE_MS` (5 s), then exits; a
+  second signal exits at once. Windows' Stop.cmd uses `taskkill /F`, which nothing can notice:
+  Housekeeping lists a `.part` it leaves, and `restoreUnfinishedTagWrites()` handles tag writes.
+  Unit-tested with emitted signals, and a real save stopped part-way in `audio-routes.test.ts`
 - `server/song-file.ts` — every change to a folder song's file goes through it: `whileBusy()` lets
   one change at a time at a song (Fill in details, Rename and Fix name, Trim and its Undo, better
   copies; a second gets 409 "That song is being changed already."), and the finished new version
@@ -1540,6 +1548,7 @@ tests/
 │   ├── music.test.ts            # the player's server side: song ids, Ogg lengths, covers, FLAC conversion + cache
 │   ├── trim.test.ts             # trimming: dead air found, the ffmpeg filter and formats, tags and cover kept, Undo, the window's times
 │   ├── song-file.test.ts        # one change to a song at a time; written over in place (original backed up, put back after a stop), swapped in, or the old one binned first
+│   ├── shutdown.test.ts         # stopping cleanly: every tidy-up runs once, a hung one doesn't hold the exit, a second signal exits at once
 │   ├── trim-routes.test.ts      # the trim routes on a real song: waveform, cut, Undo, refusals, local-only
 │   ├── housekeeping.test.ts     # Housekeeping on ffmpeg-made songs: cut short, damaged, not audio, bitrate; the quality bar; other files
 │   ├── housekeeping-routes.test.ts # the Housekeeping routes: a song checked, other files listed and deleted, the bar kept, local-only

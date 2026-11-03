@@ -13,6 +13,7 @@ import { lateDetails, lookUpDownload } from "../download-details";
 import { downloadEntry, logDetails } from "../details-log";
 import { YouTubeRefused, sendRefused } from "../youtube-limits";
 import { sameOriginOnly } from "../local-only";
+import { onShutdown } from "../shutdown";
 
 export function registerDownloadRoutes(app: Express) {
   // Streams a video's audio as a download: yt-dlp → ffmpeg → response. `url`
@@ -27,6 +28,7 @@ export function registerDownloadRoutes(app: Express) {
     let stopPipeline: (() => void) | undefined;
     // The cover files made for this download, deleted once it's over.
     let output: PreparedOutput | undefined;
+    let forgetShutdown: (() => void) | undefined;
     res.on("close", () => {
       if (res.writableFinished) return; // normal completion
       clientGone = true;
@@ -105,6 +107,8 @@ export function registerDownloadRoutes(app: Express) {
         { signIn: info.signIn },
       );
       stopPipeline = pipeline.stop;
+      // If the app stops meanwhile, yt-dlp and ffmpeg stop with it.
+      forgetShutdown = onShutdown(pipeline.stop);
       pipeline.audio.pipe(res, { end: false });
 
       const { ok, reason } = await pipeline.finished;
@@ -155,6 +159,7 @@ export function registerDownloadRoutes(app: Express) {
         res.end();
       }
     } finally {
+      forgetShutdown?.();
       // ffmpeg has read the cover by now (or never will): it's no longer needed.
       void output?.cleanup();
     }
