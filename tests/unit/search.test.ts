@@ -3,6 +3,7 @@ import {
   MAX_RESULTS,
   isOfficial,
   normalize,
+  matchesSong,
   queryCoverage,
   rankResults,
   ytDlpSearchArgs,
@@ -220,6 +221,50 @@ describe("rankResults", () => {
     );
     expect(rankResults("song", many)).toHaveLength(MAX_RESULTS);
     expect(rankResults("song", many, { limit: 3 })).toHaveLength(3);
+  });
+});
+
+describe("matchesSong", () => {
+  const song = "Queen Bohemian Rhapsody";
+  it("says yes when the song's title and artist are in the result's title or channel", () => {
+    expect(
+      matchesSong(song, { title: "Bohemian Rhapsody (Remastered 2011)", channel: "Queen - Topic" }),
+    ).toBe(true);
+    expect(
+      matchesSong(song, {
+        title: "Queen – Bohemian Rhapsody (Official Video)",
+        channel: "Queen Official",
+      }),
+    ).toBe(true);
+    expect(
+      matchesSong(song, { title: "Queen - Bohemian Rhapsody (Lyrics)", channel: "7clouds" }),
+    ).toBe(true);
+  });
+
+  it("says no to another song or artist, and to a live, cover or remix version not asked for", () => {
+    expect(matchesSong(song, { title: "Don't Stop Me Now", channel: "Queen - Topic" })).toBe(false);
+    expect(matchesSong(song, { title: "Bohemian Rhapsody", channel: "Panic! At The Disco" })).toBe(
+      false,
+    );
+    expect(
+      matchesSong(song, {
+        title: "Queen - Bohemian Rhapsody (Live Aid 1985)",
+        channel: "Queen Official",
+      }),
+    ).toBe(false);
+    expect(
+      matchesSong(song, {
+        title: "Bohemian Rhapsody - Queen (piano cover)",
+        channel: "Some Pianist",
+      }),
+    ).toBe(false);
+    // …but a live song is matched by its live version.
+    expect(
+      matchesSong("Queen Bohemian Rhapsody - Live", {
+        title: "Queen - Bohemian Rhapsody (Live Aid 1985)",
+        channel: "Queen Official",
+      }),
+    ).toBe(true);
   });
 });
 

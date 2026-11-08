@@ -1023,6 +1023,37 @@ describe("a Spotify song link (Spotify played by a stand-in fetch)", () => {
     ]);
   });
 
+  it("says which of a Spotify song's results look like the song, and which don't", async () => {
+    standInSpotify();
+    fake.runJson.mockResolvedValue({
+      entries: [
+        ...SONG_ENTRIES,
+        { id: "aaaaaaaaaaa", title: "Don't Stop Me Now", duration: 354, channel: "Queen - Topic" },
+        {
+          id: "bbbbbbbbbbb",
+          title: "Bohemian Rhapsody (Live Aid)",
+          duration: 360,
+          channel: "Queen Official",
+        },
+      ],
+    });
+    const res = await request(app).get("/api/search").query({ q: SONG_LINK });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    const marks = Object.fromEntries(
+      res.body.results.map((r: { id: string; matchesSong: boolean }) => [r.id, r.matchesSong]),
+    );
+    expect(marks).toEqual({
+      yk3prd8GER4: true,
+      fJ9rUzIMcZQ: true,
+      aaaaaaaaaaa: false,
+      bbbbbbbbbbb: false,
+    });
+    // A plain search (not a Spotify song's) has no song to compare with.
+    fake.runJson.mockResolvedValue({ entries: SONG_ENTRIES });
+    const plain = await request(app).get("/api/search").query({ q: "queen bohemian rhapsody" });
+    expect(plain.body.results[0]).not.toHaveProperty("matchesSong");
+  });
+
   it("its download is tagged with Spotify's title, artists, album and song id", async () => {
     standInSpotify();
     const before = (await historyOf(VIDEO)).length;

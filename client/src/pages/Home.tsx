@@ -277,9 +277,11 @@ export default function Home() {
       { query, soundCloudOnly },
       {
         // A Spotify link asks for one particular song: show the best match
-        // straight away (the other matches stay listed below).
+        // straight away (the other matches stay listed below) — unless no
+        // result looks like the song, when nothing is picked for you.
         onSuccess: (data) => {
-          if (data.spotify && data.results[0]) pick(data.results[0], data.spotify);
+          const best = data.results.find((result) => result.matchesSong !== false);
+          if (data.spotify && best) pick(best, data.spotify);
         },
         onError: (err) => {
           toast({ title: "Search failed", description: err.message, variant: "destructive" });
@@ -400,8 +402,12 @@ export default function Home() {
     setFileName(null);
   };
 
-  // `song`: the Spotify song these results were found for, if any.
-  const pick = (result: SearchResult, song?: SpotifyTrack) => {
+  // `song`: the Spotify song these results were found for, if any. A result
+  // that doesn't look like that song is downloaded as a song of its own: under
+  // its own name, not tagged as the Spotify song (so the playlist still lists
+  // that song as missing).
+  const pick = (result: SearchResult, found?: SpotifyTrack) => {
+    const song = result.matchesSong === false ? undefined : found;
     resetInfo();
     showVideo({
       url: result.url,

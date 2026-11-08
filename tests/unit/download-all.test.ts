@@ -59,6 +59,12 @@ describe("confidentMatch", () => {
     expect(confidentMatch([], 354)).toBeUndefined();
   });
 
+  it("takes nothing when the best match doesn't look like the song, even at the same length", () => {
+    const other = { ...result("aaaaaaaaaaa", 354), matchesSong: false };
+    expect(confidentMatch([other], 354)).toBeUndefined();
+    expect(checkReason([other], 354)).toMatch(/none of the uploads found looks like this song/i);
+  });
+
   it("says why, for the song's “check” mark", () => {
     expect(checkReason([], 354)).toMatch(/no uploads/i);
     expect(checkReason([result("aaaaaaaaaaa", 400)], 354)).toMatch(/same length/i);

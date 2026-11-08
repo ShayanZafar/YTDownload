@@ -35,22 +35,28 @@ export type DownloadAllSummary = {
 
 /**
  * The upload to download for a Spotify song without asking anyone: the best
- * match, if it's the same length as the song on Spotify — so almost surely the
- * same recording. Otherwise none, and someone should choose — also when the
- * song's length isn't known (Spotify's fallback doesn't say it).
+ * match, if it looks like the song (its title and artist, not a live, cover
+ * or remix-style version: `matchesSong`) and is the same length as the song
+ * on Spotify — so almost surely the same recording. Otherwise none, and
+ * someone should choose — also when the song's length isn't known (Spotify's
+ * fallback doesn't say it).
  */
 export function confidentMatch(
   results: SearchResult[],
   songSeconds: number | null | undefined,
 ): SearchResult | undefined {
   const best = results[0];
-  if (!best || songSeconds == null || best.duration == null) return undefined;
+  if (!best || best.matchesSong === false) return undefined;
+  if (songSeconds == null || best.duration == null) return undefined;
   return Math.abs(best.duration - songSeconds) <= SAME_LENGTH_SECONDS ? best : undefined;
 }
 
 /** Why no upload was downloaded for a song, for its "check" mark. */
 export function checkReason(results: SearchResult[], songSeconds: number | null | undefined) {
   if (results.length === 0) return "No uploads of this song found.";
+  if (!results.some((result) => result.matchesSong !== false)) {
+    return "None of the uploads found looks like this song (another title or artist, or a live, cover or remix version) — search for it yourself.";
+  }
   if (songSeconds == null) {
     return "Spotify didn't say how long the song is, so no upload can be matched to it — pick one yourself.";
   }

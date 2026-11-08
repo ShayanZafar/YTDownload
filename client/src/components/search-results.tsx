@@ -1,4 +1,4 @@
-import { BadgeCheck, Check, Cloud, Play, Timer, X } from "lucide-react";
+import { AlertTriangle, BadgeCheck, Check, Cloud, Play, Timer, X } from "lucide-react";
 import {
   SAME_LENGTH_SECONDS,
   type AudioSource,
@@ -59,6 +59,9 @@ export function SearchResults({
   // failed or found nothing — YouTube may be limiting this computer).
   const fromSoundCloud =
     source === "soundcloud" || (results?.some((result) => result.source === "soundcloud") ?? false);
+  // A Spotify song's search where no result looks like the song.
+  const noMatch =
+    !!spotify && !!results && results.length > 0 && results.every((r) => r.matchesSong === false);
   return (
     <section aria-label="Search results" className="max-w-3xl mx-auto w-full space-y-4">
       <div className="flex items-center justify-between gap-4 px-2">
@@ -129,6 +132,23 @@ export function SearchResults({
         </div>
       )}
 
+      {!isSearching && noMatch && (
+        <div
+          role="status"
+          className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm"
+        >
+          <AlertTriangle className="mt-0.5 w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0">
+            <p className="font-medium text-foreground">None of these look like this song</p>
+            <p className="text-muted-foreground">
+              Choosing one downloads it as a song of its own, under its own name: the playlist will
+              still list “{spotify.title}” as missing. Try searching for the artist and title
+              yourself, or Search SoundCloud.
+            </p>
+          </div>
+        </div>
+      )}
+
       {isSearching ? (
         <div className="rounded-2xl border border-border bg-card divide-y divide-border/60 overflow-hidden">
           {[1, 2, 3, 4].map((i) => (
@@ -149,6 +169,7 @@ export function SearchResults({
               spotify?.duration != null &&
               result.duration != null &&
               Math.abs(result.duration - spotify.duration) <= SAME_LENGTH_SECONDS;
+            const notTheSong = !!spotify && result.matchesSong === false;
             const videoId = extractVideoId(result.url);
             const isPreviewing = videoId !== null && previewing === result.id;
             return (
@@ -218,6 +239,8 @@ export function SearchResults({
                       result.official && "official upload",
                       result.source === "soundcloud" && "on SoundCloud",
                       sameLength && "same length as the Spotify song",
+                      notTheSong &&
+                        "doesn't look like the Spotify song: downloads as a song of its own",
                       result.duration != null && formatDuration(result.duration),
                     ]
                       .filter(Boolean)
@@ -255,6 +278,15 @@ export function SearchResults({
                           >
                             <Timer className="w-3 h-3" />
                             Same length
+                          </span>
+                        )}
+                        {notTheSong && (
+                          <span
+                            title="Its title and channel don't name this song and artist, or it's a live, cover or remix version. Choosing it downloads it as a song of its own: it won't fill in the Spotify song."
+                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300"
+                          >
+                            <AlertTriangle className="w-3 h-3" />
+                            Not a match
                           </span>
                         )}
                       </div>

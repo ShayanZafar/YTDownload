@@ -66,6 +66,13 @@ export const searchResultSchema = z.object({
   official: z.boolean(),
   /** Where it is: YouTube when left out, or SoundCloud (searched when YouTube can't answer). */
   source: z.enum(audioSources).optional(),
+  /**
+   * A Spotify song's search only: false when the result doesn't look like that
+   * song (its title and artist aren't in the title or channel, or it's a live,
+   * cover or remix-style version the song isn't). Picking one then downloads
+   * it as a song of its own, not as the Spotify song.
+   */
+  matchesSong: z.boolean().optional(),
 });
 
 export type SearchResult = z.infer<typeof searchResultSchema>;
