@@ -297,6 +297,74 @@ test.describe("getting a song (YouTube, Spotify and SoundCloud played by stand-i
     await expect(historyRows(page, /bohemian rhapsody/i)).toHaveCount(1, { timeout: 20_000 });
   });
 
+  test("a Spotify song no upload looks like: nothing is picked, and one chosen anyway downloads as a song of its own", async ({
+    page,
+    front,
+  }) => {
+    const SONG = "4u7EnebtmKWzUH433cf5Qv";
+    const link = `https://open.spotify.com/track/${SONG}`;
+    const other = (id: string, title: string, channel: string, duration: number) => ({
+      id,
+      url: `https://www.youtube.com/watch?v=${id}`,
+      title,
+      channel,
+      duration,
+      thumbnail: THUMBNAIL,
+      official: false,
+      source: "youtube",
+      matchesSong: false,
+    });
+    await page.route("**/api/search?*", (route) =>
+      route.fulfill({
+        json: {
+          // What a search can find for a rare song: neither result is it,
+          // though the first is even the same length.
+          results: [
+            other("aaaaaaaaaaa", "Rainy Day Lofi Mix", "Chill Beats", 354),
+            other("bbbbbbbbbbb", "Night Drive (Live)", "Some Band", 410),
+          ],
+          source: "youtube",
+          spotify: {
+            id: SONG,
+            url: link,
+            title: "Lantern Song",
+            artists: ["Quiet Harbour"],
+            duration: 354,
+            thumbnail: null,
+          },
+        },
+      }),
+    );
+    const downloads: Record<string, string>[] = [];
+    answerDownloads(front, await makeSong(), "Rainy Day Lofi Mix", (query) =>
+      downloads.push(query),
+    );
+
+    await page.goto(front.url);
+    await page.locator('input[type="url"]').fill(link);
+    await page.locator('button[type="submit"]').click();
+    const results = page.getByRole("region", { name: /search results/i });
+
+    // It says so, marks each result, and picks none of them for you.
+    await expect(results.getByText("None of these look like this song")).toBeVisible();
+    await expect(results.getByText("Not a match", { exact: true })).toHaveCount(2);
+    await expect(results.getByRole("button", { pressed: true })).toHaveCount(0);
+    await expect(downloadLink(page)).toHaveCount(0);
+
+    // Chosen anyway: it downloads under its own name, not tagged as the Spotify song.
+    const lofi = results.getByRole("button", { name: /^rainy day lofi mix/i });
+    await expect(lofi).toHaveAccessibleName(/downloads as a song of its own/i);
+    await lofi.click();
+    await expect(lofi).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: /^rename file: .*lantern song/i })).toHaveCount(
+      0,
+    );
+    const downloadStarted = page.waitForEvent("download");
+    await downloadLink(page).click();
+    await downloadStarted;
+    expect(downloads).toEqual([{ url: "https://www.youtube.com/watch?v=aaaaaaaaaaa" }]);
+  });
+
   test("Save to: downloads go into the folder picked in the app's folder browser; Cancel stops one", async ({
     page,
     front,

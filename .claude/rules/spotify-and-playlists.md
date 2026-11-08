@@ -32,8 +32,9 @@ paths:
   until its Retry-After (`webApiRefusal`) and the open panel asks again then by itself; a failure
   without one, a minute later.
 - "Download all" works on as many songs at once as the app's computer has CPU cores (the page gets
-  `cpuCores` from `/api/settings`; it may be on a phone), and never downloads a match that isn't the
-  same length as the Spotify song (a song whose length Spotify's fallback didn't give is "check"):
-  unattended picks must be near-certain. A save YouTube refuses switches that song to SoundCloud
+  `cpuCores` from `/api/settings`; it may be on a phone), and never downloads a match that doesn't
+  look like the song (`matchesSong`) or isn't the same length as the Spotify song (a song whose length Spotify's fallback didn't give is "check"):
+  unattended picks must be near-certain. A result picked by hand that doesn't look like the song is
+  a plain download (no `spotifyId`, its own name), so a wrong song never fills a playlist entry. A save YouTube refuses switches that song to SoundCloud
   alone, once, at once. Stop or a folder problem aborts every song in flight (their pipelines are
   killed and `.part` files deleted).

@@ -227,16 +227,27 @@ export function rankResults(
 }
 
 /**
- * Is this result the song a search was for, at its length? The search's words
- * are in its title or channel, it isn't a live, cover or remix-style version
- * the search didn't ask for, and it's within SAME_LENGTH_SECONDS of `seconds`.
+ * Could this result be the song a search was for, at any length? The search's
+ * words are in its title or channel, and it isn't a live, cover or
+ * remix-style version the search didn't ask for. Its length isn't checked:
+ * music videos add intros, and a wrong length only means another recording.
+ */
+export function matchesSong(query: string, result: Pick<SearchResult, "title" | "channel">) {
+  return (
+    queryCoverage(query, { title: result.title, channel: result.channel }) >= MATCH_THRESHOLD &&
+    !isVariant(normalize(query), normalize(result.title))
+  );
+}
+
+/**
+ * Is this result the song a search was for, at its length? It `matchesSong()`,
+ * and it's within SAME_LENGTH_SECONDS of `seconds`.
  */
 export function sameSongAs(query: string, result: SearchResult, seconds: number): boolean {
   return (
     result.duration !== null &&
     Math.abs(result.duration - seconds) <= SAME_LENGTH_SECONDS &&
-    queryCoverage(query, { title: result.title, channel: result.channel }) >= MATCH_THRESHOLD &&
-    !isVariant(normalize(query), normalize(result.title))
+    matchesSong(query, result)
   );
 }
 

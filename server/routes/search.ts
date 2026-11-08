@@ -3,7 +3,13 @@ import type { Express } from "express";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import { extractVideoId } from "../youtube-url";
-import { SearchFailed, searchSongs, searchSoundCloudOnly, type SongSearchOptions } from "../search";
+import {
+  SearchFailed,
+  matchesSong,
+  searchSongs,
+  searchSoundCloudOnly,
+  type SongSearchOptions,
+} from "../search";
 import {
   SpotifyError,
   fetchSpotifyTrack,
@@ -81,11 +87,19 @@ export function registerSearchRoutes(app: Express) {
         return res.status(400).json({ message: spotifyLinkError(spotifyLink), field: "q" });
       }
       const spotify = await fetchSpotifyTrack(spotifyLink.id);
+      // The song's artist and title, without the "audio" YouTube is asked for.
+      const song = spotifySearchQuery(spotify, "soundcloud");
       const answer = await search(spotifySearchQuery(spotify), {
         targetDuration: spotify.duration,
-        soundCloudQuery: spotifySearchQuery(spotify, "soundcloud"),
+        soundCloudQuery: song,
       });
-      res.json({ ...answer, spotify });
+      // Each result says whether it looks like the song, so the page can say
+      // when none does — and download one picked anyway as a song of its own.
+      const results = answer.results.map((result) => ({
+        ...result,
+        matchesSong: matchesSong(song, result),
+      }));
+      res.json({ ...answer, results, spotify });
     } catch (err) {
       if (err instanceof SpotifyError) {
         return res.status(err.status).json({ message: err.message });
