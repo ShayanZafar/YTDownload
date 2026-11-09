@@ -20,6 +20,8 @@ import {
   seekRanOffTheEnd,
   afterSeek,
   SEEK_LOOKS,
+  endedTooSoon,
+  SEEK_ENDED_SLACK,
   shuffledOrder,
   sortTracks,
   upNext,
@@ -320,5 +322,29 @@ describe("afterSeek", () => {
       "look-again",
     );
     expect(afterSeek({ from: 240, now: 240, fetching: true, looks: SEEK_LOOKS })).toBe("cut-short");
+  });
+});
+
+describe("endedTooSoon", () => {
+  it("says a file is cut short when the song ends soon after a seek far from its end", () => {
+    // Said it got there, then ended a second later (WebKit on Linux).
+    expect(endedTooSoon({ asked: 240, duration: 480, since: 1 })).toBe(true);
+    // Ended just before the check after the seek would have looked.
+    expect(endedTooSoon({ asked: 240, duration: 480, since: 3.9 })).toBe(true);
+  });
+
+  it("lets a song finish that played on from the seek to its end", () => {
+    // A seek to 3 s before the end, and the song plays them.
+    expect(endedTooSoon({ asked: 477, duration: 480, since: 3 })).toBe(false);
+    expect(endedTooSoon({ asked: 470, duration: 480, since: 10.2 })).toBe(false);
+    // An estimated duration (some MP3s) a few seconds longer than the song.
+    expect(endedTooSoon({ asked: 470, duration: 480, since: 10 - SEEK_ENDED_SLACK })).toBe(false);
+    // Paused after the seek, played much later: only ever later than what was left.
+    expect(endedTooSoon({ asked: 10, duration: 480, since: 3600 })).toBe(false);
+  });
+
+  it("can't tell without a duration", () => {
+    expect(endedTooSoon({ asked: 10, duration: NaN, since: 1 })).toBe(false);
+    expect(endedTooSoon({ asked: 10, duration: Infinity, since: 1 })).toBe(false);
   });
 });

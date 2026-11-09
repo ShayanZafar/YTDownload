@@ -25,6 +25,7 @@ import {
   repeatModes,
   seekRanOffTheEnd,
   afterSeek,
+  endedTooSoon,
   shuffledOrder,
   upNext,
   type PlayerTrack,
@@ -129,8 +130,8 @@ const TimeContext = createContext<{ time: number; duration: number | null }>({
 const SKIP_AFTER_FAILURE_MS = 2000;
 // WebKit doesn't end a song on a seek past where a cut-short file stops, as Chrome
 // does: it lands short of the place asked for and stands still there (seen on Windows),
-// says it got there and plays nothing (seen on Linux), or never finishes the seek.
-// Not playing on this long after the seek (looked at again while it's still
+// says it got there and plays nothing (seen on Linux), or never finishes the seek;
+// it can also end the song soon after (Linux), which `endedTooSoon()` catches. Not playing on this long after the seek (looked at again while it's still
 // fetching, up to SEEK_LOOKS times), that's a file cut short.
 const STUCK_SEEK_MS = 4000;
 
@@ -240,6 +241,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Where a seek landed short of where it was asked to (WebKit, a file cut short).
   const seekLanded = useRef<number | null>(null);
   const seekCheck = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The last seek (where to, the song's duration then, when), until the song is
+  // seen playing on from it: ending before then, sooner than it could, is a file cut short.
+  const lastSeek = useRef<{ asked: number; duration: number; at: number } | null>(null);
   // Counts seeks, so a look at one that's been followed by another does nothing.
   const seeks = useRef(0);
 
@@ -279,6 +283,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       clearTimeout(seekCheck.current);
       resumeAt.current = 0;
       seekAsked.current = null;
+      lastSeek.current = null;
       letGoOfObjectUrl();
       let src: string;
       let converted = false;
@@ -364,12 +369,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const element = audio();
       const asked = seekAsked.current;
       seekAsked.current = null;
+      const seek = lastSeek.current;
+      lastSeek.current = null;
       if (
         element &&
         asked !== null &&
         seekRanOffTheEnd(asked, element.currentTime, element.duration)
       ) {
         cutShort(asked);
+        return;
+      }
+      // WebKit can say the seek got there (or land short) and then end the song.
+      if (seek && endedTooSoon({ ...seek, since: (performance.now() - seek.at) / 1000 })) {
+        clearTimeout(seekCheck.current);
+        cutShort(seek.asked);
         return;
       }
       const { queue: q, repeat: r } = latest.current;
@@ -471,6 +484,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const asked = Math.max(0, Math.min(seconds, end));
       seekAsked.current = asked;
       seekLanded.current = null;
+      lastSeek.current = { asked, duration: element.duration, at: performance.now() };
       element.currentTime = asked;
       setTime(element.currentTime);
       clearTimeout(seekCheck.current);
@@ -494,6 +508,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           return;
         }
         if (seekAsked.current === asked) seekAsked.current = null;
+        if (lastSeek.current?.asked === asked) lastSeek.current = null;
         if (verdict === "cut-short") {
           element.pause();
           cutShort(asked);
