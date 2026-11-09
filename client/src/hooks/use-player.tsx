@@ -131,7 +131,8 @@ const SKIP_AFTER_FAILURE_MS = 2000;
 // WebKit doesn't end a song on a seek past where a cut-short file stops, as Chrome
 // does: it lands short of the place asked for and stands still there (seen on Windows),
 // says it got there and plays nothing (seen on Linux), or never finishes the seek;
-// it can also end the song soon after (Linux), which `endedTooSoon()` catches. Not playing on this long after the seek (looked at again while it's still
+// it can also end the song soon after (Linux), which `endedTooSoon()` catches.
+// Not playing on this long after the seek (looked at again while it's still
 // fetching, up to SEEK_LOOKS times), that's a file cut short.
 const STUCK_SEEK_MS = 4000;
 
