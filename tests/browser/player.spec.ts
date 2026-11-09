@@ -151,8 +151,49 @@ test.describe("Music player (browser)", () => {
       await expect.poll(() => audio(page), { timeout: 30_000 }).toMatchObject({ playing: true });
 
       // Halfway: past where the file stops. It stays on the song, paused, and says why.
+      // What the audio element does meanwhile is printed if the note doesn't come (#72).
+      await page.evaluate(() => {
+        const element = document.querySelector<HTMLAudioElement>(
+          "[data-testid=music-player-audio]",
+        )!;
+        element.dataset.events = "";
+        for (const type of [
+          ...["seeking", "seeked", "pause", "play", "playing", "waiting", "stalled"],
+          ...["ended", "error", "durationchange", "emptied", "suspend", "progress"],
+        ])
+          element.addEventListener(type, () => {
+            element.dataset.events += ` ${type}@${element.currentTime.toFixed(1)}/${element.duration.toFixed(1)}`;
+          });
+      });
       await player.getByRole("slider", { name: "Seek" }).fill("240");
-      await expect(player.getByRole("alert")).toContainText("The file stops before 4:00");
+      await expect(player.getByRole("alert"))
+        .toContainText("The file stops before 4:00")
+        .catch(async (failure: unknown) => {
+          const state = await page.evaluate(() => {
+            const element = document.querySelector<HTMLAudioElement>(
+              "[data-testid=music-player-audio]",
+            )!;
+            const decoded = (element as { webkitAudioDecodedByteCount?: number })
+              .webkitAudioDecodedByteCount;
+            return {
+              events: element.dataset.events,
+              time: element.currentTime,
+              duration: element.duration,
+              paused: element.paused,
+              ended: element.ended,
+              readyState: element.readyState,
+              networkState: element.networkState,
+              buffered: Array.from({ length: element.buffered.length }, (_, i) => [
+                element.buffered.start(i),
+                element.buffered.end(i),
+              ]),
+              decoded,
+            };
+          });
+          console.log(`#72 audio after the seek: ${JSON.stringify(state)}`);
+          console.log(`#72 title: ${await player.getByTestId("player-title").textContent()}`);
+          throw failure;
+        });
       await expect(player.getByTestId("player-title")).toHaveText("A Cut Short");
       await expect.poll(() => audio(page)).toMatchObject({ paused: true });
 

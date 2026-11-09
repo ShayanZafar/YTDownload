@@ -540,6 +540,25 @@ export function afterSeek(look: {
 /** How many times a seek still fetching is looked at before it counts as cut short. */
 export const SEEK_LOOKS = 3;
 
+/**
+ * Did the song "end" sooner after a seek than what was left of it could have
+ * played? Then the file stops before where the seek asked for: a file cut short,
+ * on which WebKit can say the seek got there (or lands short) and then end the
+ * song, sometimes with the duration shrunk to where the file really stops, so
+ * `seekRanOffTheEnd()` can't tell. Seconds, all: where the seek asked for, the
+ * duration the song had then, and how long ago the seek was. Playing on from
+ * the seek takes at least what was left of the song; `SEEK_ENDED_SLACK`
+ * allows for a duration that's only an estimate (some MP3s).
+ */
+export function endedTooSoon(seek: { asked: number; duration: number; since: number }): boolean {
+  const { asked, duration, since } = seek;
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  return since < duration - asked - SEEK_ENDED_SLACK;
+}
+
+/** How much sooner than what was left a song may end after a seek and still have finished. */
+export const SEEK_ENDED_SLACK = 5;
+
 // --- The queue ----------------------------------------------------------------------
 
 /** The player's songs: each song once, and the order they play in. */
