@@ -122,6 +122,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── dependabot.yml         # Monthly grouped npm and GitHub Actions updates
 │   └── pull_request_template.md # The checklist a pull request starts with
 ├── .claude/skills/            # Claude Code skills: /verify (npm run verify), /refactor, /backlog
+├── .claude/agents/            # Claude Code subagents: verifier, reviewer, test-writer, live-tester, music-quality, skeptic
 ├── .claude/rules/             # Claude Code's rules for each area, loaded with that area's files
 ├── docs/
 │   ├── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
@@ -680,6 +681,17 @@ What each file does, and the function and constant names to look for. This was C
 - `.claude/skills/` — `verify` (runs `npm run verify`, before each commit), `refactor` (measure,
   then at most three behaviour-preserving cleanups) and `backlog` (files, triages and works the
   `debt`/`decision` issues; records decisions in `docs/decisions.md`)
+- `.claude/agents/` — Claude Code subagents, each run in its own context so its long output stays
+  out of the main conversation: `verifier` (runs `npm run verify`, reports only failures; Haiku),
+  `reviewer` (read-only review of the diff against `origin/main` for bugs and this repo's rules;
+  Opus), `test-writer` (offline tests on stand-ins and `docs/core-flows.md`; Sonnet) and
+  `live-tester` (`tests/api`, Playwright in each browser and `@live`; stops at once without YouTube
+  access, as in a cloud container; Sonnet) and `music-quality` (reported vs real quality of songs
+  and audio pipeline changes, including transcodes the bitrate hides, via `music-metadata` and an
+  ffmpeg spectrum; never changes a music file; Sonnet) and `skeptic` (challenges plans,
+  recommendations and finished changes against the ask, the app's goal and `docs/decisions.md`,
+  cutting what's unrelated or unproven; read-only; Opus). Claude picks one by its `description`, or ask for it by
+  name ("use the reviewer agent"); `/agents` lists them
 - `.claude/rules/` — the rules for each area, which Claude Code loads only while it works on the
   files a rule file's `paths:` globs match (the list: [Conventions and gotchas](#conventions-and-gotchas)).
   `CLAUDE.md`, sent with every request, keeps only what holds everywhere.
