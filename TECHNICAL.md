@@ -122,7 +122,7 @@ This document covers the project's architecture, local development setup, enviro
 │   ├── dependabot.yml         # Monthly grouped npm and GitHub Actions updates
 │   └── pull_request_template.md # The checklist a pull request starts with
 ├── .claude/skills/            # Claude Code skills: /verify (npm run verify), /refactor, /backlog
-├── .claude/agents/            # Claude Code subagents: verifier, reviewer, test-writer, live-tester, music-quality
+├── .claude/agents/            # Claude Code subagents: verifier, reviewer, test-writer, live-tester, music-quality, skeptic
 ├── .claude/rules/             # Claude Code's rules for each area, loaded with that area's files
 ├── docs/
 │   ├── run/README.md          # Running the app: the scripts, a terminal, from a phone, hosting
@@ -688,7 +688,9 @@ What each file does, and the function and constant names to look for. This was C
   `live-tester` (`tests/api`, Playwright in each browser and `@live`; stops at once without YouTube
   access, as in a cloud container; Sonnet) and `music-quality` (reported vs real quality of songs
   and audio pipeline changes, including transcodes the bitrate hides, via `music-metadata` and an
-  ffmpeg spectrum; never changes a music file; Sonnet). Claude picks one by its `description`, or ask for it by
+  ffmpeg spectrum; never changes a music file; Sonnet) and `skeptic` (challenges plans,
+  recommendations and finished changes against the ask, the app's goal and `docs/decisions.md`,
+  cutting what's unrelated or unproven; read-only; Opus). Claude picks one by its `description`, or ask for it by
   name ("use the reviewer agent"); `/agents` lists them
 - `.claude/rules/` — the rules for each area, which Claude Code loads only while it works on the
   files a rule file's `paths:` globs match (the list: [Conventions and gotchas](#conventions-and-gotchas)).
