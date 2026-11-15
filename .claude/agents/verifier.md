@@ -21,6 +21,9 @@ Report, in this shape and nothing more:
 - **Failures:** one line each: `file:line` and the message. For a test, its name and the
   expected vs received values.
 - **Likely cause:** one sentence per failure, only if the output shows it. Say "unclear" otherwise.
+  When several failures look alike (the same wrong value, or one shared helper), check
+  `git diff origin/main...HEAD` and `git diff HEAD` for one changed line behind them all, and name
+  it as `file:line` with the failures it explains.
 - **Last lines:** the final 5 to 10 lines of the output, as-is (CLAUDE.md asks for them in the
   summary).
 

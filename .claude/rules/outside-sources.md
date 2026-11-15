@@ -16,7 +16,9 @@ paths:
   of our own — parallel work runs one per CPU core (`cpuCores()`, `mapAtOnce()`), never capped by a
   number we picked — and pacing only to a service's published limit (YouTube and SoundCloud publish
   none). When a source refuses or fails, switch to the next source for that data at once; wait only
-  when there's no other source, and then on its own, honouring `Retry-After`. Cache answers that
+  when there's no other source, and then on its own, honouring `Retry-After`. Once another source
+  has answered for an item, wait for a busy one only a moment (`SHORT_WAIT_MS`), then skip it and say
+  so (waiting out iTunes' minute made Fill in details 7x slower, Oct 2026). Cache answers that
   don't change; results say which source they came from (`source`), errors say what to do. Test
   against stand-ins, never the live services. What stays is what holds nothing back: the timeouts
   that end a hung process or request, `retryWhenBusy()` for Windows' brief file locks, and one
