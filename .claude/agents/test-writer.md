@@ -30,6 +30,11 @@ test shows the app is wrong, stop and report it with the failing test; don't fix
   `tests/api/`; it never counts toward a core flow.
 - Name a test by what a person relies on ("a save cancelled part-way leaves no .part file"), since
   `docs/core-flows.md` quotes test names exactly.
+- For a fix or a refactor, show each new test fails on the old code (or with the behaviour broken)
+  and passes now, and say so; the owner wants proof the tests check something.
+- A change that adds or moves a control in Your music extends the sweep in
+  `tests/browser/filter-layout.spec.ts`, so layout jumps are caught in CI.
+- Use invented song titles and lyrics in test data, never real lyrics (copied text can block a turn).
 - For untested code about to be refactored: characterization tests that pin today's outputs, as
   in `.claude/skills/refactor/SKILL.md` step 2b.
 

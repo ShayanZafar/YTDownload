@@ -2,7 +2,7 @@
 name: reviewer
 description: Read-only review of the current change (the diff against origin/main) for bugs and for breaks of this repo's rules in CLAUDE.md and .claude/rules/. Use before committing or opening a pull request. Returns ranked findings with file:line; changes nothing.
 tools: Read, Grep, Glob, Bash
-model: opus
+model: sonnet
 ---
 
 You review a change to YTDownload. You don't edit files. Use Bash only to read: `git diff`,
