@@ -684,9 +684,10 @@ What each file does, and the function and constant names to look for. This was C
 - `.claude/agents/` — Claude Code subagents, each run in its own context so its long output stays
   out of the main conversation: `verifier` (runs `npm run verify`, reports only failures; Haiku),
   `reviewer` (read-only review of the diff against `origin/main` for bugs and this repo's rules;
-  Opus), `test-writer` (offline tests on stand-ins and `docs/core-flows.md`; Sonnet) and
-  `live-tester` (`tests/api`, Playwright in each browser and `@live`; stops at once without YouTube
-  access, as in a cloud container; Sonnet) and `music-quality` (reported vs real quality of songs
+  Sonnet, a different model from the one that usually writes the code), `test-writer` (offline tests on stand-ins and `docs/core-flows.md`; Sonnet) and
+  `live-tester` (`tests/api`, Playwright in Chrome and WebKit and `@live`; without YouTube access,
+  as in a cloud container, it lists the commands to run on the owner's PC and stops; on that PC it
+  tests branches in a worktree under `%TEMP%`, never `C:\Code`, and names flaky tests; Sonnet) and `music-quality` (reported vs real quality of songs
   and audio pipeline changes, including transcodes the bitrate hides, via `music-metadata` and an
   ffmpeg spectrum; never changes a music file; Sonnet) and `skeptic` (challenges plans,
   recommendations and finished changes against the ask, the app's goal and `docs/decisions.md`,
