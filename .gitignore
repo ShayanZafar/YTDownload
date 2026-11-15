@@ -1,0 +1,7 @@
+# What Start.cmd installs (npm ci) — Update.cmd leaves it, and it's reinstalled when needed
+node_modules/
+# Your download history and settings
+data/
+# Your own settings
+.env
+*.log
